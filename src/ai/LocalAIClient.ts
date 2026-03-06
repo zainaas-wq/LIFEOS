@@ -1,0 +1,232 @@
+/**
+ * LocalAIClient — deterministic, offline planner agent.
+ *
+ * Understands a small set of intent keywords and responds with:
+ *   - Structured plan (daily / weekly) when asked
+ *   - Goal / rule / schedule summaries
+ *   - Generic motivational guidance
+ *
+ * No network calls. Works in Expo Go without an API key.
+ */
+
+import type { AIClient, AIContext } from './AIClient';
+import type { ChatMessage, Plan } from '../types';
+import {
+  generateDailyPlanItems,
+  generateWeeklyPlanItems,
+} from './planGenerator';
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+function uid(): string {
+  return Math.random().toString(36).slice(2, 10);
+}
+
+function now(): string {
+  return new Date().toISOString();
+}
+
+function makeMsg(content: string, plan?: Plan): ChatMessage {
+  return { id: uid(), role: 'assistant', content, createdAt: now(), plan };
+}
+
+// ─── Intent matching ──────────────────────────────────────────────────────────
+
+type Intent =
+  | 'daily_plan'
+  | 'weekly_plan'
+  | 'list_goals'
+  | 'list_rules'
+  | 'free_time'
+  | 'schedule_summary'
+  | 'focus_start'
+  | 'help'
+  | 'unknown';
+
+function detectIntent(msg: string): Intent {
+  const m = msg.toLowerCase();
+
+  if (/\b(daily plan|plan (for )?today|today('s)? plan|generate.*day)\b/.test(m))
+    return 'daily_plan';
+  if (/\b(weekly plan|plan (for )?the week|this week|generate.*week)\b/.test(m))
+    return 'weekly_plan';
+  if (/\b(goals?|what (am i|should i) work(ing)? on|objectives?)\b/.test(m))
+    return 'list_goals';
+  if (/\b(rules?|habits?|constraints?|restrictions?)\b/.test(m))
+    return 'list_rules';
+  if (/\b(free time|available|when am i free|open slots?)\b/.test(m))
+    return 'free_time';
+  if (/\b(schedule|calendar|events?|what do i have)\b/.test(m))
+    return 'schedule_summary';
+  if (/\b(start focus|focus (session|mode|now)|let('s)? focus)\b/.test(m))
+    return 'focus_start';
+  if (/\b(help|what can you|commands?|options?)\b/.test(m))
+    return 'help';
+
+  return 'unknown';
+}
+
+const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+// ─── Response handlers ────────────────────────────────────────────────────────
+
+function respondDailyPlan(ctx: AIContext): ChatMessage {
+  if (!ctx.goals.length) {
+    return makeMsg(
+      "You don't have any goals set yet. Head to the **Goals** tab to add some, then ask me to generate your plan.",
+    );
+  }
+  const plan = generateDailyPlanItems(
+    ctx.goals, ctx.scheduleEvents, ctx.skillPlans, ctx.rules, ctx.todayDate,
+  );
+  const count = plan.items.filter((i) => i.type !== 'break' && i.type !== 'event').length;
+  return makeMsg(
+    `Here's your daily plan for today — **${count} work sessions** scheduled across your free time. Tap any block to start a focus session.`,
+    plan,
+  );
+}
+
+function respondWeeklyPlan(ctx: AIContext): ChatMessage {
+  if (!ctx.goals.length) {
+    return makeMsg(
+      "Add your goals in the **Goals** tab first, then I can build a full week plan.",
+    );
+  }
+  const plan = generateWeeklyPlanItems(
+    ctx.goals, ctx.scheduleEvents, ctx.skillPlans, ctx.rules, ctx.todayDate,
+  );
+  const total = plan.items.filter((i) => i.type !== 'break' && i.type !== 'event').length;
+  const hours = Math.round(
+    plan.items.reduce((s, i) => {
+      const [sh, sm] = i.startTime.split(':').map(Number);
+      const [eh, em] = i.endTime.split(':').map(Number);
+      return s + (eh * 60 + em - (sh * 60 + sm));
+    }, 0) / 60,
+  );
+  return makeMsg(
+    `Weekly plan generated — **${total} sessions** across 7 days (~${hours}h total). Head to the **Planner** tab to review and start focus sessions.`,
+    plan,
+  );
+}
+
+function respondListGoals(ctx: AIContext): ChatMessage {
+  if (!ctx.goals.length) {
+    return makeMsg("No goals yet. Tap the **Goals** tab to add your first one.");
+  }
+  const sorted = [...ctx.goals].sort((a, b) => a.priority - b.priority);
+  const lines = sorted.map(
+    (g, i) =>
+      `${i + 1}. **${g.title}** (${g.category}, ${g.weeklyHoursTarget}h/wk, priority ${g.priority})`,
+  );
+  return makeMsg(`Your current goals:\n\n${lines.join('\n')}\n\nWant me to generate a plan around these?`);
+}
+
+function respondListRules(ctx: AIContext): ChatMessage {
+  const active = ctx.rules.filter((r) => r.enabled);
+  if (!active.length) {
+    return makeMsg("No active rules. Go to the **Rules** tab to set your daily standards.");
+  }
+  const lines = active.map((r) => `• **${r.title}**${r.startTime ? ` (${r.startTime}–${r.endTime ?? '??:??'})` : ''}`);
+  return makeMsg(`Active rules:\n\n${lines.join('\n')}\n\nStay consistent. Your rules exist for a reason.`);
+}
+
+function respondFreeTime(ctx: AIContext): ChatMessage {
+  const { extractFreeTime, minsToTime } = require('./planGenerator');
+  const today = new Date(ctx.todayDate);
+  const dow = today.getDay();
+  const slots = extractFreeTime(ctx.scheduleEvents, ctx.rules, dow) as Array<{ start: number; end: number }>;
+
+  if (!slots.length) {
+    return makeMsg(`No free time found today (${DAY_NAMES[dow]}). Your schedule is fully blocked or the day window is closed.`);
+  }
+
+  const lines = slots.map(
+    (s) => `• ${minsToTime(s.start)} – ${minsToTime(s.end)} (${s.end - s.start} min)`,
+  );
+  return makeMsg(`Free time today (${DAY_NAMES[dow]}):\n\n${lines.join('\n')}\n\nShall I fill these with focused work sessions?`);
+}
+
+function respondSchedule(ctx: AIContext): ChatMessage {
+  if (!ctx.scheduleEvents.length) {
+    return makeMsg("No scheduled events. Add them in the **Schedule** tab so I can plan around them.");
+  }
+  const today = new Date(ctx.todayDate);
+  const dow = today.getDay();
+  const todayEvents = ctx.scheduleEvents.filter((e) => e.daysOfWeek.includes(dow));
+
+  if (!todayEvents.length) {
+    return makeMsg(`Nothing in your schedule for ${DAY_NAMES[dow]} — it's all free time. Want me to generate a plan?`);
+  }
+
+  const sorted = [...todayEvents].sort((a, b) => a.start.localeCompare(b.start));
+  const lines = sorted.map((e) => `• ${e.start}–${e.end} **${e.title}**${e.location ? ` @ ${e.location}` : ''}`);
+  return makeMsg(`${DAY_NAMES[dow]}'s schedule:\n\n${lines.join('\n')}\n\nWant me to plan your free time around this?`);
+}
+
+function respondHelp(): ChatMessage {
+  return makeMsg(
+    `I'm your LifeOS planner AI. Here's what you can ask me:\n\n` +
+      `• **"Generate daily plan"** — plan today around your schedule\n` +
+      `• **"Generate weekly plan"** — full 7-day goal schedule\n` +
+      `• **"What are my goals?"** — list your current goals\n` +
+      `• **"Show my rules"** — see active daily rules\n` +
+      `• **"When am I free?"** — see today's free time slots\n` +
+      `• **"What's on my schedule?"** — see today's events\n\n` +
+      `The Planner tab also lets you generate plans with one tap.`,
+  );
+}
+
+function respondUnknown(msg: string, ctx: AIContext): ChatMessage {
+  const focus = ctx.mainFocus ? `Your main focus is **${ctx.mainFocus}**.` : '';
+  const goalCount = ctx.goals.length;
+  return makeMsg(
+    `${focus ? focus + ' ' : ''}You have ${goalCount} goal${goalCount !== 1 ? 's' : ''} set. ` +
+      `Try asking me to *"generate your daily plan"* or *"show free time"* to get started. Type "help" for all options.`,
+  );
+}
+
+// ─── LocalAIClient ────────────────────────────────────────────────────────────
+
+export class LocalAIClient implements AIClient {
+  async chat(
+    userMessage: string,
+    _history: ChatMessage[],
+    context: AIContext,
+  ): Promise<ChatMessage> {
+    // Simulate slight processing delay for a more natural feel
+    await new Promise((r) => setTimeout(r, 400 + Math.random() * 300));
+
+    const intent = detectIntent(userMessage);
+
+    switch (intent) {
+      case 'daily_plan':    return respondDailyPlan(context);
+      case 'weekly_plan':   return respondWeeklyPlan(context);
+      case 'list_goals':    return respondListGoals(context);
+      case 'list_rules':    return respondListRules(context);
+      case 'free_time':     return respondFreeTime(context);
+      case 'schedule_summary': return respondSchedule(context);
+      case 'help':          return respondHelp();
+      default:              return respondUnknown(userMessage, context);
+    }
+  }
+
+  async generateDailyPlan(date: string, context: AIContext): Promise<Plan> {
+    return generateDailyPlanItems(
+      context.goals,
+      context.scheduleEvents,
+      context.skillPlans,
+      context.rules,
+      date,
+    );
+  }
+
+  async generateWeeklyPlan(startDate: string, context: AIContext): Promise<Plan> {
+    return generateWeeklyPlanItems(
+      context.goals,
+      context.scheduleEvents,
+      context.skillPlans,
+      context.rules,
+      startDate,
+    );
+  }
+}
