@@ -70,6 +70,39 @@ const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Frid
 
 // ─── Response handlers ────────────────────────────────────────────────────────
 
+function computeProgressLines(plan: Plan, goals: AIContext['goals']): string {
+  const goalMins: Record<string, number> = {};
+  for (const item of plan.items) {
+    if (item.goalId && item.type !== 'break' && item.type !== 'event') {
+      const [sh, sm] = item.startTime.split(':').map(Number);
+      const [eh, em] = item.endTime.split(':').map(Number);
+      goalMins[item.goalId] = (goalMins[item.goalId] ?? 0) + (eh * 60 + em - (sh * 60 + sm));
+    }
+  }
+  const lines: string[] = [];
+  for (const g of goals.sort((a, b) => a.priority - b.priority)) {
+    const scheduled = goalMins[g.id] ?? 0;
+    if (scheduled === 0) continue;
+    const dailyTargetMins = (g.weeklyHoursTarget * 60) / 5;
+    const pct = Math.min(Math.round((scheduled / Math.max(dailyTargetMins, 1)) * 100), 100);
+    lines.push(`• **${g.title}** → +${pct}%  (${scheduled} min scheduled)`);
+  }
+  return lines.length ? lines.join('\n') : '• No goal sessions scheduled today.';
+}
+
+const REFLECTIONS = [
+  'Which task required the most willpower to start — and why?',
+  'Did you protect your deep work blocks, or let them get interrupted?',
+  'What single thing, if done tomorrow, would make the biggest difference?',
+  'Rate your focus today 1–10. What would make it a 10 tomorrow?',
+  'Which goal felt neglected today? How can we fix that tomorrow?',
+];
+
+function pickReflection(ctx: AIContext): string {
+  const seed = ctx.todayDate.charCodeAt(ctx.todayDate.length - 1);
+  return REFLECTIONS[seed % REFLECTIONS.length];
+}
+
 function respondDailyPlan(ctx: AIContext): ChatMessage {
   if (!ctx.goals.length) {
     return makeMsg(
@@ -80,8 +113,12 @@ function respondDailyPlan(ctx: AIContext): ChatMessage {
     ctx.goals, ctx.scheduleEvents, ctx.skillPlans, ctx.rules, ctx.todayDate,
   );
   const count = plan.items.filter((i) => i.type !== 'break' && i.type !== 'event').length;
+  const progressLines = computeProgressLines(plan, ctx.goals);
+  const reflection = pickReflection(ctx);
   return makeMsg(
-    `Here's your daily plan for today — **${count} work sessions** scheduled across your free time. Tap any block to start a focus session.`,
+    `**${count} work sessions** planned across your free time.\n\n` +
+    `Progress Impact:\n${progressLines}\n\n` +
+    `Reflection (end of day):\n"${reflection}"`,
     plan,
   );
 }
@@ -103,8 +140,11 @@ function respondWeeklyPlan(ctx: AIContext): ChatMessage {
       return s + (eh * 60 + em - (sh * 60 + sm));
     }, 0) / 60,
   );
+  const reflection = pickReflection(ctx);
   return makeMsg(
-    `Weekly plan generated — **${total} sessions** across 7 days (~${hours}h total). Head to the **Planner** tab to review and start focus sessions.`,
+    `**${total} sessions** across 7 days (~${hours}h total). Head to the **Planner** tab to review.\n\n` +
+    `Strategy: highest-priority goals get your peak morning slots. Adjust in the Planner if life changes.\n\n` +
+    `End-of-week question:\n"${reflection}"`,
     plan,
   );
 }
