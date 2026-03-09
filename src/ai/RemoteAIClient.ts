@@ -1,11 +1,8 @@
 import type { AIClient, AIContext } from './AIClient';
 import type { ChatMessage, Plan } from '../types';
-import {
-  generateDailyPlanItems,
-  generateWeeklyPlanItems,
-  extractFreeTime,
-  minsToTime,
-} from './planGenerator';
+import { generateSmartDailyPlan, generateSmartWeeklyPlan } from './planningEngine';
+import { extractFreeTime, minsToTime } from './planGenerator';
+import { rescheduleRemaining } from './adaptiveRescheduler';
 
 const ANTHROPIC_API = 'https://api.anthropic.com/v1/messages';
 const MODEL = 'claude-haiku-4-5-20251001';
@@ -119,11 +116,15 @@ For non-plan questions, reply concisely (≤ 3 short paragraphs). No preamble.`;
 }
 
 function isPlanRequest(msg: string): boolean {
-  return /\b(daily plan|plan (for )?today|today.s plan|generate.*day|plan my day)\b/i.test(msg);
+  return /\b(daily plan|plan (for )?today|today.s plan|generate.*day|plan my day|build my day)\b/i.test(msg);
 }
 
 function isWeeklyPlanRequest(msg: string): boolean {
-  return /\b(weekly plan|plan (for )?the week|this week|generate.*week)\b/i.test(msg);
+  return /\b(weekly plan|plan (for )?the week|this week|generate.*week|rebuild.*week)\b/i.test(msg);
+}
+
+function isRecoverDayRequest(msg: string): boolean {
+  return /\b(recover|missed.*tasks?|reschedule|get back on track)\b/i.test(msg);
 }
 
 export class RemoteAIClient implements AIClient {
@@ -166,12 +167,18 @@ export class RemoteAIClient implements AIClient {
 
     // Attach a structured plan card alongside Claude's strategic text
     let plan: Plan | undefined;
-    if (isPlanRequest(userMessage)) {
-      plan = generateDailyPlanItems(
+    if (isRecoverDayRequest(userMessage) && context.currentPlan) {
+      const now = new Date();
+      const t = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+      plan = rescheduleRemaining(
+        context.currentPlan, t, context.goals, context.scheduleEvents, context.rules, context.todayDate,
+      );
+    } else if (isPlanRequest(userMessage)) {
+      plan = generateSmartDailyPlan(
         context.goals, context.scheduleEvents, context.skillPlans, context.rules, context.todayDate,
       );
     } else if (isWeeklyPlanRequest(userMessage)) {
-      plan = generateWeeklyPlanItems(
+      plan = generateSmartWeeklyPlan(
         context.goals, context.scheduleEvents, context.skillPlans, context.rules, context.todayDate,
       );
     }
@@ -186,13 +193,13 @@ export class RemoteAIClient implements AIClient {
   }
 
   async generateDailyPlan(date: string, context: AIContext): Promise<Plan> {
-    return generateDailyPlanItems(
+    return generateSmartDailyPlan(
       context.goals, context.scheduleEvents, context.skillPlans, context.rules, date,
     );
   }
 
   async generateWeeklyPlan(startDate: string, context: AIContext): Promise<Plan> {
-    return generateWeeklyPlanItems(
+    return generateSmartWeeklyPlan(
       context.goals, context.scheduleEvents, context.skillPlans, context.rules, startDate,
     );
   }

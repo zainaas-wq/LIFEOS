@@ -15,7 +15,6 @@ import { Ionicons } from '@expo/vector-icons';
 import {
   useAppStore,
   useTodayTasks,
-  useTodayPlan,
   useTodayReflection,
 } from '../../src/store/useAppStore';
 import { AlignmentRing } from '../../src/components/AlignmentRing';
@@ -23,7 +22,8 @@ import { TaskCard } from '../../src/components/TaskCard';
 import { SectionHeader } from '../../src/components/SectionHeader';
 import { Card } from '../../src/components/ui/Card';
 import { Button } from '../../src/components/ui/Button';
-import { computeAlignmentScore, getLabelColor } from '../../src/lib/alignmentScore';
+import { getLabelColor } from '../../src/lib/alignmentScore';
+import { computeProgressScore } from '../../src/ai/progressEngine';
 import { getTodayDate, getGreeting, formatDate } from '../../src/lib/utils';
 import { Colors, FontSize, FontWeight, Spacing, Radius } from '../../src/constants/theme';
 
@@ -41,6 +41,7 @@ export default function HomeScreen() {
   const goals = useAppStore((s) => s.goals);
   const activeFocus = useAppStore((s) => s.activeFocus);
   const focusSessions = useAppStore((s) => s.focusSessions);
+  const controlPlan = useAppStore((s) => s.controlPlan);
   const saveReflection = useAppStore((s) => s.saveReflection);
   const toggleTask = useAppStore((s) => s.toggleTask);
   const deleteTask = useAppStore((s) => s.deleteTask);
@@ -54,26 +55,30 @@ export default function HomeScreen() {
   }, []);
 
   const todayTasks = useTodayTasks();
-  const todayPlan = useTodayPlan();
   const todayReflection = useTodayReflection();
   const today = getTodayDate();
 
   const [reflectionText, setReflectionText] = useState(todayReflection?.text ?? '');
   const [reflectionSaved, setReflectionSaved] = useState(!!todayReflection);
 
+  const planItems = useMemo(
+    () => (controlPlan?.plan.items ?? []).filter((i) => i.type !== 'break' && i.type !== 'event'),
+    [controlPlan],
+  );
+
+  const todayDistractions = distractionLogs.filter((d) => d.timestamp.startsWith(today)).length;
+
   const alignmentResult = useMemo(
     () =>
-      computeAlignmentScore({
-        tasks: todayTasks,
+      computeProgressScore({
+        planItems,
         rules,
-        hasCriticalAction: !!todayPlan,
-        criticalActionCompleted: todayPlan
-          ? todayTasks.some((t) => t.title === todayPlan.criticalAction && t.completed)
-          : false,
+        criticalActionCompleted: controlPlan?.plan.items.some((i) => !!i.isCritical && i.completed) ?? false,
         hasReflection: !!todayReflection || reflectionSaved,
+        distractionCount: todayDistractions,
         seriousnessScore: profile?.seriousnessScore ?? 7,
       }),
-    [todayTasks, rules, todayPlan, todayReflection, reflectionSaved, profile],
+    [planItems, rules, controlPlan, todayReflection, reflectionSaved, todayDistractions, profile],
   );
 
   const handleSaveReflection = () => {
@@ -90,7 +95,6 @@ export default function HomeScreen() {
   const todayFocusMin = focusSessions
     .filter((s) => s.start.startsWith(today))
     .reduce((sum, s) => sum + (s.durationMinutes ?? 0), 0);
-  const todayDistractions = distractionLogs.filter((d) => d.timestamp.startsWith(today)).length;
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
@@ -155,24 +159,30 @@ export default function HomeScreen() {
           </TouchableOpacity>
 
           {/* Critical Action */}
-          {todayPlan ? (
-            <Card gold style={styles.section}>
-              <View style={styles.criticalHeader}>
-                <Ionicons name="flash" size={14} color={Colors.gold} />
-                <Text style={styles.criticalLabel}>Critical Action</Text>
-              </View>
-              <Text style={styles.criticalAction}>{todayPlan.criticalAction}</Text>
-            </Card>
-          ) : (
-            <Card style={styles.section}>
-              <View style={styles.emptyRow}>
-                <Text style={styles.emptyHint}>No plan generated yet.</Text>
-                <TouchableOpacity onPress={() => router.push('/(tabs)/planner' as any)}>
-                  <Text style={styles.emptyLink}>Go to Planner →</Text>
-                </TouchableOpacity>
-              </View>
-            </Card>
-          )}
+          {(() => {
+            const criticalItem = controlPlan?.plan.items.find((i) => !!i.isCritical);
+            if (criticalItem) {
+              return (
+                <Card gold style={styles.section}>
+                  <View style={styles.criticalHeader}>
+                    <Ionicons name="flash" size={14} color={Colors.gold} />
+                    <Text style={styles.criticalLabel}>Critical Action</Text>
+                  </View>
+                  <Text style={styles.criticalAction}>{criticalItem.title}</Text>
+                </Card>
+              );
+            }
+            return (
+              <Card style={styles.section}>
+                <View style={styles.emptyRow}>
+                  <Text style={styles.emptyHint}>No plan generated yet.</Text>
+                  <TouchableOpacity onPress={() => router.push('/(tabs)/planner' as any)}>
+                    <Text style={styles.emptyLink}>Go to Planner →</Text>
+                  </TouchableOpacity>
+                </View>
+              </Card>
+            );
+          })()}
 
           {/* Quick AI ask */}
           <TouchableOpacity

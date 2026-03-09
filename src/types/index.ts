@@ -117,6 +117,8 @@ export interface PlanItem {
   eventId?: string;
   notes?: string;
   completed: boolean;
+  isCritical?: boolean;
+  energyRequired?: 'high' | 'medium' | 'low';
 }
 
 export interface Plan {

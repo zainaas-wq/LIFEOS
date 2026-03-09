@@ -1,4 +1,4 @@
-import type { ChatMessage, Goal, SkillPlan, Rule, ScheduleEvent, Plan } from '../types';
+import type { ChatMessage, Goal, SkillPlan, Rule, ScheduleEvent, Plan, FocusSession } from '../types';
 
 // ─── Context passed to every AI call ─────────────────────────────────────────
 
@@ -8,6 +8,9 @@ export interface AIContext {
   rules: Rule[];
   scheduleEvents: ScheduleEvent[];
   mainFocus?: string;
+  biggestDistraction?: string;
+  focusSessions?: FocusSession[];
+  currentPlan?: Plan;
   todayDate: string; // YYYY-MM-DD
 }
 
