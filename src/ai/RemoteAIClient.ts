@@ -2,6 +2,7 @@ import type { AIClient, AIContext } from './AIClient';
 import type { ChatMessage, Plan } from '../types';
 import { generateSmartDailyPlan, generateSmartWeeklyPlan } from './planningEngine';
 import { extractFreeTime, minsToTime } from './planGenerator';
+import { rescheduleRemaining } from './adaptiveRescheduler';
 
 const ANTHROPIC_API = 'https://api.anthropic.com/v1/messages';
 const MODEL = 'claude-haiku-4-5-20251001';
@@ -167,7 +168,6 @@ export class RemoteAIClient implements AIClient {
     // Attach a structured plan card alongside Claude's strategic text
     let plan: Plan | undefined;
     if (isRecoverDayRequest(userMessage) && context.currentPlan) {
-      const { rescheduleRemaining } = await import('./adaptiveRescheduler');
       const now = new Date();
       const t = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
       plan = rescheduleRemaining(
