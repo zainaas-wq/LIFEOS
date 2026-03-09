@@ -22,6 +22,7 @@ import type {
   NudgeItem,
 } from '../types';
 import { generateControlPlan, computeNextBestAction } from '../control/controlEngine';
+import { rescheduleRemaining } from '../ai/adaptiveRescheduler';
 import { generateId, getTodayDate } from '../lib/utils';
 import { generateDailyPlan } from '../lib/planGenerator';
 import { FREE_PLAN_RULE_LIMIT } from '../lib/rulesEngine';
@@ -157,6 +158,7 @@ interface AppStore {
   // Control engine
   generateControlPlanAction: (date: string) => void;
   toggleControlPlanItem: (itemId: string) => void;
+  reschedulePlan: (date: string) => void;
   logDistraction: (note?: string) => void;
   setActiveNudge: (nudge: NudgeItem | null) => void;
   dismissNudge: () => void;
@@ -493,6 +495,17 @@ export const useAppStore = create<AppStore>()(
           };
         }),
 
+      reschedulePlan: (date) => {
+        const { controlPlan, goals, scheduleEvents, rules } = get();
+        if (!controlPlan) return;
+        const now = new Date();
+        const t = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+        const rescheduled = rescheduleRemaining(
+          controlPlan.plan, t, goals, scheduleEvents, rules, date,
+        );
+        set({ controlPlan: { ...controlPlan, plan: rescheduled } });
+      },
+
       logDistraction: (note) =>
         set((s) => ({
           distractionLogs: [
@@ -592,5 +605,8 @@ export const useAIContext = () =>
     rules: s.rules,
     scheduleEvents: s.scheduleEvents,
     mainFocus: s.profile?.mainFocus,
+    biggestDistraction: s.profile?.biggestDistraction,
+    focusSessions: s.focusSessions,
+    currentPlan: s.controlPlan?.plan,
     todayDate: getTodayDate(),
   }));

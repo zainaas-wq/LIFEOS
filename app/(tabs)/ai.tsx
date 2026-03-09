@@ -22,10 +22,11 @@ import { Colors, FontSize, FontWeight, Radius, Spacing } from '../../src/constan
 // ─── Quick-action chips ────────────────────────────────────────────────────────
 
 const QUICK_ACTIONS = [
-  { label: 'Daily plan', prompt: 'Generate my daily plan for today' },
-  { label: 'Weekly plan', prompt: 'Generate a weekly plan' },
-  { label: 'My goals', prompt: 'What are my goals?' },
-  { label: 'Free time', prompt: 'When am I free today?' },
+  { label: 'Build my day',       prompt: 'Build my daily plan for today' },
+  { label: 'Rebuild my week',    prompt: 'Rebuild my weekly plan' },
+  { label: 'Recover today',      prompt: 'I missed some tasks — help me recover today intelligently' },
+  { label: 'Reduce distraction', prompt: 'I keep getting distracted — give me an anti-distraction strategy' },
+  { label: 'Improve progress',   prompt: 'Which of my goals am I behind on and what should I prioritize?' },
 ];
 
 // ─── Plan item card (inline) ──────────────────────────────────────────────────

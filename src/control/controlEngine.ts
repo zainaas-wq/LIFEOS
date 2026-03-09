@@ -12,7 +12,8 @@ import type {
   Plan, PlanItem, PlanItemType,
   ControlDailyPlan, NudgeItem, UserPreferences,
 } from '../types';
-import { generateDailyPlanItems, timeToMins, minsToTime } from '../ai/planGenerator';
+import { generateSmartDailyPlan } from '../ai/planningEngine';
+import { timeToMins, minsToTime } from '../ai/planGenerator';
 
 // ─── Defaults ────────────────────────────────────────────────────────────────
 
@@ -175,8 +176,8 @@ export function generateControlPlan(
     ...prefOverrides,
   };
 
-  // 1. Generate base plan via existing planGenerator
-  const basePlan: Plan = generateDailyPlanItems(goals, scheduleEvents, skillPlans, rules, date);
+  // 1. Generate base plan via smart planning engine
+  const basePlan: Plan = generateSmartDailyPlan(goals, scheduleEvents, skillPlans, rules, date);
 
   // 2. Enrich with micro-blocks
   const enrichedItems = insertMicroBlocks(basePlan.items, prefs);

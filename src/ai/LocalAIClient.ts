@@ -11,10 +11,8 @@
 
 import type { AIClient, AIContext } from './AIClient';
 import type { ChatMessage, Plan } from '../types';
-import {
-  generateDailyPlanItems,
-  generateWeeklyPlanItems,
-} from './planGenerator';
+import { generateSmartDailyPlan, generateSmartWeeklyPlan } from './planningEngine';
+import { rescheduleRemaining } from './adaptiveRescheduler';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -35,6 +33,9 @@ function makeMsg(content: string, plan?: Plan): ChatMessage {
 type Intent =
   | 'daily_plan'
   | 'weekly_plan'
+  | 'recover_day'
+  | 'reduce_distraction'
+  | 'improve_progress'
   | 'list_goals'
   | 'list_rules'
   | 'free_time'
@@ -46,9 +47,15 @@ type Intent =
 function detectIntent(msg: string): Intent {
   const m = msg.toLowerCase();
 
-  if (/\b(daily plan|plan (for )?today|today('s)? plan|generate.*day)\b/.test(m))
+  if (/\b(recover|missed.*tasks?|reschedule|get back on track)\b/.test(m))
+    return 'recover_day';
+  if (/\b(distract|can('t)? focus|keep.*distract|anti.distract)\b/.test(m))
+    return 'reduce_distraction';
+  if (/\b(behind|progress|prioriti[sz]e|which goal|improve.*progress)\b/.test(m))
+    return 'improve_progress';
+  if (/\b(daily plan|plan (for )?today|today('s)? plan|generate.*day|build.*day)\b/.test(m))
     return 'daily_plan';
-  if (/\b(weekly plan|plan (for )?the week|this week|generate.*week)\b/.test(m))
+  if (/\b(weekly plan|plan (for )?the week|this week|generate.*week|rebuild.*week)\b/.test(m))
     return 'weekly_plan';
   if (/\b(goals?|what (am i|should i) work(ing)? on|objectives?)\b/.test(m))
     return 'list_goals';
@@ -103,13 +110,89 @@ function pickReflection(ctx: AIContext): string {
   return REFLECTIONS[seed % REFLECTIONS.length];
 }
 
+function respondRecoverDay(ctx: AIContext): ChatMessage {
+  if (!ctx.currentPlan) {
+    return makeMsg(
+      "No plan found for today. Generate a daily plan first (tap **Build my day**), then ask me to recover it.",
+    );
+  }
+  const now = new Date();
+  const currentTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+  const rescheduled = rescheduleRemaining(
+    ctx.currentPlan, currentTime, ctx.goals, ctx.scheduleEvents, ctx.rules, ctx.todayDate,
+  );
+  const remaining = rescheduled.items.filter(
+    (i) => !i.completed && i.type !== 'break' && i.type !== 'event',
+  ).length;
+  return makeMsg(
+    `**Rescheduled ${remaining} remaining task${remaining !== 1 ? 's' : ''}** into your free time.\n\n` +
+      `The critical item is prioritised first. Focus on what still matters most today — progress over perfection.`,
+    rescheduled,
+  );
+}
+
+function respondReduceDistraction(ctx: AIContext): ChatMessage {
+  const distraction = ctx.biggestDistraction ?? 'distractions';
+  return makeMsg(
+    `**Anti-distraction strategy for "${distraction}":**\n\n` +
+      `1. **Block the source** — Set app limits or remove triggers before each focus block.\n` +
+      `2. **Add friction** — Use a 5-second pause rule before giving in; the urge usually passes.\n` +
+      `3. **Replace the urge** — The moment you feel the pull, immediately start your next 5-min task. Action beats avoidance every time.`,
+  );
+}
+
+function respondImproveProgress(ctx: AIContext): ChatMessage {
+  if (!ctx.goals.length) {
+    return makeMsg('No goals found. Add goals in the **Goals** tab to get a progress analysis.');
+  }
+
+  const today = new Date();
+  const weekStart = new Date(today);
+  weekStart.setDate(today.getDate() - today.getDay());
+  const weekStartStr = weekStart.toISOString().split('T')[0];
+
+  const lines = [...ctx.goals]
+    .sort((a, b) => a.priority - b.priority)
+    .map((g) => {
+      const weeklyTargetMins = g.weeklyHoursTarget * 60;
+      const daysPassed = Math.max(1, today.getDay() || 7);
+      const expectedMins = Math.round((weeklyTargetMins / 7) * daysPassed);
+
+      const scheduledMins = (ctx.focusSessions ?? [])
+        .filter((s) => s.goalId === g.id && s.start >= weekStartStr)
+        .reduce((sum, s) => sum + (s.durationMinutes ?? 0), 0);
+
+      const pct = expectedMins > 0 ? Math.round((scheduledMins / expectedMins) * 100) : 0;
+      const status = pct >= 80 ? '✓ on track' : pct >= 50 ? '~ close' : '⚠ behind';
+      return `• **${g.title}**: ${scheduledMins}/${expectedMins} min this week (${pct}%) — ${status}`;
+    });
+
+  const behindGoal = [...ctx.goals]
+    .sort((a, b) => a.priority - b.priority)
+    .find((g) => {
+      const weeklyTargetMins = g.weeklyHoursTarget * 60;
+      const daysPassed = Math.max(1, today.getDay() || 7);
+      const expectedMins = Math.round((weeklyTargetMins / 7) * daysPassed);
+      const scheduledMins = (ctx.focusSessions ?? [])
+        .filter((s) => s.goalId === g.id && s.start >= weekStartStr)
+        .reduce((sum, s) => sum + (s.durationMinutes ?? 0), 0);
+      return scheduledMins < expectedMins * 0.8;
+    });
+
+  const advice = behindGoal
+    ? `\n\n**Prioritise today**: "${behindGoal.title}" needs the most catch-up time.`
+    : '\n\nAll goals are on track. Keep the momentum going.';
+
+  return makeMsg(`**Weekly progress check:**\n\n${lines.join('\n')}${advice}`);
+}
+
 function respondDailyPlan(ctx: AIContext): ChatMessage {
   if (!ctx.goals.length) {
     return makeMsg(
       "You don't have any goals set yet. Head to the **Goals** tab to add some, then ask me to generate your plan.",
     );
   }
-  const plan = generateDailyPlanItems(
+  const plan = generateSmartDailyPlan(
     ctx.goals, ctx.scheduleEvents, ctx.skillPlans, ctx.rules, ctx.todayDate,
   );
   const count = plan.items.filter((i) => i.type !== 'break' && i.type !== 'event').length;
@@ -129,7 +212,7 @@ function respondWeeklyPlan(ctx: AIContext): ChatMessage {
       "Add your goals in the **Goals** tab first, then I can build a full week plan.",
     );
   }
-  const plan = generateWeeklyPlanItems(
+  const plan = generateSmartWeeklyPlan(
     ctx.goals, ctx.scheduleEvents, ctx.skillPlans, ctx.rules, ctx.todayDate,
   );
   const total = plan.items.filter((i) => i.type !== 'break' && i.type !== 'event').length;
@@ -239,19 +322,22 @@ export class LocalAIClient implements AIClient {
     const intent = detectIntent(userMessage);
 
     switch (intent) {
-      case 'daily_plan':    return respondDailyPlan(context);
-      case 'weekly_plan':   return respondWeeklyPlan(context);
-      case 'list_goals':    return respondListGoals(context);
-      case 'list_rules':    return respondListRules(context);
-      case 'free_time':     return respondFreeTime(context);
-      case 'schedule_summary': return respondSchedule(context);
-      case 'help':          return respondHelp();
-      default:              return respondUnknown(userMessage, context);
+      case 'recover_day':        return respondRecoverDay(context);
+      case 'reduce_distraction': return respondReduceDistraction(context);
+      case 'improve_progress':   return respondImproveProgress(context);
+      case 'daily_plan':         return respondDailyPlan(context);
+      case 'weekly_plan':        return respondWeeklyPlan(context);
+      case 'list_goals':         return respondListGoals(context);
+      case 'list_rules':         return respondListRules(context);
+      case 'free_time':          return respondFreeTime(context);
+      case 'schedule_summary':   return respondSchedule(context);
+      case 'help':               return respondHelp();
+      default:                   return respondUnknown(userMessage, context);
     }
   }
 
   async generateDailyPlan(date: string, context: AIContext): Promise<Plan> {
-    return generateDailyPlanItems(
+    return generateSmartDailyPlan(
       context.goals,
       context.scheduleEvents,
       context.skillPlans,
@@ -261,7 +347,7 @@ export class LocalAIClient implements AIClient {
   }
 
   async generateWeeklyPlan(startDate: string, context: AIContext): Promise<Plan> {
-    return generateWeeklyPlanItems(
+    return generateSmartWeeklyPlan(
       context.goals,
       context.scheduleEvents,
       context.skillPlans,

@@ -34,16 +34,24 @@ const TYPE_COLOR: Record<string, string> = {
   free:  Colors.textMuted,
 };
 
+const ENERGY_COLOR: Record<string, string> = {
+  high:   '#6C8EBF',
+  medium: Colors.gold,
+  low:    '#4ADE80',
+};
+
 // ─── PlanItem row ─────────────────────────────────────────────────────────────
 
 function PlanItemRow({
   item,
   nowMins,
+  showReasons,
   onToggle,
   onStartFocus,
 }: {
   item: PlanItem;
   nowMins: number;
+  showReasons: boolean;
   onToggle: () => void;
   onStartFocus: () => void;
 }) {
@@ -60,8 +68,9 @@ function PlanItemRow({
       activeOpacity={0.75}
       style={[
         styles.itemRow,
-        { borderLeftColor: color },
+        { borderLeftColor: item.isCritical ? Colors.gold : color },
         isActive && styles.itemRowActive,
+        !!item.isCritical && styles.itemRowCritical,
         item.completed && styles.itemRowDone,
       ]}
     >
@@ -83,19 +92,36 @@ function PlanItemRow({
         </Text>
       </View>
 
-      {/* Title + type */}
+      {/* Title + badges */}
       <View style={styles.itemInfo}>
-        <Text
-          style={[
-            styles.itemTitle,
-            item.completed && styles.itemTitleDone,
-            isPast && !item.completed && styles.itemTitlePast,
-          ]}
-          numberOfLines={1}
-        >
-          {item.title}
-        </Text>
+        <View style={styles.itemTitleRow}>
+          <Text
+            style={[
+              styles.itemTitle,
+              item.completed && styles.itemTitleDone,
+              isPast && !item.completed && styles.itemTitlePast,
+            ]}
+            numberOfLines={1}
+          >
+            {item.title}
+          </Text>
+          {!!item.isCritical && (
+            <View style={styles.criticalChip}>
+              <Text style={styles.criticalChipText}>CRITICAL</Text>
+            </View>
+          )}
+          {item.energyRequired && (
+            <View style={[styles.energyBadge, { backgroundColor: ENERGY_COLOR[item.energyRequired] + '25' }]}>
+              <Text style={[styles.energyBadgeText, { color: ENERGY_COLOR[item.energyRequired] }]}>
+                {item.energyRequired.toUpperCase()}
+              </Text>
+            </View>
+          )}
+        </View>
         <Text style={[styles.itemType, { color }]}>{item.type}</Text>
+        {showReasons && !!item.notes && (
+          <Text style={styles.itemNotes} numberOfLines={2}>{item.notes}</Text>
+        )}
       </View>
 
       {/* Status / Focus button */}
@@ -121,6 +147,7 @@ function ControlDailyView() {
   const activeNudge            = useAppStore((s) => s.activeNudge);
   const generateControlPlanAction = useAppStore((s) => s.generateControlPlanAction);
   const toggleControlPlanItem  = useAppStore((s) => s.toggleControlPlanItem);
+  const reschedulePlan         = useAppStore((s) => s.reschedulePlan);
   const setActiveNudge         = useAppStore((s) => s.setActiveNudge);
   const dismissNudge           = useAppStore((s) => s.dismissNudge);
   const snoozeNudge            = useAppStore((s) => s.snoozeNudge);
@@ -130,6 +157,7 @@ function ControlDailyView() {
 
   const today = getTodayDate();
   const [generating, setGenerating] = useState(false);
+  const [showReasons, setShowReasons] = useState(false);
   const [focusItem, setFocusItem] = useState<PlanItem | null>(null);
 
   // Current time in minutes for "now" detection
@@ -245,19 +273,39 @@ function ControlDailyView() {
       {/* Plan items */}
       {items.length > 0 && (
         <View style={styles.section}>
-          <SectionHeader
-            title="Today's Schedule"
-            action={`${items.filter((i) => i.completed).length}/${items.length}`}
-          />
+          <View style={styles.scheduleHeader}>
+            <SectionHeader
+              title="Today's Schedule"
+              action={`${items.filter((i) => i.completed).length}/${items.length}`}
+            />
+            <TouchableOpacity
+              onPress={() => setShowReasons((v) => !v)}
+              style={[styles.whyBtn, showReasons && styles.whyBtnActive]}
+              activeOpacity={0.7}
+            >
+              <Text style={[styles.whyBtnText, showReasons && styles.whyBtnTextActive]}>
+                {showReasons ? 'Hide' : 'Why?'}
+              </Text>
+            </TouchableOpacity>
+          </View>
           {items.map((item) => (
             <PlanItemRow
               key={item.id}
               item={item}
               nowMins={nowMins}
+              showReasons={showReasons}
               onToggle={() => toggleControlPlanItem(item.id)}
               onStartFocus={() => handleStartFocus(item)}
             />
           ))}
+          <TouchableOpacity
+            onPress={() => reschedulePlan(today)}
+            style={styles.rescheduleBtn}
+            activeOpacity={0.75}
+          >
+            <Ionicons name="refresh-outline" size={14} color={Colors.textMuted} />
+            <Text style={styles.rescheduleBtnText}>Reschedule Remaining</Text>
+          </TouchableOpacity>
         </View>
       )}
 
@@ -566,6 +614,27 @@ const styles = StyleSheet.create({
   },
   nbaFocusBtnText: { fontSize: FontSize.sm, fontWeight: FontWeight.bold, color: Colors.textInverse },
 
+  // Schedule header row with Why? button
+  scheduleHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  whyBtn: {
+    paddingHorizontal: Spacing.sm, paddingVertical: 4,
+    borderRadius: Radius.sm, borderWidth: 1, borderColor: Colors.border,
+    backgroundColor: Colors.surfaceElevated,
+  },
+  whyBtnActive: { borderColor: Colors.gold, backgroundColor: Colors.goldMuted },
+  whyBtnText: { fontSize: FontSize.xs, color: Colors.textSecondary, fontWeight: FontWeight.medium },
+  whyBtnTextActive: { color: Colors.gold, fontWeight: FontWeight.bold },
+
+  // Reschedule button
+  rescheduleBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    gap: Spacing.xs, paddingVertical: Spacing.sm,
+    borderWidth: 1, borderColor: Colors.border, borderRadius: Radius.md,
+    borderStyle: 'dashed' as const, backgroundColor: Colors.surfaceElevated,
+    marginTop: Spacing.xs,
+  },
+  rescheduleBtnText: { fontSize: FontSize.xs, color: Colors.textMuted },
+
   // Plan item rows
   itemRow: {
     flexDirection: 'row',
@@ -580,6 +649,7 @@ const styles = StyleSheet.create({
     marginBottom: Spacing.xs,
   },
   itemRowActive: { borderColor: Colors.gold, backgroundColor: Colors.goldMuted + '30' },
+  itemRowCritical: { borderLeftWidth: 4 },
   itemRowDone: { opacity: 0.5 },
   itemCheck: { padding: 2 },
   checkCircle: {
@@ -592,10 +662,21 @@ const styles = StyleSheet.create({
   itemTimeSep: { fontSize: FontSize.xs, color: Colors.textMuted },
   itemTimePast: { color: Colors.textMuted },
   itemInfo: { flex: 1 },
-  itemTitle: { fontSize: FontSize.sm, color: Colors.textPrimary, fontWeight: FontWeight.medium },
+  itemTitleRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 4 },
+  itemTitle: { fontSize: FontSize.sm, color: Colors.textPrimary, fontWeight: FontWeight.medium, flexShrink: 1 },
   itemTitleDone: { textDecorationLine: 'line-through', color: Colors.textMuted },
   itemTitlePast: { color: Colors.textSecondary },
   itemType: { fontSize: FontSize.xs, textTransform: 'uppercase', letterSpacing: 0.4 },
+  itemNotes: { fontSize: 10, color: Colors.textMuted, marginTop: 2, lineHeight: 14 },
+  criticalChip: {
+    backgroundColor: Colors.gold, borderRadius: 3,
+    paddingHorizontal: 5, paddingVertical: 1,
+  },
+  criticalChipText: { fontSize: 8, fontWeight: FontWeight.bold, color: Colors.textInverse, letterSpacing: 0.5 },
+  energyBadge: {
+    borderRadius: 3, paddingHorizontal: 4, paddingVertical: 1,
+  },
+  energyBadgeText: { fontSize: 8, fontWeight: FontWeight.semibold, letterSpacing: 0.4 },
   itemNowBadge: {
     backgroundColor: Colors.gold, borderRadius: Radius.sm,
     paddingHorizontal: 6, paddingVertical: 2,
