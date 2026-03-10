@@ -32,6 +32,7 @@ import * as planService from '../services/planService';
 import * as distractionService from '../services/distractionService';
 import * as reflectionService from '../services/reflectionService';
 import * as progressService from '../services/progressService';
+import { computeProgressScore } from '../ai/progressEngine';
 import { hydrateFromCloud as cloudHydrate } from '../services/syncService';
 import { upsertLocalProfile } from '../services/profileService';
 import { generateControlPlan, computeNextBestAction, buildNudgeSchedule } from '../control/controlEngine';
@@ -596,9 +597,31 @@ export const useAppStore = create<AppStore>()(
             reflection,
           ],
         }));
-        const { session, isGuestMode } = get();
+        const { session, isGuestMode, controlPlan, rules, distractionLogs, profile } = get();
         if (session && !isGuestMode) {
+          // 1. Persist the reflection text
           reflectionService.upsertReflection(session.user.id, reflection).catch(console.warn);
+
+          // 2. Compute a progress snapshot and persist it atomically with the reflection.
+          //    hasReflection is always true here since we just saved it.
+          const planItems = (controlPlan?.plan.items ?? []).filter(
+            (i) => i.type !== 'break' && i.type !== 'event',
+          );
+          const distractionCount = distractionLogs.filter(
+            (d) => d.timestamp.startsWith(date),
+          ).length;
+          const result = computeProgressScore({
+            planItems,
+            rules,
+            criticalActionCompleted:
+              controlPlan?.plan.items.some((i) => !!i.isCritical && i.completed) ?? false,
+            hasReflection: true,
+            distractionCount,
+            seriousnessScore: profile?.seriousnessScore ?? 7,
+          });
+          progressService
+            .saveProgressSnapshot(session.user.id, date, result, distractionCount)
+            .catch(console.warn);
         }
       },
 
@@ -715,9 +738,10 @@ export const useAppStore = create<AppStore>()(
       saveProgressSnapshot: async (result, date) => {
         const { session, isGuestMode, distractionLogs } = get();
         if (!session || isGuestMode) return;
-        const today = getTodayDate();
+        // Use `date` (not getTodayDate()) so historical snapshots count the
+        // correct day's distractions rather than today's.
         const distractionCount = distractionLogs.filter(
-          (d) => d.timestamp.startsWith(today),
+          (d) => d.timestamp.startsWith(date),
         ).length;
         progressService
           .saveProgressSnapshot(session.user.id, date, result, distractionCount)
