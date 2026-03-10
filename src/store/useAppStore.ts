@@ -21,7 +21,19 @@ import type {
   ControlDailyPlan,
   DistractionLog,
   NudgeItem,
+  AlignmentResult,
 } from '../types';
+import * as goalsService from '../services/goalsService';
+import * as skillPlansService from '../services/skillPlansService';
+import * as scheduleService from '../services/scheduleService';
+import * as rulesService from '../services/rulesService';
+import * as focusService from '../services/focusService';
+import * as planService from '../services/planService';
+import * as distractionService from '../services/distractionService';
+import * as reflectionService from '../services/reflectionService';
+import * as progressService from '../services/progressService';
+import { hydrateFromCloud as cloudHydrate } from '../services/syncService';
+import { upsertLocalProfile } from '../services/profileService';
 import { generateControlPlan, computeNextBestAction } from '../control/controlEngine';
 import { rescheduleRemaining } from '../ai/adaptiveRescheduler';
 import { generateId, getTodayDate } from '../lib/utils';
@@ -175,6 +187,10 @@ interface AppStore {
   dismissNudge: () => void;
   snoozeNudge: (mins: number) => void;
 
+  // Cloud sync
+  hydrateFromCloud: (userId: string) => Promise<void>;
+  saveProgressSnapshot: (result: AlignmentResult, date: string) => Promise<void>;
+
   // Reset
   resetAllData: () => void;
 }
@@ -222,16 +238,23 @@ export const useAppStore = create<AppStore>()(
       updateProfile: (patch) =>
         set((s) => ({ profile: s.profile ? { ...s.profile, ...patch } : null })),
 
-      completeOnboarding: (data) =>
-        set({
-          profile: {
-            ...data,
-            id: generateId(),
-            onboardingComplete: true,
-            isPro: false,
-            createdAt: new Date().toISOString(),
-          },
-        }),
+      completeOnboarding: (data) => {
+        // Profile id must match auth.users.id for RLS to work. Use session UUID
+        // when available; fall back to generateId() for guest mode.
+        const { session, isGuestMode } = get();
+        const id = session?.user.id ?? generateId();
+        const profile: UserProfile = {
+          ...data,
+          id,
+          onboardingComplete: true,
+          isPro: false,
+          createdAt: new Date().toISOString(),
+        };
+        set({ profile });
+        if (session && !isGuestMode) {
+          upsertLocalProfile(profile).catch(console.warn);
+        }
+      },
 
       // ── Seed ────────────────────────────────────────────────────────────────
 
@@ -250,54 +273,93 @@ export const useAppStore = create<AppStore>()(
 
       // ── Schedule events ──────────────────────────────────────────────────────
 
-      addScheduleEvent: (e) =>
-        set((s) => ({
-          scheduleEvents: [
-            ...s.scheduleEvents,
-            { ...e, id: generateId(), createdAt: new Date().toISOString() },
-          ],
-        })),
+      addScheduleEvent: (e) => {
+        const newEvent: ScheduleEvent = { ...e, id: generateId(), createdAt: new Date().toISOString() };
+        set((s) => ({ scheduleEvents: [...s.scheduleEvents, newEvent] }));
+        const { session, isGuestMode } = get();
+        if (session && !isGuestMode) {
+          scheduleService.upsertScheduleEvent(session.user.id, newEvent).catch(console.warn);
+        }
+      },
 
-      updateScheduleEvent: (id, patch) =>
+      updateScheduleEvent: (id, patch) => {
         set((s) => ({
           scheduleEvents: s.scheduleEvents.map((e) => (e.id === id ? { ...e, ...patch } : e)),
-        })),
+        }));
+        const { session, isGuestMode, scheduleEvents } = get();
+        if (session && !isGuestMode) {
+          const updated = scheduleEvents.find((e) => e.id === id);
+          if (updated) scheduleService.upsertScheduleEvent(session.user.id, updated).catch(console.warn);
+        }
+      },
 
-      deleteScheduleEvent: (id) =>
-        set((s) => ({ scheduleEvents: s.scheduleEvents.filter((e) => e.id !== id) })),
+      deleteScheduleEvent: (id) => {
+        set((s) => ({ scheduleEvents: s.scheduleEvents.filter((e) => e.id !== id) }));
+        const { session, isGuestMode } = get();
+        if (session && !isGuestMode) {
+          scheduleService.deleteScheduleEvent(session.user.id, id).catch(console.warn);
+        }
+      },
 
       // ── Goals ────────────────────────────────────────────────────────────────
 
-      addGoal: (g) =>
-        set((s) => ({
-          goals: [...s.goals, { ...g, id: generateId(), createdAt: new Date().toISOString() }],
-        })),
+      addGoal: (g) => {
+        const newGoal: Goal = { ...g, id: generateId(), createdAt: new Date().toISOString() };
+        set((s) => ({ goals: [...s.goals, newGoal] }));
+        const { session, isGuestMode } = get();
+        if (session && !isGuestMode) {
+          goalsService.upsertGoal(session.user.id, newGoal).catch(console.warn);
+        }
+      },
 
-      updateGoal: (id, patch) =>
-        set((s) => ({ goals: s.goals.map((g) => (g.id === id ? { ...g, ...patch } : g)) })),
+      updateGoal: (id, patch) => {
+        set((s) => ({ goals: s.goals.map((g) => (g.id === id ? { ...g, ...patch } : g)) }));
+        const { session, isGuestMode, goals } = get();
+        if (session && !isGuestMode) {
+          const updated = goals.find((g) => g.id === id);
+          if (updated) goalsService.upsertGoal(session.user.id, updated).catch(console.warn);
+        }
+      },
 
-      deleteGoal: (id) =>
-        set((s) => ({ goals: s.goals.filter((g) => g.id !== id) })),
+      deleteGoal: (id) => {
+        set((s) => ({ goals: s.goals.filter((g) => g.id !== id) }));
+        const { session, isGuestMode } = get();
+        if (session && !isGuestMode) {
+          goalsService.deleteGoal(session.user.id, id).catch(console.warn);
+        }
+      },
 
       // ── Skill plans ──────────────────────────────────────────────────────────
 
-      addSkillPlan: (sp) =>
-        set((s) => ({
-          skillPlans: [
-            ...s.skillPlans,
-            { ...sp, id: generateId(), createdAt: new Date().toISOString() },
-          ],
-        })),
+      addSkillPlan: (sp) => {
+        const newSp: SkillPlan = { ...sp, id: generateId(), createdAt: new Date().toISOString() };
+        set((s) => ({ skillPlans: [...s.skillPlans, newSp] }));
+        const { session, isGuestMode } = get();
+        if (session && !isGuestMode) {
+          skillPlansService.upsertSkillPlan(session.user.id, newSp).catch(console.warn);
+        }
+      },
 
-      updateSkillPlan: (id, patch) =>
+      updateSkillPlan: (id, patch) => {
         set((s) => ({
           skillPlans: s.skillPlans.map((sp) => (sp.id === id ? { ...sp, ...patch } : sp)),
-        })),
+        }));
+        const { session, isGuestMode, skillPlans } = get();
+        if (session && !isGuestMode) {
+          const updated = skillPlans.find((sp) => sp.id === id);
+          if (updated) skillPlansService.upsertSkillPlan(session.user.id, updated).catch(console.warn);
+        }
+      },
 
-      deleteSkillPlan: (id) =>
-        set((s) => ({ skillPlans: s.skillPlans.filter((sp) => sp.id !== id) })),
+      deleteSkillPlan: (id) => {
+        set((s) => ({ skillPlans: s.skillPlans.filter((sp) => sp.id !== id) }));
+        const { session, isGuestMode } = get();
+        if (session && !isGuestMode) {
+          skillPlansService.deleteSkillPlan(session.user.id, id).catch(console.warn);
+        }
+      },
 
-      toggleSkillStep: (planId, stepId) =>
+      toggleSkillStep: (planId, stepId) => {
         set((s) => ({
           skillPlans: s.skillPlans.map((sp) =>
             sp.id === planId
@@ -309,66 +371,102 @@ export const useAppStore = create<AppStore>()(
                 }
               : sp,
           ),
-        })),
+        }));
+        const { session, isGuestMode, skillPlans } = get();
+        if (session && !isGuestMode) {
+          const updated = skillPlans.find((sp) => sp.id === planId);
+          if (updated) skillPlansService.upsertSkillPlan(session.user.id, updated).catch(console.warn);
+        }
+      },
 
       // ── Rules ────────────────────────────────────────────────────────────────
 
       addRule: (rule) => {
-        const { rules, profile } = get();
+        const { rules, profile, session, isGuestMode } = get();
         const isPro = profile?.isPro ?? false;
         if (!isPro && rules.filter((r) => r.enabled).length >= FREE_PLAN_RULE_LIMIT) {
           return false;
         }
-        set((s) => ({
-          rules: [
-            ...s.rules,
-            { ...rule, id: generateId(), followedToday: false, createdAt: new Date().toISOString() },
-          ],
-        }));
+        const newRule: Rule = {
+          ...rule,
+          id: generateId(),
+          followedToday: false,
+          createdAt: new Date().toISOString(),
+        };
+        set((s) => ({ rules: [...s.rules, newRule] }));
+        if (session && !isGuestMode) {
+          rulesService.upsertRule(session.user.id, newRule).catch(console.warn);
+        }
         return true;
       },
 
-      updateRule: (id, patch) =>
-        set((s) => ({ rules: s.rules.map((r) => (r.id === id ? { ...r, ...patch } : r)) })),
+      updateRule: (id, patch) => {
+        set((s) => ({ rules: s.rules.map((r) => (r.id === id ? { ...r, ...patch } : r)) }));
+        const { session, isGuestMode, rules } = get();
+        if (session && !isGuestMode) {
+          const updated = rules.find((r) => r.id === id);
+          if (updated) rulesService.upsertRule(session.user.id, updated).catch(console.warn);
+        }
+      },
 
-      toggleRule: (id) =>
-        set((s) => {
-          const isPro = s.profile?.isPro ?? false;
-          const rule = s.rules.find((r) => r.id === id);
-          if (!rule) return s;
-          if (!rule.enabled && !isPro) {
-            if (s.rules.filter((r) => r.enabled).length >= FREE_PLAN_RULE_LIMIT) return s;
-          }
-          return { rules: s.rules.map((r) => (r.id === id ? { ...r, enabled: !r.enabled } : r)) };
-        }),
+      toggleRule: (id) => {
+        const s = get();
+        const isPro = s.profile?.isPro ?? false;
+        const rule = s.rules.find((r) => r.id === id);
+        if (!rule) return;
+        if (!rule.enabled && !isPro) {
+          if (s.rules.filter((r) => r.enabled).length >= FREE_PLAN_RULE_LIMIT) return;
+        }
+        const updated = { ...rule, enabled: !rule.enabled };
+        set((st) => ({
+          rules: st.rules.map((r) => (r.id === id ? updated : r)),
+        }));
+        if (s.session && !s.isGuestMode) {
+          rulesService.upsertRule(s.session.user.id, updated).catch(console.warn);
+        }
+      },
 
-      toggleRuleFollowed: (id) =>
+      toggleRuleFollowed: (id) => {
         set((s) => ({
           rules: s.rules.map((r) => (r.id === id ? { ...r, followedToday: !r.followedToday } : r)),
-        })),
+        }));
+        const { session, isGuestMode, rules } = get();
+        if (session && !isGuestMode) {
+          const updated = rules.find((r) => r.id === id);
+          if (updated) rulesService.upsertRule(session.user.id, updated).catch(console.warn);
+        }
+      },
 
-      deleteRule: (id) =>
-        set((s) => ({ rules: s.rules.filter((r) => r.id !== id) })),
+      deleteRule: (id) => {
+        set((s) => ({ rules: s.rules.filter((r) => r.id !== id) }));
+        const { session, isGuestMode } = get();
+        if (session && !isGuestMode) {
+          rulesService.deleteRule(session.user.id, id).catch(console.warn);
+        }
+      },
 
       // ── Focus ────────────────────────────────────────────────────────────────
 
       startFocus: (session) => set({ activeFocus: session }),
 
-      endFocus: (notes) =>
-        set((s) => {
-          if (!s.activeFocus) return s;
-          const ended: FocusSession = {
-            id: s.activeFocus.id,
-            start: s.activeFocus.startedAt,
-            end: new Date().toISOString(),
-            goalId: s.activeFocus.goalId,
-            notes,
-            durationMinutes: Math.round(
-              (Date.now() - new Date(s.activeFocus.startedAt).getTime()) / 60000,
-            ),
-          };
-          return { activeFocus: null, focusSessions: [ended, ...s.focusSessions] };
-        }),
+      endFocus: (notes) => {
+        const { activeFocus, session, isGuestMode } = get();
+        if (!activeFocus) return;
+        const ended: FocusSession = {
+          id: activeFocus.id,
+          start: activeFocus.startedAt,
+          end: new Date().toISOString(),
+          goalId: activeFocus.goalId,
+          notes,
+          durationMinutes: Math.round(
+            (Date.now() - new Date(activeFocus.startedAt).getTime()) / 60000,
+          ),
+        };
+        set((s) => ({ activeFocus: null, focusSessions: [ended, ...s.focusSessions] }));
+        if (session && !isGuestMode) {
+          focusService.insertFocusSession(session.user.id, ended).catch(console.warn);
+        }
+      },
 
       // ── Plans (new) ──────────────────────────────────────────────────────────
 
@@ -480,58 +578,83 @@ export const useAppStore = create<AppStore>()(
 
       getPlanForDate: (date) => get().plans.find((p) => p.date === date),
 
-      saveReflection: (date, text) =>
+      saveReflection: (date, text) => {
+        const existing = get().reflections.find((r) => r.date === date);
+        const reflection = existing
+          ? { ...existing, text }
+          : { id: generateId(), date, text, createdAt: new Date().toISOString() };
         set((s) => ({
           reflections: [
             ...s.reflections.filter((r) => r.date !== date),
-            { id: generateId(), date, text, createdAt: new Date().toISOString() },
+            reflection,
           ],
-        })),
+        }));
+        const { session, isGuestMode } = get();
+        if (session && !isGuestMode) {
+          reflectionService.upsertReflection(session.user.id, reflection).catch(console.warn);
+        }
+      },
 
       getReflectionForDate: (date) => get().reflections.find((r) => r.date === date),
 
       // ── Control Engine ───────────────────────────────────────────────────────
 
       generateControlPlanAction: (date) => {
-        const { goals, scheduleEvents, skillPlans, rules } = get();
+        const { goals, scheduleEvents, skillPlans, rules, session, isGuestMode } = get();
         const plan = generateControlPlan(goals, scheduleEvents, skillPlans, rules, date);
         set({ controlPlan: plan });
+        if (session && !isGuestMode) {
+          planService.upsertDailyPlan(session.user.id, plan).catch(console.warn);
+        }
       },
 
-      toggleControlPlanItem: (itemId) =>
-        set((s) => {
-          if (!s.controlPlan) return s;
-          const updatedItems = s.controlPlan.plan.items.map((i) =>
-            i.id === itemId ? { ...i, completed: !i.completed } : i,
-          );
-          const nextBestAction = computeNextBestAction(updatedItems);
-          return {
-            controlPlan: {
-              ...s.controlPlan,
-              plan: { ...s.controlPlan.plan, items: updatedItems },
-              nextBestAction,
-            },
-          };
-        }),
+      toggleControlPlanItem: (itemId) => {
+        const s = get();
+        if (!s.controlPlan) return;
+        const updatedItems = s.controlPlan.plan.items.map((i) =>
+          i.id === itemId ? { ...i, completed: !i.completed } : i,
+        );
+        const nextBestAction = computeNextBestAction(updatedItems);
+        const updatedPlan: ControlDailyPlan = {
+          ...s.controlPlan,
+          plan: { ...s.controlPlan.plan, items: updatedItems },
+          nextBestAction,
+        };
+        set({ controlPlan: updatedPlan });
+        if (s.session && !s.isGuestMode) {
+          // Update single item — cheaper than re-saving the whole plan
+          const item = updatedItems.find((i) => i.id === itemId);
+          if (item) {
+            planService
+              .updatePlanItemCompletion(s.session.user.id, itemId, item.completed)
+              .catch(console.warn);
+          }
+        }
+      },
 
       reschedulePlan: (date) => {
-        const { controlPlan, goals, scheduleEvents, rules } = get();
+        const { controlPlan, goals, scheduleEvents, rules, session, isGuestMode } = get();
         if (!controlPlan) return;
         const now = new Date();
         const t = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
         const rescheduled = rescheduleRemaining(
           controlPlan.plan, t, goals, scheduleEvents, rules, date,
         );
-        set({ controlPlan: { ...controlPlan, plan: rescheduled } });
+        const updatedPlan = { ...controlPlan, plan: rescheduled };
+        set({ controlPlan: updatedPlan });
+        if (session && !isGuestMode) {
+          planService.upsertDailyPlan(session.user.id, updatedPlan).catch(console.warn);
+        }
       },
 
-      logDistraction: (note) =>
-        set((s) => ({
-          distractionLogs: [
-            { id: generateId(), timestamp: new Date().toISOString(), note },
-            ...s.distractionLogs,
-          ],
-        })),
+      logDistraction: (note) => {
+        const log = { id: generateId(), timestamp: new Date().toISOString(), note };
+        set((s) => ({ distractionLogs: [log, ...s.distractionLogs] }));
+        const { session, isGuestMode } = get();
+        if (session && !isGuestMode) {
+          distractionService.insertDistractionLog(session.user.id, log).catch(console.warn);
+        }
+      },
 
       setActiveNudge: (nudge) => set({ activeNudge: nudge }),
 
@@ -548,6 +671,41 @@ export const useAppStore = create<AppStore>()(
             activeNudge: { ...s.activeNudge, snoozedUntil: `${h}:${m}` },
           };
         }),
+
+      // ── Cloud sync ───────────────────────────────────────────────────────────
+
+      hydrateFromCloud: async (userId) => {
+        try {
+          const today = getTodayDate();
+          const data = await cloudHydrate(userId, today);
+          const patch: Partial<AppStore> = {
+            goals: data.goals,
+            skillPlans: data.skillPlans,
+            scheduleEvents: data.scheduleEvents,
+            rules: data.rules,
+            focusSessions: data.focusSessions,
+            distractionLogs: data.distractionLogs,
+            reflections: data.reflections,
+          };
+          if (data.profile) patch.profile = data.profile;
+          if (data.controlPlan) patch.controlPlan = data.controlPlan;
+          set(patch);
+        } catch (e) {
+          console.warn('[store] hydrateFromCloud:', e);
+        }
+      },
+
+      saveProgressSnapshot: async (result, date) => {
+        const { session, isGuestMode, distractionLogs } = get();
+        if (!session || isGuestMode) return;
+        const today = getTodayDate();
+        const distractionCount = distractionLogs.filter(
+          (d) => d.timestamp.startsWith(today),
+        ).length;
+        progressService
+          .saveProgressSnapshot(session.user.id, date, result, distractionCount)
+          .catch(console.warn);
+      },
 
       // ── Reset ────────────────────────────────────────────────────────────────
 

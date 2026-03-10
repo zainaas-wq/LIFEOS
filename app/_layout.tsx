@@ -7,9 +7,10 @@ import { supabase } from '../src/lib/supabase';
 import { useAppStore } from '../src/store/useAppStore';
 
 export default function RootLayout() {
-  const setSession  = useAppStore((s) => s.setSession);
-  const session     = useAppStore((s) => s.session);
-  const isGuestMode = useAppStore((s) => s.isGuestMode);
+  const setSession        = useAppStore((s) => s.setSession);
+  const session           = useAppStore((s) => s.session);
+  const isGuestMode       = useAppStore((s) => s.isGuestMode);
+  const hydrateFromCloud  = useAppStore((s) => s.hydrateFromCloud);
 
   // ready: store has rehydrated from AsyncStorage (50 ms debounce)
   const [ready, setReady]               = useState(false);
@@ -30,12 +31,18 @@ export default function RootLayout() {
     // Initial session check (reads from Supabase's own AsyncStorage keys)
     supabase.auth.getSession().then(({ data }) => {
       setSession(data.session);
+      if (data.session) {
+        hydrateFromCloud(data.session.user.id).catch(console.warn);
+      }
       setSessionChecked(true);
     });
 
     // Live listener — fires on sign in, sign out, token refresh
-    const { data } = supabase.auth.onAuthStateChange((_event, newSession) => {
+    const { data } = supabase.auth.onAuthStateChange((event, newSession) => {
       setSession(newSession);
+      if (event === 'SIGNED_IN' && newSession) {
+        hydrateFromCloud(newSession.user.id).catch(console.warn);
+      }
     });
 
     return () => data.subscription.unsubscribe();

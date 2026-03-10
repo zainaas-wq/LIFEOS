@@ -1,5 +1,42 @@
 import { supabase } from '../lib/supabase';
 import type { DbProfile, DbProfileInsert, DbProfileUpdate } from '../lib/supabaseTypes';
+import type { UserProfile } from '../types';
+
+// ─── Conversion helpers ────────────────────────────────────────────────────────
+
+export function dbProfileToLocal(p: DbProfile): UserProfile {
+  return {
+    id: p.id,
+    name: p.name ?? undefined,
+    mainFocus: p.main_focus ?? '',
+    biggestDistraction: p.biggest_distraction ?? '',
+    habitToRemove: p.habit_to_remove ?? '',
+    habitToBuild: p.habit_to_build ?? '',
+    seriousnessScore: p.seriousness_score,
+    onboardingComplete: p.onboarding_complete,
+    isPro: p.is_pro,
+    createdAt: p.created_at,
+  };
+}
+
+export function localProfileToDbInsert(p: UserProfile): DbProfileInsert {
+  return {
+    id: p.id,
+    name: p.name ?? null,
+    main_focus: p.mainFocus,
+    biggest_distraction: p.biggestDistraction,
+    habit_to_remove: p.habitToRemove,
+    habit_to_build: p.habitToBuild,
+    seriousness_score: p.seriousnessScore,
+    onboarding_complete: p.onboardingComplete,
+    is_pro: p.isPro,
+    wake_time: '06:00',
+    sleep_time: '22:30',
+    focus_block_mins: 50,
+    news_limit_mins: 30,
+    mobility_buffer_mins: 10,
+  };
+}
 
 // Supabase JS v2's typed builder chain narrows to `never` when hand-written
 // Insert/Update types don't exactly match the generated format (generated files
@@ -46,4 +83,13 @@ export async function updateProfile(userId: string, patch: DbProfileUpdate): Pro
     console.warn('[profileService] updateProfile error:', error.message);
     throw error;
   }
+}
+
+/** Upsert a UserProfile (camelCase) — converts to DB shape internally. */
+export async function upsertLocalProfile(profile: UserProfile): Promise<void> {
+  const { error } = await table()
+    .upsert({ ...localProfileToDbInsert(profile), updated_at: new Date().toISOString() })
+    .select()
+    .single();
+  if (error) console.warn('[profileService] upsertLocalProfile:', error.message);
 }
