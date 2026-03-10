@@ -134,7 +134,7 @@ export function computeNextBestAction(items: PlanItem[], nowMins?: number): Plan
 
 // ─── Nudge schedule ───────────────────────────────────────────────────────────
 
-function buildNudgeSchedule(items: PlanItem[]): NudgeItem[] {
+export function buildNudgeSchedule(items: PlanItem[]): NudgeItem[] {
   const nudges: NudgeItem[] = [];
   const actionTypes: PlanItemType[] = ['goal', 'skill', 'event'];
 

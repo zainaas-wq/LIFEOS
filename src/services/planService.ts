@@ -11,7 +11,14 @@ const itemsTable = () => supabase.from('daily_plan_items') as any;
  */
 export async function upsertDailyPlan(userId: string, cdp: ControlDailyPlan): Promise<void> {
   // Delete existing plan for this date (items cascade)
-  await plansTable().delete().eq('user_id', userId).eq('date', cdp.date);
+  const { error: deleteError } = await plansTable()
+    .delete()
+    .eq('user_id', userId)
+    .eq('date', cdp.date);
+  if (deleteError) {
+    console.warn('[planService] upsertDailyPlan delete:', deleteError.message);
+    return;
+  }
 
   const { error: planError } = await plansTable().insert({
     id: cdp.plan.id,

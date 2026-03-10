@@ -34,7 +34,7 @@ import * as reflectionService from '../services/reflectionService';
 import * as progressService from '../services/progressService';
 import { hydrateFromCloud as cloudHydrate } from '../services/syncService';
 import { upsertLocalProfile } from '../services/profileService';
-import { generateControlPlan, computeNextBestAction } from '../control/controlEngine';
+import { generateControlPlan, computeNextBestAction, buildNudgeSchedule } from '../control/controlEngine';
 import { rescheduleRemaining } from '../ai/adaptiveRescheduler';
 import { generateId, getTodayDate } from '../lib/utils';
 import { generateDailyPlan } from '../lib/planGenerator';
@@ -455,13 +455,15 @@ export const useAppStore = create<AppStore>()(
       startFocus: (session) => set({ activeFocus: session }),
 
       endFocus: (notes) => {
-        const { activeFocus, session, isGuestMode } = get();
+        const { activeFocus, session, isGuestMode, goals } = get();
         if (!activeFocus) return;
+        const linkedGoal = goals.find((g) => g.id === activeFocus.goalId);
         const ended: FocusSession = {
           id: activeFocus.id,
           start: activeFocus.startedAt,
           end: new Date().toISOString(),
           goalId: activeFocus.goalId,
+          skillPlanId: linkedGoal?.linkedSkillPlanId,
           notes,
           durationMinutes: Math.round(
             (Date.now() - new Date(activeFocus.startedAt).getTime()) / 60000,
@@ -693,7 +695,17 @@ export const useAppStore = create<AppStore>()(
             reflections: data.reflections,
           };
           if (data.profile) patch.profile = data.profile;
-          if (data.controlPlan) patch.controlPlan = data.controlPlan;
+          if (data.controlPlan) {
+            // getDailyPlan returns nextBestAction:null and nudgeSchedule:[].
+            // Recompute both from the restored items so the Planner and Home
+            // tabs show the correct state immediately after sign-in.
+            const restoredItems = data.controlPlan.plan.items;
+            patch.controlPlan = {
+              ...data.controlPlan,
+              nextBestAction: computeNextBestAction(restoredItems),
+              nudgeSchedule: buildNudgeSchedule(restoredItems),
+            };
+          }
           set(patch);
         } catch (e) {
           console.warn('[store] hydrateFromCloud:', e);
