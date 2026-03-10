@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import type { Session } from '@supabase/supabase-js';
 import type {
   UserProfile,
   Task,
@@ -40,6 +41,12 @@ import {
 // ─── Store shape ──────────────────────────────────────────────────────────────
 
 interface AppStore {
+  // ── Auth ──────────────────────────────────────────────────────────────────
+  // session is NOT persisted — Supabase manages token storage via its own
+  // AsyncStorage keys. We only keep it in memory for routing and API calls.
+  session: Session | null;
+  isGuestMode: boolean;
+
   // ── Profile ───────────────────────────────────────────────────────────────
   profile: UserProfile | null;
 
@@ -85,6 +92,10 @@ interface AppStore {
   seedLoaded: boolean;
 
   // ── Actions ───────────────────────────────────────────────────────────────
+
+  // Auth
+  setSession: (session: Session | null) => void;
+  setGuestMode: (value: boolean) => void;
 
   // Profile
   setProfile: (profile: UserProfile) => void;
@@ -173,6 +184,8 @@ interface AppStore {
 export const useAppStore = create<AppStore>()(
   persist(
     (set, get) => ({
+      session: null,
+      isGuestMode: false,
       profile: null,
       scheduleEvents: [],
       goals: [],
@@ -195,6 +208,12 @@ export const useAppStore = create<AppStore>()(
       distractionLogs: [],
       activeNudge: null,
       seedLoaded: false,
+
+      // ── Auth ────────────────────────────────────────────────────────────────
+
+      setSession: (session) => set({ session }),
+
+      setGuestMode: (value) => set({ isGuestMode: value }),
 
       // ── Profile ─────────────────────────────────────────────────────────────
 
@@ -534,6 +553,8 @@ export const useAppStore = create<AppStore>()(
 
       resetAllData: () =>
         set({
+          session: null,
+          isGuestMode: false,
           profile: null,
           scheduleEvents: [],
           goals: [],
@@ -559,7 +580,13 @@ export const useAppStore = create<AppStore>()(
         }),
     }),
     {
-      name: 'lifeos-store-v3', // bump version to clear stale persisted data
+      name: 'lifeos-store-v3',
+      // session is ephemeral — Supabase manages its own token storage.
+      // We restore it from Supabase on every app start via getSession().
+      partialize: (state) => {
+        const { session, ...rest } = state as AppStore;
+        return rest as AppStore;
+      },
       storage: createJSONStorage(() => ({
         getItem: (name) => {
           if (typeof window === 'undefined') return Promise.resolve(null);
