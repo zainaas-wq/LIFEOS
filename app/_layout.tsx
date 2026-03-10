@@ -36,6 +36,10 @@ export default function RootLayout() {
         hydrateFromCloud(data.session.user.id).catch(console.warn);
       }
       setSessionChecked(true);
+    }).catch(() => {
+      // getSession failed (offline, Supabase unreachable, or AsyncStorage error).
+      // Proceed as unauthenticated so the app never hangs on the splash screen.
+      setSessionChecked(true);
     });
 
     // Live listener — fires on sign in, sign out, token refresh
