@@ -13,6 +13,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useAppStore } from '../../src/store/useAppStore';
+import { signOut } from '../../src/services/authService';
 import { Card } from '../../src/components/ui/Card';
 import { Button } from '../../src/components/ui/Button';
 import { Input } from '../../src/components/ui/Input';
@@ -21,10 +22,14 @@ import { Colors, FontSize, FontWeight, Spacing, Radius } from '../../src/constan
 
 export default function SettingsScreen() {
   const profile = useAppStore((s) => s.profile);
+  const session = useAppStore((s) => s.session);
+  const isGuestMode = useAppStore((s) => s.isGuestMode);
   const updateProfile = useAppStore((s) => s.updateProfile);
   const resetAllData = useAppStore((s) => s.resetAllData);
   const aiApiKey = useAppStore((s) => s.aiApiKey);
   const setAiApiKey = useAppStore((s) => s.setAiApiKey);
+
+  const isAuthenticated = !!session && !isGuestMode;
 
   const store = useAppStore((s) => s);
 
@@ -96,6 +101,20 @@ export default function SettingsScreen() {
         },
       ]
     );
+  };
+
+  const handleSignOut = () => {
+    Alert.alert('Sign Out', 'Sign out of your account?', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Sign Out',
+        style: 'destructive',
+        onPress: () => {
+          signOut().catch(console.warn);
+          // resetAllData + redirect handled by SIGNED_OUT in _layout.tsx
+        },
+      },
+    ]);
   };
 
   const handleUpgrade = () => {
@@ -330,6 +349,14 @@ export default function SettingsScreen() {
 
         {/* Danger Zone */}
         <View style={styles.section}>
+          {isAuthenticated && (
+            <Button
+              label="Sign Out"
+              onPress={handleSignOut}
+              variant="secondary"
+              fullWidth
+            />
+          )}
           <Button
             label="Reset All Data"
             onPress={handleResetData}

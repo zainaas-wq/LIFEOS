@@ -11,6 +11,7 @@ export default function RootLayout() {
   const session           = useAppStore((s) => s.session);
   const isGuestMode       = useAppStore((s) => s.isGuestMode);
   const hydrateFromCloud  = useAppStore((s) => s.hydrateFromCloud);
+  const resetAllData      = useAppStore((s) => s.resetAllData);
 
   // ready: store has rehydrated from AsyncStorage (50 ms debounce)
   const [ready, setReady]               = useState(false);
@@ -42,6 +43,9 @@ export default function RootLayout() {
       setSession(newSession);
       if (event === 'SIGNED_IN' && newSession) {
         hydrateFromCloud(newSession.user.id).catch(console.warn);
+      }
+      if (event === 'SIGNED_OUT') {
+        resetAllData();
       }
     });
 

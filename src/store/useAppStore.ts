@@ -235,8 +235,13 @@ export const useAppStore = create<AppStore>()(
 
       setProfile: (profile) => set({ profile }),
 
-      updateProfile: (patch) =>
-        set((s) => ({ profile: s.profile ? { ...s.profile, ...patch } : null })),
+      updateProfile: (patch) => {
+        set((s) => ({ profile: s.profile ? { ...s.profile, ...patch } : null }));
+        const { session, isGuestMode, profile } = get();
+        if (session && !isGuestMode && profile) {
+          upsertLocalProfile(profile).catch(console.warn);
+        }
+      },
 
       completeOnboarding: (data) => {
         // Profile id must match auth.users.id for RLS to work. Use session UUID
