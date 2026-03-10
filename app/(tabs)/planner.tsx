@@ -16,7 +16,7 @@ import { PlanBlockCard } from '../../src/components/PlanBlockCard';
 import { SectionHeader } from '../../src/components/SectionHeader';
 import { Button } from '../../src/components/ui/Button';
 import { Card } from '../../src/components/ui/Card';
-import { getTodayDate, formatDate } from '../../src/lib/utils';
+import { getTodayDate, formatDate, generateId } from '../../src/lib/utils';
 import { getGoalAllocation } from '../../src/lib/weeklyPlanner';
 import { timeToMins } from '../../src/ai/planGenerator';
 import { Colors, FontSize, FontWeight, Radius, Spacing } from '../../src/constants/theme';
@@ -207,7 +207,7 @@ function ControlDailyView() {
   const handleStartFocus = (item: PlanItem) => {
     const goal = goals.find((g) => g.id === item.goalId);
     startFocus({
-      id: Math.random().toString(36).slice(2),
+      id: generateId(),
       goalId: item.goalId,
       goalTitle: goal?.title ?? item.title,
       durationMinutes: timeToMins(item.endTime) - timeToMins(item.startTime),
