@@ -247,6 +247,15 @@ export function generateSmartDailyPlan(
   // Build per-goal allocation targets
   const targets = goalsToSmartTargets(goals, skillPlans);
 
+  // ── Block 2 quality controls ───────────────────────────────────────────────
+  // Per-goal session counter (max 2 sessions/day)
+  const sessionCount = new Map<string, number>();
+  // Daily time cap: schedule at most 80 % of available free minutes
+  const totalFreeMinutes = workSlots.reduce((sum, s) => sum + (s.end - s.start), 0);
+  const dailyCapMins = Math.floor(totalFreeMinutes * 0.8);
+  let totalScheduledMins = 0;
+  // ──────────────────────────────────────────────────────────────────────────
+
   let lastEnergy: EnergyLevel | null = null;
 
   // Detect long fixed block (≥2hrs) — triggers evening rest insertion
@@ -257,6 +266,20 @@ export function generateSmartDailyPlan(
 
   for (const slot of workSlots) {
     let cursor = slot.start;
+
+    // Minimum slot guard: slots < 30 min become buffer items
+    if (slot.end - slot.start < 30) {
+      items.push({
+        id: generateId(),
+        startTime: minsToTime(slot.start),
+        endTime: minsToTime(slot.end),
+        title: 'Break / Buffer',
+        type: 'break',
+        completed: false,
+        notes: 'Short window — use as buffer or rest',
+      });
+      continue;
+    }
 
     // Insert recovery block before first evening session after a long fixed event
     if (!restBlockInserted && longBlock && cursor >= 17 * 60) {
@@ -281,18 +304,36 @@ export function generateSmartDailyPlan(
       const remaining = slot.end - cursor;
       const currentEnergy = getEnergyLevel(cursor);
 
-      const target = pickTarget(targets, currentEnergy, lastEnergy, remaining);
+      // Daily cap: stop scheduling once 80 % of free time is used
+      if (totalScheduledMins >= dailyCapMins) break;
+
+      // Filter targets that are within the 2-session daily limit
+      const availableTargets = targets.filter(
+        (t) => (sessionCount.get(t.goalId) ?? 0) < 2,
+      );
+
+      // Urgency override: urgency ≥ 9 bypasses energy-window matching
+      // (still respects the no-consecutive-HIGH fatigue rule)
+      const urgentTarget = availableTargets.find(
+        (t) =>
+          t.remainingMins >= 20 &&
+          t.urgency >= 9 &&
+          !(lastEnergy === 'high' && categoryEnergy(t.category) === 'high'),
+      );
+      const target =
+        urgentTarget ?? pickTarget(availableTargets, currentEnergy, lastEnergy, remaining);
       if (!target) break;
 
       const targetEnergy = categoryEnergy(target.category);
       const idealDuration = sessionDuration(targetEnergy);
       const brkLen = breakDuration(targetEnergy);
 
-      // Fit session into remaining time
+      // Fit session into remaining time, also bounded by remaining cap
       const actualDuration = Math.min(
         idealDuration,
         target.remainingMins,
         remaining,
+        dailyCapMins - totalScheduledMins,
       );
       if (actualDuration < 20) break;
 
@@ -314,6 +355,8 @@ export function generateSmartDailyPlan(
 
       lastEnergy = targetEnergy;
       target.remainingMins -= actualDuration;
+      sessionCount.set(target.goalId, (sessionCount.get(target.goalId) ?? 0) + 1);
+      totalScheduledMins += actualDuration;
       cursor += actualDuration;
 
       // Insert break if there's still room for it
@@ -400,23 +443,62 @@ export function generateSmartWeeklyPlan(
     const dow = d.getDay();
 
     const freeSlots = extractFreeTime(scheduleEvents, rules, dow);
+    // Per-day session limit and daily cap (reset each day)
+    const daySessionCount = new Map<string, number>();
+    const dayFreeMinutes = freeSlots.reduce((sum, s) => sum + (s.end - s.start), 0);
+    const dayCapMins = Math.floor(dayFreeMinutes * 0.8);
+    let dayScheduledMins = 0;
     let lastEnergy: EnergyLevel | null = null;
 
     for (const slot of freeSlots) {
       let cursor = slot.start;
 
+      // Minimum slot guard: slots < 30 min become buffer items
+      if (slot.end - slot.start < 30) {
+        items.push({
+          id: generateId(),
+          startTime: minsToTime(slot.start),
+          endTime: minsToTime(slot.end),
+          title: 'Break / Buffer',
+          type: 'break',
+          completed: false,
+        });
+        continue;
+      }
+
       while (cursor + 20 <= slot.end) {
         const remaining = slot.end - cursor;
         const currentEnergy = getEnergyLevel(cursor);
 
-        const target = pickTarget(targets, currentEnergy, lastEnergy, remaining);
+        // Daily cap check
+        if (dayScheduledMins >= dayCapMins) break;
+
+        // Filter by 2-session daily limit
+        const dayAvailableTargets = targets.filter(
+          (t) => (daySessionCount.get(t.goalId) ?? 0) < 2,
+        );
+
+        // Urgency override
+        const urgentTarget = dayAvailableTargets.find(
+          (t) =>
+            t.remainingMins >= 20 &&
+            t.urgency >= 9 &&
+            !(lastEnergy === 'high' && categoryEnergy(t.category) === 'high'),
+        );
+        const target =
+          urgentTarget ?? pickTarget(dayAvailableTargets, currentEnergy, lastEnergy, remaining);
         if (!target) break;
 
         const targetEnergy = categoryEnergy(target.category);
         const idealDuration = sessionDuration(targetEnergy);
         const brkLen = breakDuration(targetEnergy);
 
-        const actualDuration = Math.min(idealDuration, target.remainingMins, remaining);
+        const actualDuration = Math.min(
+          idealDuration,
+          target.remainingMins,
+          remaining,
+          dayCapMins - dayScheduledMins,
+        );
         if (actualDuration < 20) break;
 
         items.push({
@@ -434,6 +516,8 @@ export function generateSmartWeeklyPlan(
 
         lastEnergy = targetEnergy;
         target.remainingMins -= actualDuration;
+        daySessionCount.set(target.goalId, (daySessionCount.get(target.goalId) ?? 0) + 1);
+        dayScheduledMins += actualDuration;
         cursor += actualDuration;
 
         if (cursor + brkLen <= slot.end) {
