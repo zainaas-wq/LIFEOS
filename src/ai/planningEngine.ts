@@ -27,6 +27,7 @@ import {
   subtractIntervals,
   type TimeInterval,
 } from './planGenerator';
+import { generateId } from '../lib/utils';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -46,10 +47,6 @@ interface SmartTarget {
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
-
-function uid(): string {
-  return Math.random().toString(36).slice(2, 10);
-}
 
 /** Energy level for a given start time (minutes from midnight). */
 export function getEnergyLevel(startMins: number): EnergyLevel {
@@ -201,7 +198,7 @@ export function generateSmartDailyPlan(
 ): Plan {
   if (!goals.length) {
     return {
-      id: uid(),
+      id: generateId(),
       type: 'daily',
       dateRange: { start: date, end: date },
       items: [],
@@ -218,7 +215,7 @@ export function generateSmartDailyPlan(
   const dayEvents = scheduleEvents.filter((e) => e.daysOfWeek.includes(dow));
   for (const ev of dayEvents) {
     items.push({
-      id: uid(),
+      id: generateId(),
       startTime: ev.start,
       endTime: ev.end,
       title: ev.title,
@@ -267,7 +264,7 @@ export function generateSmartDailyPlan(
       const restEnd = cursor + restLen;
       if (restEnd <= slot.end) {
         items.push({
-          id: uid(),
+          id: generateId(),
           startTime: minsToTime(cursor),
           endTime: minsToTime(restEnd),
           title: 'Rest & Recovery',
@@ -302,7 +299,7 @@ export function generateSmartDailyPlan(
       const isCritical = target.goalId === criticalGoalId && !hasCriticalBeenPlaced(items);
 
       items.push({
-        id: uid(),
+        id: generateId(),
         startTime: minsToTime(cursor),
         endTime: minsToTime(cursor + actualDuration),
         title: target.title,
@@ -322,7 +319,7 @@ export function generateSmartDailyPlan(
       // Insert break if there's still room for it
       if (cursor + brkLen <= slot.end) {
         items.push({
-          id: uid(),
+          id: generateId(),
           startTime: minsToTime(cursor),
           endTime: minsToTime(cursor + brkLen),
           title: targetEnergy === 'high' ? 'Recovery Break' : 'Short Break',
@@ -340,7 +337,7 @@ export function generateSmartDailyPlan(
   // Reflection block at end of day
   if (reflectionStartMins > 0 && reflectionStartMins < dayEndMins) {
     items.push({
-      id: uid(),
+      id: generateId(),
       startTime: minsToTime(reflectionStartMins),
       endTime: minsToTime(dayEndMins),
       title: 'Daily Reflection',
@@ -353,7 +350,7 @@ export function generateSmartDailyPlan(
   items.sort((a, b) => a.startTime.localeCompare(b.startTime));
 
   return {
-    id: uid(),
+    id: generateId(),
     type: 'daily',
     dateRange: { start: date, end: date },
     items,
@@ -377,7 +374,7 @@ export function generateSmartWeeklyPlan(
 ): Plan {
   if (!goals.length) {
     return {
-      id: uid(),
+      id: generateId(),
       type: 'weekly',
       dateRange: { start: startDate, end: startDate },
       items: [],
@@ -423,7 +420,7 @@ export function generateSmartWeeklyPlan(
         if (actualDuration < 20) break;
 
         items.push({
-          id: uid(),
+          id: generateId(),
           startTime: minsToTime(cursor),
           endTime: minsToTime(cursor + actualDuration),
           title: target.title,
@@ -441,7 +438,7 @@ export function generateSmartWeeklyPlan(
 
         if (cursor + brkLen <= slot.end) {
           items.push({
-            id: uid(),
+            id: generateId(),
             startTime: minsToTime(cursor),
             endTime: minsToTime(cursor + brkLen),
             title: 'Break',
@@ -457,7 +454,7 @@ export function generateSmartWeeklyPlan(
   }
 
   return {
-    id: uid(),
+    id: generateId(),
     type: 'weekly',
     dateRange: { start: startDate, end: end.toISOString().split('T')[0] },
     items,

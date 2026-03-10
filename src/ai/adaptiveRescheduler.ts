@@ -8,6 +8,7 @@
 
 import type { Plan, PlanItem, Goal, ScheduleEvent, Rule } from '../types';
 import { extractFreeTime, subtractIntervals, timeToMins, minsToTime } from './planGenerator';
+import { generateId } from '../lib/utils';
 import {
   categoryEnergy,
   importanceScore,
@@ -131,10 +132,18 @@ export function rescheduleRemaining(
       cursor += actualDuration;
       targetIndex++;
 
-      // Insert break if room
+      // Insert visible break if room
       const brkLen = breakDuration(energy);
       if (cursor + brkLen <= slot.end) {
-        cursor += brkLen; // reserve break time without adding an item (keep UI cleaner)
+        rescheduled.push({
+          id: generateId(),
+          startTime: minsToTime(cursor),
+          endTime: minsToTime(cursor + brkLen),
+          title: 'Break',
+          type: 'break',
+          completed: false,
+        });
+        cursor += brkLen;
       }
     }
 

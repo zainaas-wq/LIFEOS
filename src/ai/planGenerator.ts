@@ -18,6 +18,7 @@ import type {
   PlanItem,
   PlanItemType,
 } from '../types';
+import { generateId } from '../lib/utils';
 
 // ─── Internal ─────────────────────────────────────────────────────────────────
 
@@ -35,10 +36,6 @@ export function minsToTime(mins: number): string {
   const h = Math.floor(mins / 60) % 24;
   const m = mins % 60;
   return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
-}
-
-function uid(): string {
-  return Math.random().toString(36).slice(2, 10);
 }
 
 /**
@@ -167,7 +164,7 @@ export function generateWeeklyPlanItems(
 ): Plan {
   if (!goals.length) {
     return {
-      id: uid(),
+      id: generateId(),
       type: 'weekly',
       dateRange: { start: startDate, end: startDate },
       items: [],
@@ -207,7 +204,7 @@ export function generateWeeklyPlanItems(
         if (cursor + actualSession > slot.end) break;
 
         items.push({
-          id: uid(),
+          id: generateId(),
           startTime: minsToTime(cursor),
           endTime: minsToTime(cursor + actualSession),
           title: target.title,
@@ -218,14 +215,27 @@ export function generateWeeklyPlanItems(
         });
 
         target.remainingMins -= actualSession;
-        cursor += actualSession + BREAK_MINS;
+        cursor += actualSession;
+
+        // Visible break between sessions
+        if (cursor + BREAK_MINS <= slot.end) {
+          items.push({
+            id: generateId(),
+            startTime: minsToTime(cursor),
+            endTime: minsToTime(cursor + BREAK_MINS),
+            title: 'Short Break',
+            type: 'break' as PlanItemType,
+            completed: false,
+          });
+          cursor += BREAK_MINS;
+        }
       }
     }
   }
 
   const endStr = end.toISOString().split('T')[0];
   return {
-    id: uid(),
+    id: generateId(),
     type: 'weekly',
     dateRange: { start: startDate, end: endStr },
     items,
@@ -254,7 +264,7 @@ export function generateDailyPlanItems(
   const dayEvents = scheduleEvents.filter((e) => e.daysOfWeek.includes(dow));
   for (const ev of dayEvents) {
     items.push({
-      id: uid(),
+      id: generateId(),
       startTime: ev.start,
       endTime: ev.end,
       title: ev.title,
@@ -279,7 +289,7 @@ export function generateDailyPlanItems(
       if (cursor + actualSession > slot.end) break;
 
       items.push({
-        id: uid(),
+        id: generateId(),
         startTime: minsToTime(cursor),
         endTime: minsToTime(cursor + actualSession),
         title: target.title,
@@ -290,13 +300,26 @@ export function generateDailyPlanItems(
       });
 
       target.remainingMins -= actualSession;
-      cursor += actualSession + BREAK_MINS;
+      cursor += actualSession;
+
+      // Visible break between sessions
+      if (cursor + BREAK_MINS <= slot.end) {
+        items.push({
+          id: generateId(),
+          startTime: minsToTime(cursor),
+          endTime: minsToTime(cursor + BREAK_MINS),
+          title: 'Short Break',
+          type: 'break' as PlanItemType,
+          completed: false,
+        });
+        cursor += BREAK_MINS;
+      }
     }
 
     // Insert a break item if there's a gap
     if (cursor < slot.end && slot.end - cursor >= 10) {
       items.push({
-        id: uid(),
+        id: generateId(),
         startTime: minsToTime(cursor),
         endTime: minsToTime(slot.end),
         title: 'Break / Buffer',
@@ -310,7 +333,7 @@ export function generateDailyPlanItems(
   items.sort((a, b) => a.startTime.localeCompare(b.startTime));
 
   return {
-    id: uid(),
+    id: generateId(),
     type: 'daily',
     dateRange: { start: date, end: date },
     items,
