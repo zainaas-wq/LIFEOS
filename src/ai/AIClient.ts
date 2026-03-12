@@ -9,6 +9,8 @@ export interface AIContext {
   scheduleEvents: ScheduleEvent[];
   mainFocus?: string;
   biggestDistraction?: string;
+  fixedScheduleStart?: string; // HH:MM — planning window start
+  fixedScheduleEnd?: string;   // HH:MM — planning window end
   focusSessions?: FocusSession[];
   currentPlan?: Plan;
   todayDate: string; // YYYY-MM-DD

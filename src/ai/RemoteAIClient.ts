@@ -1,6 +1,6 @@
 import type { AIClient, AIContext } from './AIClient';
 import type { ChatMessage, Plan } from '../types';
-import { generateSmartDailyPlan, generateSmartWeeklyPlan } from './planningEngine';
+import { generateSmartDailyPlan, generateSmartWeeklyPlan, parseFixedWindow } from './planningEngine';
 import { extractFreeTime, minsToTime } from './planGenerator';
 import { rescheduleRemaining } from './adaptiveRescheduler';
 
@@ -174,12 +174,14 @@ export class RemoteAIClient implements AIClient {
         context.currentPlan, t, context.goals, context.scheduleEvents, context.rules, context.todayDate,
       );
     } else if (isPlanRequest(userMessage)) {
+      const { fixedStart, fixedEnd } = parseFixedWindow(context.fixedScheduleStart, context.fixedScheduleEnd);
       plan = generateSmartDailyPlan(
-        context.goals, context.scheduleEvents, context.skillPlans, context.rules, context.todayDate,
+        context.goals, context.scheduleEvents, context.skillPlans, context.rules, context.todayDate, fixedStart, fixedEnd,
       );
     } else if (isWeeklyPlanRequest(userMessage)) {
+      const { fixedStart, fixedEnd } = parseFixedWindow(context.fixedScheduleStart, context.fixedScheduleEnd);
       plan = generateSmartWeeklyPlan(
-        context.goals, context.scheduleEvents, context.skillPlans, context.rules, context.todayDate,
+        context.goals, context.scheduleEvents, context.skillPlans, context.rules, context.todayDate, fixedStart, fixedEnd,
       );
     }
 
@@ -193,14 +195,16 @@ export class RemoteAIClient implements AIClient {
   }
 
   async generateDailyPlan(date: string, context: AIContext): Promise<Plan> {
+    const { fixedStart, fixedEnd } = parseFixedWindow(context.fixedScheduleStart, context.fixedScheduleEnd);
     return generateSmartDailyPlan(
-      context.goals, context.scheduleEvents, context.skillPlans, context.rules, date,
+      context.goals, context.scheduleEvents, context.skillPlans, context.rules, date, fixedStart, fixedEnd,
     );
   }
 
   async generateWeeklyPlan(startDate: string, context: AIContext): Promise<Plan> {
+    const { fixedStart, fixedEnd } = parseFixedWindow(context.fixedScheduleStart, context.fixedScheduleEnd);
     return generateSmartWeeklyPlan(
-      context.goals, context.scheduleEvents, context.skillPlans, context.rules, startDate,
+      context.goals, context.scheduleEvents, context.skillPlans, context.rules, startDate, fixedStart, fixedEnd,
     );
   }
 }

@@ -37,6 +37,7 @@ import { computeProgressScore } from '../ai/progressEngine';
 import { hydrateFromCloud as cloudHydrate } from '../services/syncService';
 import { upsertLocalProfile } from '../services/profileService';
 import { generateControlPlan, computeNextBestAction, buildNudgeSchedule } from '../control/controlEngine';
+import { parseFixedWindow } from '../ai/planningEngine';
 import { rescheduleRemaining } from '../ai/adaptiveRescheduler';
 import { generateId, getTodayDate } from '../lib/utils';
 import { generateDailyPlan } from '../lib/planGenerator';
@@ -646,8 +647,12 @@ export const useAppStore = create<AppStore>()(
       // ── Control Engine ───────────────────────────────────────────────────────
 
       generateControlPlanAction: (date) => {
-        const { goals, scheduleEvents, skillPlans, rules, session, isGuestMode } = get();
-        const plan = generateControlPlan(goals, scheduleEvents, skillPlans, rules, date);
+        const { goals, scheduleEvents, skillPlans, rules, profile, session, isGuestMode } = get();
+        const { fixedStart, fixedEnd } = parseFixedWindow(
+          profile?.fixedScheduleStart,
+          profile?.fixedScheduleEnd,
+        );
+        const plan = generateControlPlan(goals, scheduleEvents, skillPlans, rules, date, undefined, fixedStart, fixedEnd);
         set({ controlPlan: plan });
         if (session && !isGuestMode) {
           planService.upsertDailyPlan(session.user.id, plan).catch(console.warn);
@@ -848,6 +853,8 @@ export const useAIContext = () =>
     scheduleEvents: s.scheduleEvents,
     mainFocus: s.profile?.mainFocus,
     biggestDistraction: s.profile?.biggestDistraction,
+    fixedScheduleStart: s.profile?.fixedScheduleStart,
+    fixedScheduleEnd: s.profile?.fixedScheduleEnd,
     focusSessions: s.focusSessions,
     currentPlan: s.controlPlan?.plan,
     todayDate: getTodayDate(),

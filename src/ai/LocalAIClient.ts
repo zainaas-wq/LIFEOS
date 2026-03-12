@@ -11,7 +11,7 @@
 
 import type { AIClient, AIContext } from './AIClient';
 import type { ChatMessage, Plan } from '../types';
-import { generateSmartDailyPlan, generateSmartWeeklyPlan } from './planningEngine';
+import { generateSmartDailyPlan, generateSmartWeeklyPlan, parseFixedWindow } from './planningEngine';
 import { rescheduleRemaining } from './adaptiveRescheduler';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -192,8 +192,9 @@ function respondDailyPlan(ctx: AIContext): ChatMessage {
       "You don't have any goals set yet. Head to the **Goals** tab to add some, then ask me to generate your plan.",
     );
   }
+  const { fixedStart, fixedEnd } = parseFixedWindow(ctx.fixedScheduleStart, ctx.fixedScheduleEnd);
   const plan = generateSmartDailyPlan(
-    ctx.goals, ctx.scheduleEvents, ctx.skillPlans, ctx.rules, ctx.todayDate,
+    ctx.goals, ctx.scheduleEvents, ctx.skillPlans, ctx.rules, ctx.todayDate, fixedStart, fixedEnd,
   );
   const count = plan.items.filter((i) => i.type !== 'break' && i.type !== 'event').length;
   const progressLines = computeProgressLines(plan, ctx.goals);
@@ -212,8 +213,9 @@ function respondWeeklyPlan(ctx: AIContext): ChatMessage {
       "Add your goals in the **Goals** tab first, then I can build a full week plan.",
     );
   }
+  const { fixedStart, fixedEnd } = parseFixedWindow(ctx.fixedScheduleStart, ctx.fixedScheduleEnd);
   const plan = generateSmartWeeklyPlan(
-    ctx.goals, ctx.scheduleEvents, ctx.skillPlans, ctx.rules, ctx.todayDate,
+    ctx.goals, ctx.scheduleEvents, ctx.skillPlans, ctx.rules, ctx.todayDate, fixedStart, fixedEnd,
   );
   const total = plan.items.filter((i) => i.type !== 'break' && i.type !== 'event').length;
   const hours = Math.round(
@@ -337,22 +339,16 @@ export class LocalAIClient implements AIClient {
   }
 
   async generateDailyPlan(date: string, context: AIContext): Promise<Plan> {
+    const { fixedStart, fixedEnd } = parseFixedWindow(context.fixedScheduleStart, context.fixedScheduleEnd);
     return generateSmartDailyPlan(
-      context.goals,
-      context.scheduleEvents,
-      context.skillPlans,
-      context.rules,
-      date,
+      context.goals, context.scheduleEvents, context.skillPlans, context.rules, date, fixedStart, fixedEnd,
     );
   }
 
   async generateWeeklyPlan(startDate: string, context: AIContext): Promise<Plan> {
+    const { fixedStart, fixedEnd } = parseFixedWindow(context.fixedScheduleStart, context.fixedScheduleEnd);
     return generateSmartWeeklyPlan(
-      context.goals,
-      context.scheduleEvents,
-      context.skillPlans,
-      context.rules,
-      startDate,
+      context.goals, context.scheduleEvents, context.skillPlans, context.rules, startDate, fixedStart, fixedEnd,
     );
   }
 }

@@ -173,6 +173,8 @@ export function generateControlPlan(
   rules: Rule[],
   date: string,
   prefOverrides?: Partial<UserPreferences>,
+  fixedStart?: number,
+  fixedEnd?: number,
 ): ControlDailyPlan {
   const prefs: UserPreferences = {
     ...derivePreferences(rules),
@@ -180,7 +182,7 @@ export function generateControlPlan(
   };
 
   // 1. Generate base plan via smart planning engine
-  const basePlan: Plan = generateSmartDailyPlan(goals, scheduleEvents, skillPlans, rules, date);
+  const basePlan: Plan = generateSmartDailyPlan(goals, scheduleEvents, skillPlans, rules, date, fixedStart, fixedEnd);
 
   // 2. Enrich with micro-blocks
   const enrichedItems = insertMicroBlocks(basePlan.items, prefs);

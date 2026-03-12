@@ -29,6 +29,37 @@ import {
 } from './planGenerator';
 import { generateId } from '../lib/utils';
 
+// ─── Fixed-window helpers ─────────────────────────────────────────────────────
+
+const TIME_RE = /^([01]\d|2[0-3]):([0-5]\d)$/;
+
+/**
+ * Parse fixedScheduleStart / fixedScheduleEnd strings into minute offsets.
+ * Returns empty object (no clipping) if either value is absent, invalid, or inverted.
+ */
+export function parseFixedWindow(
+  start?: string,
+  end?: string,
+): { fixedStart?: number; fixedEnd?: number } {
+  if (!start || !end || !TIME_RE.test(start) || !TIME_RE.test(end)) return {};
+  const s = timeToMins(start);
+  const e = timeToMins(end);
+  if (s >= e) return {};
+  return { fixedStart: s, fixedEnd: e };
+}
+
+/** Clip free slots to [fixedStart, fixedEnd] if provided. */
+function clipSlots(
+  slots: TimeInterval[],
+  fixedStart?: number,
+  fixedEnd?: number,
+): TimeInterval[] {
+  if (fixedEnd === undefined) return slots;
+  return slots
+    .map(s => ({ start: s.start, end: Math.min(s.end, fixedEnd) }))
+    .filter(s => s.end > s.start);
+}
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 export type EnergyLevel = 'high' | 'medium' | 'low';
@@ -195,6 +226,8 @@ export function generateSmartDailyPlan(
   skillPlans: SkillPlan[],
   rules: Rule[],
   date: string, // YYYY-MM-DD
+  fixedStart?: number, // minutes from midnight — planning window start
+  fixedEnd?: number,   // minutes from midnight — planning window end
 ): Plan {
   if (!goals.length) {
     return {
@@ -208,7 +241,11 @@ export function generateSmartDailyPlan(
   }
 
   const dow = new Date(date).getDay();
-  const freeSlots = extractFreeTime(scheduleEvents, rules, dow);
+  const freeSlots = clipSlots(
+    extractFreeTime(scheduleEvents, rules, dow, fixedStart ?? 8 * 60),
+    fixedStart,
+    fixedEnd,
+  );
   const items: PlanItem[] = [];
 
   // Add fixed events
@@ -414,6 +451,8 @@ export function generateSmartWeeklyPlan(
   skillPlans: SkillPlan[],
   rules: Rule[],
   startDate: string, // YYYY-MM-DD
+  fixedStart?: number, // minutes from midnight — planning window start
+  fixedEnd?: number,   // minutes from midnight — planning window end
 ): Plan {
   if (!goals.length) {
     return {
@@ -442,7 +481,11 @@ export function generateSmartWeeklyPlan(
     d.setDate(d.getDate() + offset);
     const dow = d.getDay();
 
-    const freeSlots = extractFreeTime(scheduleEvents, rules, dow);
+    const freeSlots = clipSlots(
+      extractFreeTime(scheduleEvents, rules, dow, fixedStart ?? 8 * 60),
+      fixedStart,
+      fixedEnd,
+    );
     // Per-day session limit and daily cap (reset each day)
     const daySessionCount = new Map<string, number>();
     const dayFreeMinutes = freeSlots.reduce((sum, s) => sum + (s.end - s.start), 0);
