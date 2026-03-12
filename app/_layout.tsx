@@ -5,6 +5,8 @@ import { View } from 'react-native';
 import { Colors } from '../src/constants/theme';
 import { supabase } from '../src/lib/supabase';
 import { useAppStore } from '../src/store/useAppStore';
+// Initialise i18next before any component renders (side-effectful import)
+import '../src/i18n';
 
 export default function RootLayout() {
   const setSession        = useAppStore((s) => s.setSession);
