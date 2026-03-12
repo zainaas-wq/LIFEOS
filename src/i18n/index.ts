@@ -77,13 +77,9 @@ i18n
     },
     lng: initialLang,
     fallbackLng: 'en',
-    // Synchronous init — no async plugins, safe to call before first render
-    initAsync: false,
     interpolation: {
       escapeValue: false, // React Native handles XSS natively
     },
-    // Use v4 key-based plural format (i18next 23+)
-    compatibilityJSON: 'v4',
   });
 
 export default i18n;
