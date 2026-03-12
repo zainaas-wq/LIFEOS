@@ -29,10 +29,11 @@ export default function TabsLayout() {
           tabBarActiveTintColor: Colors.gold,
           tabBarInactiveTintColor: Colors.textMuted,
           tabBarLabelStyle: styles.tabLabel,
-          // Prevents the "collapsible" boolean DOM attribute warning on web
           tabBarHideOnKeyboard: true,
         }}
       >
+        {/* ── 5 visible tabs ──────────────────────────────────────────────── */}
+
         <Tabs.Screen
           name="home"
           options={{
@@ -43,59 +44,53 @@ export default function TabsLayout() {
           }}
         />
         <Tabs.Screen
-          name="schedule"
+          name="plan"
           options={{
-            title: 'Schedule',
-            tabBarIcon: ({ focused }) => (
-              <TabIcon name={focused ? 'today' : 'today-outline'} focused={focused} />
-            ),
-          }}
-        />
-        <Tabs.Screen
-          name="goals"
-          options={{
-            title: 'Goals',
-            tabBarIcon: ({ focused }) => (
-              <TabIcon name={focused ? 'flag' : 'flag-outline'} focused={focused} />
-            ),
-          }}
-        />
-        <Tabs.Screen
-          name="planner"
-          options={{
-            title: 'Planner',
+            title: 'Plan',
             tabBarIcon: ({ focused }) => (
               <TabIcon name={focused ? 'calendar' : 'calendar-outline'} focused={focused} />
             ),
           }}
         />
         <Tabs.Screen
-          name="rules"
+          name="coach"
           options={{
-            title: 'Rules',
-            tabBarIcon: ({ focused }) => (
-              <TabIcon name={focused ? 'shield' : 'shield-outline'} focused={focused} />
-            ),
-          }}
-        />
-        <Tabs.Screen
-          name="ai"
-          options={{
-            title: 'AI',
+            title: 'Coach',
             tabBarIcon: ({ focused }) => (
               <TabIcon name={focused ? 'sparkles' : 'sparkles-outline'} focused={focused} />
             ),
           }}
         />
         <Tabs.Screen
-          name="settings"
+          name="focus"
           options={{
-            title: 'Settings',
+            title: 'Focus',
             tabBarIcon: ({ focused }) => (
-              <TabIcon name={focused ? 'settings' : 'settings-outline'} focused={focused} />
+              <TabIcon name={focused ? 'timer' : 'timer-outline'} focused={focused} />
             ),
           }}
         />
+        <Tabs.Screen
+          name="profile"
+          options={{
+            title: 'Profile',
+            tabBarIcon: ({ focused }) => (
+              <TabIcon name={focused ? 'person' : 'person-outline'} focused={focused} />
+            ),
+          }}
+        />
+
+        {/* ── Legacy tabs — hidden from tab bar, routes remain valid ────────
+            These screens are still accessible programmatically via router.push.
+            They will be deprecated gradually as their content migrates into
+            the new tab shells above. Do not delete them yet.            ── */}
+
+        <Tabs.Screen name="planner"  options={{ href: null }} />
+        <Tabs.Screen name="ai"       options={{ href: null }} />
+        <Tabs.Screen name="settings" options={{ href: null }} />
+        <Tabs.Screen name="goals"    options={{ href: null }} />
+        <Tabs.Screen name="rules"    options={{ href: null }} />
+        <Tabs.Screen name="schedule" options={{ href: null }} />
       </Tabs>
     </View>
   );
