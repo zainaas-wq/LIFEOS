@@ -141,7 +141,7 @@ function PlanItemRow({
 
 // ─── Control Daily View ───────────────────────────────────────────────────────
 
-function ControlDailyView() {
+export function ControlDailyView() {
   const goals                  = useAppStore((s) => s.goals);
   const controlPlan            = useAppStore((s) => s.controlPlan);
   const activeNudge            = useAppStore((s) => s.activeNudge);
