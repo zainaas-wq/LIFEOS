@@ -8,6 +8,34 @@ export type PlanType      = 'daily' | 'weekly';
 export type PlanItemType  = 'goal' | 'skill' | 'break' | 'event' | 'free';
 export type ChatRole      = 'user' | 'assistant';
 
+// ─── LifeOS 2.0 identity unions ───────────────────────────────────────────────
+
+export type LifeRole =
+  | 'student'
+  | 'employee'
+  | 'freelancer'
+  | 'shift-worker'
+  | 'creator'
+  | 'other';
+
+export type EnergyStyle =
+  | 'morning'
+  | 'afternoon'
+  | 'evening'
+  | 'night'
+  | 'flexible';
+
+export type WorkStyle =
+  | 'deep'         // 60–90 min sessions
+  | 'balanced'     // 45 min sessions
+  | 'short-bursts' // 20–25 min sessions
+
+export type RestStyle =
+  | 'active'
+  | 'passive'
+  | 'social'
+  | 'solo';
+
 // ─── User Profile ─────────────────────────────────────────────────────────────
 
 export interface UserProfile {
@@ -17,10 +45,22 @@ export interface UserProfile {
   biggestDistraction: string;
   habitToRemove: string;
   habitToBuild: string;
-  seriousnessScore: number; // 1–10
+  seriousnessScore: number; // 1–10, kept for internal scoring compatibility
   onboardingComplete: boolean;
   isPro: boolean;
   createdAt: string;
+
+  // ── LifeOS 2.0 identity fields (all optional — backward compatible) ────────
+  lifeRole?: LifeRole;
+  energyStyle?: EnergyStyle;
+  workStyle?: WorkStyle;
+  selectedTrackTypes?: string[];     // e.g. ['music', 'coding', 'fitness']
+  mainFrictions?: string[];          // e.g. ['phone', 'social_media']
+  preferredRestStyle?: RestStyle;
+  transformationDirection?: string;  // 12-month vision text
+  language?: string;                 // 'en' | 'ar' | 'he' | ...
+  fixedScheduleStart?: string;       // "HH:MM" — captured in onboarding
+  fixedScheduleEnd?: string;         // "HH:MM" — captured in onboarding
 }
 
 // ─── Schedule ─────────────────────────────────────────────────────────────────
@@ -49,6 +89,21 @@ export interface Goal {
   deadline?: string;          // YYYY-MM-DD
   linkedSkillPlanId?: string;
   createdAt: string;
+}
+
+// ─── LifeTrack (product name for Goal — extends with display enrichment) ──────
+
+/**
+ * LifeTrack is the product-layer name for a Goal.
+ * All Goal fields are preserved for full backward compatibility with
+ * planningEngine, progressEngine, Supabase services, and store actions.
+ * New fields are optional — existing Goal records are valid LifeTracks.
+ */
+export interface LifeTrack extends Goal {
+  trackType?: string;       // 'music' | 'coding' | 'fitness' | ... | 'custom'
+  trackEmoji?: string;      // display enrichment (e.g. '🎵')
+  monthlyTarget?: string;   // 30-day system milestone description
+  coachNote?: string;       // last AI coach observation for this track
 }
 
 // ─── Skill Plans ──────────────────────────────────────────────────────────────
@@ -173,6 +228,42 @@ export interface ChatMessage {
   content: string;
   createdAt: string;
   plan?: Plan;             // optionally embedded structured plan
+}
+
+// ─── Coach session ────────────────────────────────────────────────────────────
+
+/**
+ * Represents a discrete coaching session in the Coach tab.
+ * Uses the existing ChatMessage shape for messages.
+ * Not yet wired into store state — defined here for type-safe future use.
+ */
+export interface CoachSession {
+  id: string;
+  date: string;                // YYYY-MM-DD
+  messages: ChatMessage[];
+  intent?: string;             // 'plan_day' | 'recover' | 'strategy' | 'free'
+  planGenerated?: boolean;
+}
+
+// ─── Onboarding identity (new 8-step builder) ─────────────────────────────────
+
+/**
+ * Data collected by the LifeOS 2.0 onboarding flow.
+ * Maps to UserProfile fields after completion.
+ * seriousnessScore kept as internal field — not surfaced as a product concept.
+ */
+export interface OnboardingIdentity {
+  lifeRole: LifeRole;
+  fixedScheduleStart?: string;       // "HH:MM"
+  fixedScheduleEnd?: string;         // "HH:MM"
+  energyStyle: EnergyStyle;
+  workStyle: WorkStyle;
+  selectedTrackTypes: string[];      // up to 5
+  mainFrictions: string[];           // up to 3
+  preferredRestStyle?: RestStyle;
+  transformationDirection: string;
+  // Internal scoring — not displayed as a product metric
+  seriousnessScore: number;          // 1–10, drives planning engine weights
 }
 
 // ─── Legacy planner compat (kept for existing planner tab) ───────────────────

@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { Session } from '@supabase/supabase-js';
+import { setAppLanguage } from '../i18n';
 import type {
   UserProfile,
   Task,
@@ -114,6 +115,7 @@ interface AppStore {
   setProfile: (profile: UserProfile) => void;
   updateProfile: (patch: Partial<UserProfile>) => void;
   completeOnboarding: (data: Omit<UserProfile, 'id' | 'onboardingComplete' | 'isPro' | 'createdAt'>) => void;
+  setLanguage: (lang: string) => void;
 
   // Seed
   loadSeedData: () => void;
@@ -259,6 +261,20 @@ export const useAppStore = create<AppStore>()(
         set({ profile });
         if (session && !isGuestMode) {
           upsertLocalProfile(profile).catch(console.warn);
+        }
+      },
+
+      setLanguage: (lang) => {
+        // Persist to profile so the choice survives app restarts
+        set((s) => ({
+          profile: s.profile ? { ...s.profile, language: lang } : s.profile,
+        }));
+        // Apply i18next language switch + RTL direction
+        setAppLanguage(lang as any).catch(console.warn);
+        // Sync to cloud if authenticated
+        const { session, isGuestMode, profile } = get();
+        if (session && !isGuestMode && profile) {
+          upsertLocalProfile({ ...profile, language: lang }).catch(console.warn);
         }
       },
 
