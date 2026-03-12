@@ -1,4 +1,4 @@
-import React, { useState, useRef, useCallback, useEffect } from 'react';
+import React, { useState, useRef, useCallback } from 'react';
 import {
   View,
   Text,
@@ -17,26 +17,85 @@ import { LocalAIClient } from '../../src/ai/LocalAIClient';
 import { RemoteAIClient } from '../../src/ai/RemoteAIClient';
 import type { AIClient } from '../../src/ai/AIClient';
 import type { ChatMessage, Plan, PlanItem } from '../../src/types';
+import { generateId, getTodayDate, formatDate } from '../../src/lib/utils';
 import { Colors, FontSize, FontWeight, Radius, Spacing } from '../../src/constants/theme';
 
 // ─── Quick-action chips ────────────────────────────────────────────────────────
 
 const QUICK_ACTIONS = [
-  { label: 'Build my day',       prompt: 'Build my daily plan for today' },
-  { label: 'Rebuild my week',    prompt: 'Rebuild my weekly plan' },
-  { label: 'Recover today',      prompt: 'I missed some tasks — help me recover today intelligently' },
-  { label: 'Reduce distraction', prompt: 'I keep getting distracted — give me an anti-distraction strategy' },
-  { label: 'Improve progress',   prompt: 'Which of my goals am I behind on and what should I prioritize?' },
+  { label: 'Plan my day',                prompt: 'Build my daily plan for today' },
+  { label: 'Rebuild my week',            prompt: 'Rebuild my weekly plan' },
+  { label: 'I fell behind today',        prompt: 'I missed some tasks — help me recover today intelligently' },
+  { label: 'I keep getting distracted',  prompt: 'I keep getting distracted — give me an anti-distraction strategy' },
+  { label: 'Review my goals',            prompt: 'Which of my goals am I behind on and what should I prioritize?' },
 ];
+
+// ─── Context strip ─────────────────────────────────────────────────────────────
+
+function ContextStrip({ goalCount }: { goalCount: number }) {
+  const hour = new Date().getHours();
+
+  const energyLabel =
+    hour >= 6  && hour < 12 ? 'HIGH ENERGY'    :
+    hour >= 12 && hour < 17 ? 'MEDIUM ENERGY'  :
+    'LOW ENERGY';
+
+  const energyColor =
+    hour >= 6  && hour < 12 ? '#6C8EBF' :
+    hour >= 12 && hour < 17 ? Colors.gold :
+    '#4ADE80';
+
+  const dateLabel = formatDate(getTodayDate());
+
+  return (
+    <View style={ctxStyles.strip}>
+      <View style={ctxStyles.chip}>
+        <Text style={ctxStyles.chipText}>{dateLabel}</Text>
+      </View>
+      <View style={[ctxStyles.chip, { borderColor: energyColor + '55' }]}>
+        <Text style={[ctxStyles.chipText, { color: energyColor }]}>{energyLabel}</Text>
+      </View>
+      <View style={ctxStyles.chip}>
+        <Text style={ctxStyles.chipText}>
+          {goalCount} {goalCount === 1 ? 'goal' : 'goals'}
+        </Text>
+      </View>
+    </View>
+  );
+}
+
+const ctxStyles = StyleSheet.create({
+  strip: {
+    flexDirection: 'row',
+    gap: Spacing.xs,
+    paddingHorizontal: Spacing.lg,
+    paddingVertical: Spacing.xs + 2,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.border,
+  },
+  chip: {
+    paddingHorizontal: Spacing.sm,
+    paddingVertical: 3,
+    borderRadius: Radius.full,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    backgroundColor: Colors.surfaceElevated,
+  },
+  chipText: {
+    fontSize: FontSize.xs,
+    color: Colors.textMuted,
+    letterSpacing: 0.3,
+  },
+});
 
 // ─── Plan item card (inline) ──────────────────────────────────────────────────
 
 const TYPE_COLOR: Record<string, string> = {
-  goal: Colors.gold,
+  goal:  Colors.gold,
   skill: '#6C8EBF',
   break: Colors.textMuted,
   event: '#F472B6',
-  free: Colors.textMuted,
+  free:  Colors.textMuted,
 };
 
 function InlinePlanItem({ item }: { item: PlanItem }) {
@@ -69,7 +128,7 @@ function InlinePlan({ plan }: { plan: Plan }) {
         <InlinePlanItem key={item.id} item={item} />
       ))}
       {workItems.length > 8 && (
-        <Text style={planStyles.more}>+{workItems.length - 8} more → Planner tab</Text>
+        <Text style={planStyles.more}>+{workItems.length - 8} more → Plan tab</Text>
       )}
     </View>
   );
@@ -102,11 +161,11 @@ const planStyles = StyleSheet.create({
     borderBottomColor: Colors.border,
   },
   times: { width: 80, flexDirection: 'row', gap: 2, alignItems: 'center' },
-  time: { fontSize: FontSize.xs, color: Colors.textSecondary },
-  timeSep: { fontSize: FontSize.xs, color: Colors.textMuted },
-  info: { flex: 1 },
-  title: { fontSize: FontSize.sm, color: Colors.textPrimary },
-  type: { fontSize: FontSize.xs, textTransform: 'uppercase', letterSpacing: 0.5 },
+  time:   { fontSize: FontSize.xs, color: Colors.textSecondary },
+  timeSep:{ fontSize: FontSize.xs, color: Colors.textMuted },
+  info:   { flex: 1 },
+  title:  { fontSize: FontSize.sm, color: Colors.textPrimary },
+  type:   { fontSize: FontSize.xs, textTransform: 'uppercase', letterSpacing: 0.5 },
   more: {
     fontSize: FontSize.xs,
     color: Colors.textMuted,
@@ -137,55 +196,25 @@ function ChatBubble({ msg }: { msg: ChatMessage }) {
 }
 
 const bubbleStyles = StyleSheet.create({
-  row: {
-    flexDirection: 'row',
-    alignItems: 'flex-end',
-    gap: Spacing.xs,
-    marginBottom: Spacing.sm,
-  },
+  row:     { flexDirection: 'row', alignItems: 'flex-end', gap: Spacing.xs, marginBottom: Spacing.sm },
   rowUser: { flexDirection: 'row-reverse' },
   avatar: {
-    width: 28,
-    height: 28,
-    borderRadius: Radius.full,
-    backgroundColor: Colors.goldMuted,
-    borderWidth: 1,
-    borderColor: Colors.goldDim,
-    alignItems: 'center',
-    justifyContent: 'center',
+    width: 28, height: 28, borderRadius: Radius.full,
+    backgroundColor: Colors.goldMuted, borderWidth: 1, borderColor: Colors.goldDim,
+    alignItems: 'center', justifyContent: 'center',
   },
-  bubble: {
-    maxWidth: '80%',
-    borderRadius: Radius.lg,
-    padding: Spacing.md,
-  },
-  bubbleAI: {
-    backgroundColor: Colors.surfaceElevated,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    borderBottomLeftRadius: 4,
-  },
-  bubbleUser: {
-    backgroundColor: Colors.goldMuted,
-    borderWidth: 1,
-    borderColor: Colors.goldDim,
-    borderBottomRightRadius: 4,
-  },
-  text: {
-    fontSize: FontSize.sm,
-    color: Colors.textPrimary,
-    lineHeight: 20,
-  },
-  textUser: {
-    color: Colors.gold,
-  },
+  bubble:     { maxWidth: '80%', borderRadius: Radius.lg, padding: Spacing.md },
+  bubbleAI:   { backgroundColor: Colors.surfaceElevated, borderWidth: 1, borderColor: Colors.border, borderBottomLeftRadius: 4 },
+  bubbleUser: { backgroundColor: Colors.goldMuted, borderWidth: 1, borderColor: Colors.goldDim, borderBottomRightRadius: 4 },
+  text:     { fontSize: FontSize.sm, color: Colors.textPrimary, lineHeight: 20 },
+  textUser: { color: Colors.gold },
 });
 
 // ─── Main screen ──────────────────────────────────────────────────────────────
 
 function makeUserMsg(content: string): ChatMessage {
   return {
-    id: Math.random().toString(36).slice(2),
+    id: generateId(),
     role: 'user',
     content,
     createdAt: new Date().toISOString(),
@@ -196,19 +225,20 @@ const WELCOME: ChatMessage = {
   id: 'welcome',
   role: 'assistant',
   content:
-    "Hi! I'm your LifeOS AI. I can generate daily or weekly plans, check your goals, and find your free time — all locally, no internet needed.\n\nTry a quick action below, or type anything.",
+    "I'm your Coach. I can plan your day, help you recover when things go off-track, and keep your goals moving forward.\n\nType anything, or start with a quick action below.",
   createdAt: new Date().toISOString(),
 };
 
 export default function AIScreen() {
-  const chatHistory = useAppStore((s) => s.chatHistory);
+  const chatHistory    = useAppStore((s) => s.chatHistory);
   const addChatMessage = useAppStore((s) => s.addChatMessage);
   const clearChatHistory = useAppStore((s) => s.clearChatHistory);
   const setCurrentPlan = useAppStore((s) => s.setCurrentPlan);
-  const aiApiKey = useAppStore((s) => s.aiApiKey);
-  const aiContext = useAIContext();
+  const aiApiKey       = useAppStore((s) => s.aiApiKey);
+  const goals          = useAppStore((s) => s.goals);
+  const aiContext      = useAIContext();
 
-  const [input, setInput] = useState('');
+  const [input, setInput]   = useState('');
   const [loading, setLoading] = useState(false);
   const scrollRef = useRef<ScrollView>(null);
 
@@ -236,13 +266,10 @@ export default function AIScreen() {
         const client = getClient();
         const reply = await client.chat(trimmed, chatHistory, aiContext);
         addChatMessage(reply);
-        // If the reply contains a plan, store it
-        if (reply.plan) {
-          setCurrentPlan(reply.plan);
-        }
+        if (reply.plan) setCurrentPlan(reply.plan);
       } catch (err: any) {
         addChatMessage({
-          id: Math.random().toString(36).slice(2),
+          id: generateId(),
           role: 'assistant',
           content: `Error: ${err?.message ?? 'Something went wrong. Please try again.'}`,
           createdAt: new Date().toISOString(),
@@ -262,16 +289,16 @@ export default function AIScreen() {
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 24}
       >
-        {/* Header */}
+        {/* ── Header ─────────────────────────────────────────────────────── */}
         <View style={styles.header}>
           <View style={styles.headerLeft}>
             <View style={styles.headerIcon}>
               <Ionicons name="sparkles" size={16} color={Colors.gold} />
             </View>
             <View>
-              <Text style={styles.headerTitle}>LifeOS AI</Text>
+              <Text style={styles.headerTitle}>Your Coach</Text>
               <Text style={styles.headerSub}>
-                {aiApiKey ? 'Claude API · Remote' : 'Local planner · Offline'}
+                {aiApiKey ? 'Claude API · Remote' : 'Local · Offline'}
               </Text>
             </View>
           </View>
@@ -280,7 +307,10 @@ export default function AIScreen() {
           </TouchableOpacity>
         </View>
 
-        {/* Messages */}
+        {/* ── Context strip ──────────────────────────────────────────────── */}
+        <ContextStrip goalCount={goals.length} />
+
+        {/* ── Messages ───────────────────────────────────────────────────── */}
         <ScrollView
           ref={scrollRef}
           style={styles.messages}
@@ -302,7 +332,7 @@ export default function AIScreen() {
           )}
         </ScrollView>
 
-        {/* Quick actions */}
+        {/* ── Quick actions ──────────────────────────────────────────────── */}
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
@@ -322,13 +352,13 @@ export default function AIScreen() {
           ))}
         </ScrollView>
 
-        {/* Input bar */}
+        {/* ── Input bar ──────────────────────────────────────────────────── */}
         <View style={styles.inputBar}>
           <TextInput
             style={styles.input}
             value={input}
             onChangeText={setInput}
-            placeholder="Ask anything about your schedule…"
+            placeholder="Ask your coach…"
             placeholderTextColor={Colors.textMuted}
             multiline
             maxLength={500}
@@ -362,93 +392,50 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: Colors.border,
   },
-  headerLeft: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
+  headerLeft:  { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
   headerIcon: {
-    width: 32,
-    height: 32,
-    borderRadius: Radius.full,
-    backgroundColor: Colors.goldMuted,
-    borderWidth: 1,
-    borderColor: Colors.goldDim,
-    alignItems: 'center',
-    justifyContent: 'center',
+    width: 32, height: 32, borderRadius: Radius.full,
+    backgroundColor: Colors.goldMuted, borderWidth: 1, borderColor: Colors.goldDim,
+    alignItems: 'center', justifyContent: 'center',
   },
   headerTitle: { fontSize: FontSize.md, fontWeight: FontWeight.bold, color: Colors.textPrimary },
-  headerSub: { fontSize: FontSize.xs, color: Colors.textMuted },
-  clearBtn: { padding: Spacing.xs },
+  headerSub:   { fontSize: FontSize.xs, color: Colors.textMuted },
+  clearBtn:    { padding: Spacing.xs },
 
-  messages: { flex: 1 },
-  messagesContent: {
-    padding: Spacing.md,
-    paddingBottom: Spacing.sm,
-  },
+  messages:        { flex: 1 },
+  messagesContent: { padding: Spacing.md, paddingBottom: Spacing.sm },
 
   typingRow: { flexDirection: 'row', alignItems: 'flex-end', gap: Spacing.xs, marginBottom: Spacing.sm },
   typingBubble: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.xs,
-    backgroundColor: Colors.surfaceElevated,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    borderRadius: Radius.lg,
-    borderBottomLeftRadius: 4,
-    paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.sm,
+    flexDirection: 'row', alignItems: 'center', gap: Spacing.xs,
+    backgroundColor: Colors.surfaceElevated, borderWidth: 1, borderColor: Colors.border,
+    borderRadius: Radius.lg, borderBottomLeftRadius: 4,
+    paddingHorizontal: Spacing.md, paddingVertical: Spacing.sm,
   },
   typingText: { fontSize: FontSize.sm, color: Colors.textMuted, fontStyle: 'italic' },
 
-  chips: {
-    maxHeight: 44,
-    borderTopWidth: 1,
-    borderTopColor: Colors.border,
-  },
-  chipsContent: {
-    paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.xs,
-    gap: Spacing.xs,
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
+  chips:        { maxHeight: 44, borderTopWidth: 1, borderTopColor: Colors.border },
+  chipsContent: { paddingHorizontal: Spacing.md, paddingVertical: Spacing.xs, gap: Spacing.xs, flexDirection: 'row', alignItems: 'center' },
   chip: {
-    paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.xs + 2,
-    backgroundColor: Colors.surfaceElevated,
-    borderRadius: Radius.full,
-    borderWidth: 1,
-    borderColor: Colors.border,
+    paddingHorizontal: Spacing.md, paddingVertical: Spacing.xs + 2,
+    backgroundColor: Colors.surfaceElevated, borderRadius: Radius.full,
+    borderWidth: 1, borderColor: Colors.border,
   },
   chipText: { fontSize: FontSize.xs, color: Colors.textSecondary, fontWeight: FontWeight.medium },
 
   inputBar: {
-    flexDirection: 'row',
-    alignItems: 'flex-end',
-    gap: Spacing.sm,
-    padding: Spacing.md,
-    borderTopWidth: 1,
-    borderTopColor: Colors.border,
+    flexDirection: 'row', alignItems: 'flex-end',
+    gap: Spacing.sm, padding: Spacing.md,
+    borderTopWidth: 1, borderTopColor: Colors.border,
     backgroundColor: Colors.surface,
   },
   input: {
-    flex: 1,
-    minHeight: 40,
-    maxHeight: 120,
-    backgroundColor: Colors.surfaceElevated,
-    borderRadius: Radius.md,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.sm,
-    fontSize: FontSize.sm,
-    color: Colors.textPrimary,
+    flex: 1, minHeight: 40, maxHeight: 120,
+    backgroundColor: Colors.surfaceElevated, borderRadius: Radius.md,
+    borderWidth: 1, borderColor: Colors.border,
+    paddingHorizontal: Spacing.md, paddingVertical: Spacing.sm,
+    fontSize: FontSize.sm, color: Colors.textPrimary,
   },
-  sendBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: Radius.full,
-    backgroundColor: Colors.gold,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
+  sendBtn:         { width: 40, height: 40, borderRadius: Radius.full, backgroundColor: Colors.gold, alignItems: 'center', justifyContent: 'center' },
   sendBtnDisabled: { opacity: 0.35 },
 });
