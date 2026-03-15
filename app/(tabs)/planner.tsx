@@ -10,6 +10,8 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useAppStore } from '../../src/store/useAppStore';
+import { useEntitlements } from '../../src/services/entitlementService';
+import { UpgradeModal } from '../../src/components/upgrade/UpgradeModal';
 import { NudgeBanner } from '../../src/components/NudgeBanner';
 import { FocusModal } from '../../src/components/FocusModal';
 import { PlanBlockCard } from '../../src/components/PlanBlockCard';
@@ -356,8 +358,8 @@ export function ControlDailyView() {
 // ─── Weekly sub-view (unchanged) ─────────────────────────────────────────────
 
 function WeeklyView({ goals, weeklyPlan, generatedAt, planSource, generating, aiGenerating,
-  hasApiKey, selectedDay, allocation, dayBlocks, onDaySelect, onGenerate, onAIGenerate,
-  onClear, onBlockPress }: any) {
+  selectedDay, allocation, dayBlocks, onDaySelect, onGenerate, onAIGenerate,
+  onClear, onBlockPress, canAIPlan }: any) {
 
   const blocksForDay = dayBlocks(selectedDay) as PlanBlock[];
   const completedCount = weeklyPlan.filter((b: PlanBlock) => b.completed).length;
@@ -400,16 +402,21 @@ function WeeklyView({ goals, weeklyPlan, generatedAt, planSource, generating, ai
         />
         <TouchableOpacity
           onPress={onAIGenerate}
-          disabled={anyGenerating}
-          style={[styles.aiBtn, aiGenerating && styles.aiBtnLoading, !hasApiKey && styles.aiBtnDim]}
+          disabled={canAIPlan && anyGenerating}
+          style={[styles.aiBtn, aiGenerating && styles.aiBtnLoading, !canAIPlan && styles.aiBtnDim]}
           activeOpacity={0.75}
         >
           {aiGenerating ? (
             <Text style={styles.aiBtnText}>Thinking…</Text>
-          ) : (
+          ) : canAIPlan ? (
             <>
               <Ionicons name="sparkles" size={15} color={Colors.gold} />
               <Text style={styles.aiBtnText}>AI Plan</Text>
+            </>
+          ) : (
+            <>
+              <Ionicons name="lock-closed" size={14} color={Colors.textMuted} />
+              <Text style={[styles.aiBtnText, { color: Colors.textMuted }]}>AI Plan</Text>
             </>
           )}
         </TouchableOpacity>
@@ -488,6 +495,7 @@ export default function PlannerScreen() {
   const [aiGenerating, setAiGenerating] = useState(false);
   const [selectedDay, setSelectedDay] = useState<number>(new Date().getDay());
   const [focusBlock, setFocusBlock] = useState<PlanBlock | null>(null);
+  const [showUpgradeModal, setShowUpgradeModal] = useState(false);
 
   const goals            = useAppStore((s) => s.goals);
   const weeklyPlan       = useAppStore((s) => s.weeklyPlan);
@@ -496,7 +504,9 @@ export default function PlannerScreen() {
   const generateWeekly   = useAppStore((s) => s.generateWeeklyPlanAction);
   const generateAIWeekly = useAppStore((s) => s.generateAIWeeklyPlanAction);
   const clearWeekly      = useAppStore((s) => s.clearWeeklyPlan);
-  const aiApiKey         = useAppStore((s) => s.aiApiKey);
+
+  const entitlements = useEntitlements();
+  const canAIPlan    = entitlements.can('ai_weekly_plan');
 
   const allocation = getGoalAllocation(goals, weeklyPlan);
   const dayBlocks  = (day: number) =>
@@ -510,11 +520,11 @@ export default function PlannerScreen() {
   };
 
   const handleAIGenerate = async () => {
-    if (!goals.length) { Alert.alert('No goals', 'Add goals first in the Goals tab.'); return; }
-    if (!aiApiKey) {
-      Alert.alert('API Key Required', 'Add your Anthropic API key in Settings → AI Planner.');
+    if (!canAIPlan) {
+      setShowUpgradeModal(true);
       return;
     }
+    if (!goals.length) { Alert.alert('No goals', 'Add goals first in the Goals tab.'); return; }
     setAiGenerating(true);
     try { await generateAIWeekly(); }
     catch (err: any) { Alert.alert('AI Plan Failed', err?.message ?? 'Unknown error.'); }
@@ -551,13 +561,13 @@ export default function PlannerScreen() {
           planSource={weeklyPlanSource}
           generating={generating}
           aiGenerating={aiGenerating}
-          hasApiKey={!!aiApiKey}
           selectedDay={selectedDay}
           allocation={allocation}
           dayBlocks={dayBlocks}
           onDaySelect={setSelectedDay}
           onGenerate={handleGenerateWeekly}
           onAIGenerate={handleAIGenerate}
+          canAIPlan={canAIPlan}
           onClear={clearWeekly}
           onBlockPress={setFocusBlock}
         />
@@ -568,6 +578,12 @@ export default function PlannerScreen() {
         goal={focusGoal}
         visible={!!focusBlock}
         onClose={() => setFocusBlock(null)}
+      />
+
+      <UpgradeModal
+        visible={showUpgradeModal}
+        featureName="Weekly AI Planning"
+        onDismiss={() => setShowUpgradeModal(false)}
       />
     </SafeAreaView>
   );

@@ -39,11 +39,10 @@ import { upsertLocalProfile } from '../services/profileService';
 import { generateControlPlan, computeNextBestAction, buildNudgeSchedule } from '../control/controlEngine';
 import { parseFixedWindow } from '../ai/planningEngine';
 import { rescheduleRemaining } from '../ai/adaptiveRescheduler';
-import { generateId, getTodayDate } from '../lib/utils';
+import { generateId, getTodayDate, getLocalDateStr } from '../lib/utils';
 import { generateDailyPlan } from '../lib/planGenerator';
 import { FREE_PLAN_RULE_LIMIT } from '../lib/rulesEngine';
 import { generateWeeklyPlan } from '../lib/weeklyPlanner';
-import { generateAIWeeklyPlan } from '../lib/aiPlanner';
 import {
   SEED_PROFILE,
   SEED_SCHEDULE_EVENTS,
@@ -521,11 +520,10 @@ export const useAppStore = create<AppStore>()(
       },
 
       generateAIWeeklyPlanAction: async () => {
-        const { goals, scheduleEvents, rules, profile, aiApiKey } = get();
-        if (!aiApiKey) throw new Error('No API key. Go to Settings → AI Planner.');
-        const blocks = await generateAIWeeklyPlan({
-          goals, scheduleEvents, rules, apiKey: aiApiKey, mainFocus: profile?.mainFocus,
-        });
+        // AI-enhanced weekly generation routes through the Coach (ai.tsx) tab.
+        // The planner button falls back to local smart scheduling for now.
+        const { goals, scheduleEvents, rules } = get();
+        const blocks = generateWeeklyPlan(goals, scheduleEvents, rules);
         set({ weeklyPlan: blocks, weeklyPlanGeneratedAt: new Date().toISOString(), weeklyPlanSource: 'ai' });
         return blocks;
       },
@@ -684,12 +682,16 @@ export const useAppStore = create<AppStore>()(
       },
 
       reschedulePlan: (date) => {
-        const { controlPlan, goals, scheduleEvents, rules, session, isGuestMode } = get();
+        const { controlPlan, goals, scheduleEvents, rules, profile, session, isGuestMode } = get();
         if (!controlPlan) return;
         const now = new Date();
         const t = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+        const { fixedStart, fixedEnd } = parseFixedWindow(
+          profile?.fixedScheduleStart,
+          profile?.fixedScheduleEnd,
+        );
         const rescheduled = rescheduleRemaining(
-          controlPlan.plan, t, goals, scheduleEvents, rules, date,
+          controlPlan.plan, t, goals, scheduleEvents, rules, date, fixedStart, fixedEnd,
         );
         const updatedPlan = { ...controlPlan, plan: rescheduled };
         set({ controlPlan: updatedPlan });
@@ -762,7 +764,7 @@ export const useAppStore = create<AppStore>()(
         // Use `date` (not getTodayDate()) so historical snapshots count the
         // correct day's distractions rather than today's.
         const distractionCount = distractionLogs.filter(
-          (d) => d.timestamp.startsWith(date),
+          (d) => getLocalDateStr(new Date(d.timestamp)) === date,
         ).length;
         progressService
           .saveProgressSnapshot(session.user.id, date, result, distractionCount)

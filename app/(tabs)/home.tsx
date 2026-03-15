@@ -12,15 +12,18 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import { useTranslation } from 'react-i18next';
 import { useAppStore } from '../../src/store/useAppStore';
 import { AlignmentRing } from '../../src/components/AlignmentRing';
 import { Card } from '../../src/components/ui/Card';
 import { Button } from '../../src/components/ui/Button';
 import { computeProgressScore } from '../../src/ai/progressEngine';
-import { getTodayDate, getGreeting, formatDate } from '../../src/lib/utils';
+import { getTodayDate, formatDate, getLocalDateStr } from '../../src/lib/utils';
 import { Colors, FontSize, FontWeight, Spacing, Radius } from '../../src/constants/theme';
 
 export default function HomeScreen() {
+  const { t } = useTranslation();
+
   const profile       = useAppStore((s) => s.profile);
   const rules         = useAppStore((s) => s.rules);
   const activeFocus   = useAppStore((s) => s.activeFocus);
@@ -49,7 +52,7 @@ export default function HomeScreen() {
     [controlPlan],
   );
 
-  const todayDistractions = distractionLogs.filter((d) => d.timestamp.startsWith(today)).length;
+  const todayDistractions = distractionLogs.filter((d) => getLocalDateStr(new Date(d.timestamp)) === today).length;
 
   const alignmentResult = useMemo(
     () =>
@@ -72,13 +75,18 @@ export default function HomeScreen() {
     }
   };
 
-  const todaySessionCount = focusSessions.filter((s) => s.start.startsWith(today)).length;
+  const todaySessionCount = focusSessions.filter((s) => getLocalDateStr(new Date(s.start)) === today).length;
   const todayFocusMin = focusSessions
-    .filter((s) => s.start.startsWith(today))
+    .filter((s) => getLocalDateStr(new Date(s.start)) === today)
     .reduce((sum, s) => sum + (s.durationMinutes ?? 0), 0);
 
+  const hour = new Date().getHours();
+  const greetingKey =
+    hour < 12 ? 'home.greeting_morning' :
+    hour < 17 ? 'home.greeting_afternoon' :
+                'home.greeting_evening';
   const greetingName = profile?.name ? `, ${profile.name}` : '';
-  const greetingText = `${getGreeting()}${greetingName}`;
+  const greetingText = `${t(greetingKey)}${greetingName}`;
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
@@ -102,10 +110,10 @@ export default function HomeScreen() {
           <View style={styles.ringWrap}>
             <AlignmentRing result={alignmentResult} size={180} />
             <View style={styles.breakdown}>
-              <ScorePill label="Tasks"    value={alignmentResult.taskScore}       max={40} />
-              <ScorePill label="Rules"    value={alignmentResult.ruleScore}       max={30} />
-              <ScorePill label="Critical" value={alignmentResult.criticalScore}   max={20} />
-              <ScorePill label="Reflect"  value={alignmentResult.reflectionScore} max={10} />
+              <ScorePill label={t('home.score_tasks')}    value={alignmentResult.taskScore}       max={40} />
+              <ScorePill label={t('home.score_rules')}    value={alignmentResult.ruleScore}       max={30} />
+              <ScorePill label={t('home.score_critical')} value={alignmentResult.criticalScore}   max={20} />
+              <ScorePill label={t('home.score_reflect')}  value={alignmentResult.reflectionScore} max={10} />
             </View>
           </View>
 
@@ -116,8 +124,8 @@ export default function HomeScreen() {
                 <Ionicons name="flash" size={16} color={Colors.gold} />
                 <Text style={styles.focusLabel}>
                   {activeFocus
-                    ? `Focusing · ${activeFocus.goalTitle}`
-                    : `${todaySessionCount} session${todaySessionCount !== 1 ? 's' : ''} · ${todayFocusMin} min focused`}
+                    ? t('home.focus_active_label', { title: activeFocus.goalTitle })
+                    : t('home.focus_summary', { count: todaySessionCount, mins: todayFocusMin })}
                 </Text>
               </View>
             </Card>
@@ -132,8 +140,8 @@ export default function HomeScreen() {
             <Ionicons name="warning-outline" size={13} color={Colors.textMuted} />
             <Text style={styles.distractionBtnText}>
               {todayDistractions > 0
-                ? `${todayDistractions} distraction${todayDistractions > 1 ? 's' : ''} today — tap to log`
-                : 'Got distracted? Tap to log it'}
+                ? t('home.distraction_count', { count: todayDistractions })
+                : t('home.distraction_prompt')}
             </Text>
           </TouchableOpacity>
 
@@ -145,7 +153,7 @@ export default function HomeScreen() {
                 <Card gold style={styles.section}>
                   <View style={styles.criticalHeader}>
                     <Ionicons name="flash" size={14} color={Colors.gold} />
-                    <Text style={styles.criticalLabel}>Today's Focus</Text>
+                    <Text style={styles.criticalLabel}>{t('home.todays_focus')}</Text>
                   </View>
                   <Text style={styles.criticalAction}>{criticalItem.title}</Text>
                 </Card>
@@ -154,9 +162,9 @@ export default function HomeScreen() {
             return (
               <Card style={styles.section}>
                 <View style={styles.emptyRow}>
-                  <Text style={styles.emptyHint}>No plan generated yet.</Text>
+                  <Text style={styles.emptyHint}>{t('home.no_plan_today')}</Text>
                   <TouchableOpacity onPress={() => router.push('/(tabs)/plan' as any)}>
-                    <Text style={styles.emptyLink}>Go to Plan →</Text>
+                    <Text style={styles.emptyLink}>{t('home.go_to_plan')}</Text>
                   </TouchableOpacity>
                 </View>
               </Card>
@@ -172,18 +180,18 @@ export default function HomeScreen() {
             <View style={styles.coachIcon}>
               <Ionicons name="sparkles" size={14} color={Colors.gold} />
             </View>
-            <Text style={styles.coachText}>Ask your Coach…</Text>
+            <Text style={styles.coachText}>{t('home.ask_coach')}</Text>
             <Ionicons name="arrow-forward" size={14} color={Colors.textMuted} />
           </TouchableOpacity>
 
           {/* ── Daily Reflection ───────────────────────────────────────────── */}
           <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Daily Reflection</Text>
+            <Text style={styles.sectionTitle}>{t('home.reflection_title')}</Text>
             <Card elevated>
               <TextInput
                 value={reflectionText}
-                onChangeText={(t) => { setReflectionText(t); setReflectionSaved(false); }}
-                placeholder="How did today go? What will you improve tomorrow?"
+                onChangeText={(text) => { setReflectionText(text); setReflectionSaved(false); }}
+                placeholder={t('home.reflection_placeholder')}
                 placeholderTextColor={Colors.textMuted}
                 multiline
                 numberOfLines={4}
@@ -192,7 +200,7 @@ export default function HomeScreen() {
               />
               {!reflectionSaved && reflectionText.trim().length > 0 && (
                 <Button
-                  label="Save Reflection"
+                  label={t('home.reflection_save')}
                   onPress={handleSaveReflection}
                   variant="ghost"
                   size="sm"
@@ -202,9 +210,9 @@ export default function HomeScreen() {
               {reflectionSaved && (
                 <View style={styles.reflectionSavedRow}>
                   <Ionicons name="checkmark-circle" size={14} color={Colors.success} />
-                  <Text style={styles.reflectionSavedText}>Saved</Text>
+                  <Text style={styles.reflectionSavedText}>{t('home.reflection_saved')}</Text>
                   <TouchableOpacity onPress={() => setReflectionSaved(false)}>
-                    <Text style={styles.reflectionEdit}>Edit</Text>
+                    <Text style={styles.reflectionEdit}>{t('common.edit')}</Text>
                   </TouchableOpacity>
                 </View>
               )}

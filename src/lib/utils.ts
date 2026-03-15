@@ -17,10 +17,22 @@ export function generateId(): string {
 }
 
 /**
- * Returns today's date as YYYY-MM-DD
+ * Returns a date as YYYY-MM-DD using the device's local timezone.
+ * Omit the argument to get today's local date.
+ */
+export function getLocalDateStr(d?: Date): string {
+  const date = d ?? new Date();
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+/**
+ * Returns today's date as YYYY-MM-DD (local timezone).
  */
 export function getTodayDate(): string {
-  return new Date().toISOString().split('T')[0];
+  return getLocalDateStr();
 }
 
 /**

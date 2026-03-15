@@ -15,6 +15,7 @@
 import React, { useState } from 'react';
 import { View, Text, ScrollView, StyleSheet, TouchableOpacity } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useTranslation } from 'react-i18next';
 import { useAppStore } from '../../src/store/useAppStore';
 import { ControlDailyView } from './planner';
 import { PlanTracksSection }   from '../../src/components/plan/PlanTracksSection';
@@ -31,10 +32,12 @@ function PlanTodaySection() {
 }
 
 export default function PlanScreen() {
+  const { t } = useTranslation();
   const [section, setSection] = useState<PlanSection>('today');
 
-  const profile = useAppStore((s) => s.profile);
-  const goals   = useAppStore((s) => s.goals);
+  const profile       = useAppStore((s) => s.profile);
+  const goals         = useAppStore((s) => s.goals);
+  const focusSessions = useAppStore((s) => s.focusSessions);
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
@@ -54,7 +57,7 @@ export default function PlanScreen() {
             activeOpacity={0.7}
           >
             <Text style={[styles.tabText, section === s.id && styles.tabTextActive]}>
-              {s.label}
+              {t(`plan.tab_${s.id}` as any)}
             </Text>
           </TouchableOpacity>
         ))}
@@ -70,7 +73,7 @@ export default function PlanScreen() {
           contentContainerStyle={styles.content}
           showsVerticalScrollIndicator={false}
         >
-          {section === 'tracks'   && <PlanTracksSection   profile={profile} goals={goals} />}
+          {section === 'tracks'   && <PlanTracksSection   profile={profile} goals={goals} focusSessions={focusSessions} />}
           {section === 'month'    && <PlanMonthSection />}
           {section === 'friction' && <PlanFrictionSection profile={profile} />}
           {section === 'schedule' && <PlanScheduleSection profile={profile} />}

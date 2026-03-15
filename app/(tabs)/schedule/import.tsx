@@ -1,3 +1,18 @@
+/**
+ * LEGACY AI PATH — Schedule Import (Smart Import via Claude vision)
+ *
+ * This screen uses `aiApiKey` from the store to call the Anthropic vision API
+ * directly via `src/ai/scheduleParser.ts`. This is a different concern from the
+ * chat AI (BackendAIClient / ai-chat edge function) and has not been migrated yet.
+ *
+ * Migration path (future sprint):
+ *   - Add a `parse-schedule` Supabase Edge Function that accepts image base64
+ *   - Route `parseScheduleImages` through the edge function using the session token
+ *   - Remove `aiApiKey` dependency from this screen
+ *
+ * Until that sprint: Smart Import is intentionally gated by `aiApiKey`.
+ * Manual entry (step === 'manual') is fully functional without a key.
+ */
 import React, { useState } from 'react';
 import {
   View,
