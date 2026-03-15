@@ -5,6 +5,8 @@ import { View } from 'react-native';
 import { Colors } from '../src/constants/theme';
 import { supabase } from '../src/lib/supabase';
 import { useAppStore } from '../src/store/useAppStore';
+import { initRevenueCat, logOutRevenueCat } from '../src/services/purchaseService';
+import { track } from '../src/services/analyticsService';
 // Initialise i18next before any component renders (side-effectful import)
 import '../src/i18n';
 
@@ -25,6 +27,7 @@ export default function RootLayout() {
 
   // ── 1. Wait for Zustand store to rehydrate ────────────────────────────────
   useEffect(() => {
+    track('app_opened');
     const timer = setTimeout(() => setReady(true), 50);
     return () => clearTimeout(timer);
   }, []);
@@ -36,6 +39,7 @@ export default function RootLayout() {
       setSession(data.session);
       if (data.session) {
         hydrateFromCloud(data.session.user.id).catch(console.warn);
+        initRevenueCat(data.session.user.id);
       }
       setSessionChecked(true);
     }).catch(() => {
@@ -49,9 +53,11 @@ export default function RootLayout() {
       setSession(newSession);
       if (event === 'SIGNED_IN' && newSession) {
         hydrateFromCloud(newSession.user.id).catch(console.warn);
+        initRevenueCat(newSession.user.id);
       }
       if (event === 'SIGNED_OUT') {
         resetAllData();
+        logOutRevenueCat().catch(console.warn);
       }
     });
 

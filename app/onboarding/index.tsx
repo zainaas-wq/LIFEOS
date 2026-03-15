@@ -13,6 +13,7 @@ import {
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useAppStore } from '../../src/store/useAppStore';
+import { track } from '../../src/services/analyticsService';
 import { Colors, FontSize, FontWeight, Spacing, Radius } from '../../src/constants/theme';
 import type { LifeRole, EnergyStyle, WorkStyle } from '../../src/types';
 
@@ -199,6 +200,7 @@ export default function OnboardingScreen() {
       language: 'en',
     });
 
+    track('onboarding_completed');
     router.replace('/(tabs)/home');
   };
 
