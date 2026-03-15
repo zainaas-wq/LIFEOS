@@ -37,7 +37,7 @@ with
 identity_stats as materialized (
   select
     coalesce(user_id::text, session_id)                             as identity,
-    max(user_id)                                                    as user_id,  -- NULL for guest sessions
+    max(user_id::text)::uuid                                        as user_id,  -- NULL for guest sessions
 
     -- Last meaningful AI activity across all feature types
     max(created_at) filter (
