@@ -6,7 +6,6 @@ import {
   StyleSheet,
   TouchableOpacity,
   Alert,
-  TextInput,
   Share,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -26,8 +25,6 @@ export default function SettingsScreen() {
   const isGuestMode = useAppStore((s) => s.isGuestMode);
   const updateProfile = useAppStore((s) => s.updateProfile);
   const resetAllData = useAppStore((s) => s.resetAllData);
-  const aiApiKey = useAppStore((s) => s.aiApiKey);
-  const setAiApiKey = useAppStore((s) => s.setAiApiKey);
 
   const isAuthenticated = !!session && !isGuestMode;
 
@@ -53,30 +50,6 @@ export default function SettingsScreen() {
 
   const [editingFocus, setEditingFocus] = useState(false);
   const [focusValue, setFocusValue] = useState(profile?.mainFocus ?? '');
-
-  const [apiKeyDraft, setApiKeyDraft] = useState(aiApiKey);
-  const [showKey, setShowKey] = useState(false);
-  const [keySaved, setKeySaved] = useState(false);
-
-  const handleSaveApiKey = () => {
-    setAiApiKey(apiKeyDraft.trim());
-    setKeySaved(true);
-    setTimeout(() => setKeySaved(false), 2000);
-  };
-
-  const handleClearApiKey = () => {
-    Alert.alert('Clear API Key', 'Remove your Anthropic API key from this device?', [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Clear',
-        style: 'destructive',
-        onPress: () => {
-          setAiApiKey('');
-          setApiKeyDraft('');
-        },
-      },
-    ]);
-  };
 
   const handleSaveFocus = () => {
     if (focusValue.trim()) {
@@ -236,59 +209,6 @@ export default function SettingsScreen() {
                 ))}
               </View>
             </View>
-          </Card>
-        </View>
-
-        {/* AI Planner */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>AI Planner</Text>
-          <Card elevated>
-            <View style={styles.aiInfoRow}>
-              <Ionicons name="sparkles" size={16} color={Colors.gold} />
-              <Text style={styles.aiInfoText}>
-                Add your Anthropic API key to enable AI-powered weekly plan generation. Your key is stored locally and never sent anywhere except the Anthropic API.
-              </Text>
-            </View>
-            <Divider />
-            <View style={styles.apiKeyRow}>
-              <TextInput
-                style={styles.apiKeyInput}
-                value={apiKeyDraft}
-                onChangeText={setApiKeyDraft}
-                placeholder="sk-ant-api03-…"
-                placeholderTextColor={Colors.textMuted}
-                secureTextEntry={!showKey}
-                autoCapitalize="none"
-                autoCorrect={false}
-              />
-              <TouchableOpacity onPress={() => setShowKey(!showKey)} style={styles.eyeBtn}>
-                <Ionicons
-                  name={showKey ? 'eye-off-outline' : 'eye-outline'}
-                  size={18}
-                  color={Colors.textMuted}
-                />
-              </TouchableOpacity>
-            </View>
-            <View style={styles.apiKeyActions}>
-              {aiApiKey ? (
-                <TouchableOpacity onPress={handleClearApiKey} style={styles.clearKeyBtn}>
-                  <Text style={styles.clearKeyText}>Clear Key</Text>
-                </TouchableOpacity>
-              ) : null}
-              <Button
-                label={keySaved ? 'Saved ✓' : 'Save Key'}
-                onPress={handleSaveApiKey}
-                size="sm"
-                variant={keySaved ? 'ghost' : 'primary'}
-                style={styles.saveKeyBtn}
-              />
-            </View>
-            {aiApiKey ? (
-              <View style={styles.keyActiveRow}>
-                <View style={styles.keyActiveDot} />
-                <Text style={styles.keyActiveText}>API key configured — AI Planner is active</Text>
-              </View>
-            ) : null}
           </Card>
         </View>
 
@@ -577,75 +497,5 @@ const styles = StyleSheet.create({
     fontSize: FontSize.xs,
     color: Colors.textMuted,
     textAlign: 'center',
-  },
-  aiInfoRow: {
-    flexDirection: 'row',
-    gap: Spacing.sm,
-    alignItems: 'flex-start',
-    paddingVertical: Spacing.xs,
-  },
-  aiInfoText: {
-    flex: 1,
-    fontSize: FontSize.xs,
-    color: Colors.textSecondary,
-    lineHeight: 18,
-  },
-  apiKeyRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.xs,
-    paddingVertical: Spacing.sm,
-  },
-  apiKeyInput: {
-    flex: 1,
-    height: 40,
-    backgroundColor: Colors.surfaceHigh,
-    borderRadius: Radius.sm,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    paddingHorizontal: Spacing.sm,
-    fontSize: FontSize.sm,
-    color: Colors.textPrimary,
-    fontFamily: 'monospace',
-  },
-  eyeBtn: {
-    padding: Spacing.xs,
-  },
-  apiKeyActions: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'flex-end',
-    gap: Spacing.sm,
-    paddingTop: Spacing.xs,
-  },
-  clearKeyBtn: {
-    paddingHorizontal: Spacing.sm,
-    paddingVertical: 6,
-  },
-  clearKeyText: {
-    fontSize: FontSize.sm,
-    color: Colors.error,
-  },
-  saveKeyBtn: {
-    minWidth: 90,
-  },
-  keyActiveRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.xs,
-    paddingTop: Spacing.sm,
-    borderTopWidth: 1,
-    borderTopColor: Colors.border,
-    marginTop: Spacing.xs,
-  },
-  keyActiveDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: Colors.success,
-  },
-  keyActiveText: {
-    fontSize: FontSize.xs,
-    color: Colors.success,
   },
 });

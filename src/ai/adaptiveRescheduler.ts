@@ -31,6 +31,8 @@ import {
  * @param scheduleEvents Fixed schedule events
  * @param rules         Active rules (used to derive day-end)
  * @param date          Today's date "YYYY-MM-DD"
+ * @param fixedStart    Optional planning window start (minutes from midnight)
+ * @param fixedEnd      Optional planning window end (minutes from midnight)
  */
 export function rescheduleRemaining(
   plan: Plan,
@@ -39,6 +41,8 @@ export function rescheduleRemaining(
   scheduleEvents: ScheduleEvent[],
   rules: Rule[],
   date: string,
+  fixedStart?: number,
+  fixedEnd?: number,
 ): Plan {
   const currentMins = timeToMins(currentTime);
   const dow = new Date(date).getDay();
@@ -75,7 +79,15 @@ export function rescheduleRemaining(
   const keptBusy = keptItems
     .filter((i) => i.type !== 'break')
     .map((i) => ({ start: timeToMins(i.startTime), end: timeToMins(i.endTime) }));
-  const availableSlots = subtractIntervals(futureSlots, keptBusy);
+  const rawAvailableSlots = subtractIntervals(futureSlots, keptBusy);
+
+  // Clip to fixed planning window (end boundary) — mirrors planningEngine clipSlots.
+  // If no fixedEnd is set, no clipping is applied (identical to previous behavior).
+  const availableSlots = fixedEnd !== undefined
+    ? rawAvailableSlots
+        .map((s) => ({ start: s.start, end: Math.min(s.end, fixedEnd) }))
+        .filter((s) => s.end > s.start)
+    : rawAvailableSlots;
 
   // ── Score and sort items ───────────────────────────────────────────────────
 

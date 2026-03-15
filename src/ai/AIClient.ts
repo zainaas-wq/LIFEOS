@@ -29,22 +29,14 @@ export interface AIClient {
 
 // ─── Factory ──────────────────────────────────────────────────────────────────
 
-export type ClientMode = 'local' | 'remote';
+export type ClientMode = 'local' | 'backend';
 
 let _client: AIClient | null = null;
 
-export function getAIClient(mode: ClientMode = 'local', apiKey?: string): AIClient {
+export function getAIClient(mode: ClientMode = 'local'): AIClient {
   if (_client) return _client;
-
-  if (mode === 'remote' && apiKey) {
-    // Lazy import to avoid bundling RemoteAIClient when not needed
-    const { RemoteAIClient } = require('./RemoteAIClient');
-    _client = new RemoteAIClient(apiKey);
-  } else {
-    const { LocalAIClient } = require('./LocalAIClient');
-    _client = new LocalAIClient();
-  }
-
+  const { LocalAIClient } = require('./LocalAIClient');
+  _client = new LocalAIClient();
   return _client!;
 }
 
