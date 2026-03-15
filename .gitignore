@@ -24,9 +24,10 @@ expo-env.d.ts
 .env.staging
 *.env
 
-# Supabase local secrets
+# Supabase local secrets and CLI temp files
 supabase/.env
 supabase/functions/.env
+supabase/.temp/
 
 # EAS / Expo secrets
 secrets.json
