@@ -14,6 +14,7 @@
 
 import React, { useState } from 'react';
 import {
+  ActivityIndicator,
   View,
   Text,
   ScrollView,
@@ -26,45 +27,20 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import { useTranslation } from 'react-i18next';
 import { useAppStore } from '../../src/store/useAppStore';
 import { signOut } from '../../src/services/authService';
 import { Card } from '../../src/components/ui/Card';
 import { Button } from '../../src/components/ui/Button';
 import { Divider } from '../../src/components/ui/Divider';
 import { Colors, FontSize, FontWeight, Spacing, Radius } from '../../src/constants/theme';
+import { restorePurchases, openManageSubscriptions } from '../../src/services/purchaseService';
+import { useMonthlyUsage } from '../../src/services/usageService';
+import type { UseMonthlyUsageResult } from '../../src/services/usageService';
+import { UpgradeModal } from '../../src/components/upgrade/UpgradeModal';
 import type { LifeRole, EnergyStyle, WorkStyle } from '../../src/types';
 
-// ─── Label maps ───────────────────────────────────────────────────────────────
-
-const ROLE_OPTIONS: Array<{ value: LifeRole; label: string }> = [
-  { value: 'student',      label: 'Student' },
-  { value: 'employee',     label: 'Employee' },
-  { value: 'freelancer',   label: 'Freelancer' },
-  { value: 'shift-worker', label: 'Shift Worker' },
-  { value: 'creator',      label: 'Creator' },
-  { value: 'other',        label: 'Other' },
-];
-
-const ENERGY_OPTIONS: Array<{ value: EnergyStyle; label: string }> = [
-  { value: 'morning',   label: 'Morning Person' },
-  { value: 'afternoon', label: 'Afternoon' },
-  { value: 'evening',   label: 'Evening' },
-  { value: 'night',     label: 'Night Owl' },
-  { value: 'flexible',  label: 'Flexible' },
-];
-
-const WORK_OPTIONS: Array<{ value: WorkStyle; label: string }> = [
-  { value: 'deep',         label: 'Deep Work (60–90 min)' },
-  { value: 'balanced',     label: 'Balanced (45 min)' },
-  { value: 'short-bursts', label: 'Short Bursts (20–25 min)' },
-];
-
-const TRACK_LABELS: Record<string, string> = {
-  coding: 'Coding', fitness: 'Fitness', music: 'Music',
-  language: 'Language', reading: 'Reading', writing: 'Writing',
-  career: 'Career', business: 'Business', health: 'Health',
-  creative: 'Creativity', relationships: 'Relationships', mindfulness: 'Mindfulness',
-};
+// ─── Static data (no labels — labels built inside component) ──────────────────
 
 const LANGUAGES = [
   { code: 'en', label: 'EN', name: 'English' },
@@ -144,20 +120,156 @@ function SectionLabel({ title }: { title: string }) {
   return <Text style={styles.sectionLabel}>{title}</Text>;
 }
 
+// ─── AI Usage Card ────────────────────────────────────────────────────────────
+
+const USAGE_DANGER_COLOR = '#F87171';
+
+function AIUsageCard({ usage }: { usage: UseMonthlyUsageResult }) {
+  if (usage.isLoading) {
+    return (
+      <View style={usageStyles.wrap}>
+        <View style={usageStyles.headerRow}>
+          <View style={usageStyles.iconCircle}>
+            <Ionicons name="sparkles" size={13} color={Colors.gold} />
+          </View>
+          <Text style={usageStyles.tierName}>Coach AI</Text>
+        </View>
+        <View style={[usageStyles.barTrack, usageStyles.barTrackLoading]} />
+      </View>
+    );
+  }
+
+  if (usage.error) {
+    return (
+      <View style={usageStyles.wrap}>
+        <View style={usageStyles.headerRow}>
+          <View style={usageStyles.iconCircle}>
+            <Ionicons name="sparkles" size={13} color={Colors.gold} />
+          </View>
+          <Text style={usageStyles.tierName}>Coach AI</Text>
+          <Text style={usageStyles.availablePill}>Available</Text>
+        </View>
+      </View>
+    );
+  }
+
+  const isDanger  = usage.percentUsed >= 90;
+  const isWarning = !isDanger && usage.percentUsed >= 70;
+  const accentColor = isDanger ? USAGE_DANGER_COLOR : Colors.gold;
+
+  return (
+    <View style={usageStyles.wrap}>
+      <View style={usageStyles.headerRow}>
+        <View style={usageStyles.iconCircle}>
+          <Ionicons name="sparkles" size={13} color={Colors.gold} />
+        </View>
+        <Text style={usageStyles.tierName}>{usage.tierName}</Text>
+      </View>
+      <Text style={[usageStyles.creditsLine, (isWarning || isDanger) ? { color: accentColor } : undefined]}>
+        {usage.creditsUsed} / {usage.creditsQuota} credits used this month
+      </Text>
+      <View style={usageStyles.barTrack}>
+        <View style={[usageStyles.barFill, { width: `${usage.percentUsed}%`, backgroundColor: accentColor }]} />
+      </View>
+      <Text style={usageStyles.resetDate}>Resets {usage.resetDate}</Text>
+    </View>
+  );
+}
+
+const usageStyles = StyleSheet.create({
+  wrap:       { gap: Spacing.sm },
+  headerRow:  { flexDirection: 'row', alignItems: 'center', gap: Spacing.xs },
+  iconCircle: {
+    width: 22, height: 22, borderRadius: Radius.full,
+    backgroundColor: Colors.goldMuted,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  tierName: {
+    flex: 1,
+    fontSize: FontSize.sm, fontWeight: FontWeight.medium, color: Colors.textPrimary,
+  },
+  availablePill: { fontSize: FontSize.xs, color: Colors.success, fontWeight: FontWeight.medium },
+  creditsLine:   { fontSize: FontSize.sm, color: Colors.textSecondary },
+  barTrack: {
+    height: 4, backgroundColor: Colors.border,
+    borderRadius: Radius.full, overflow: 'hidden',
+  },
+  barTrackLoading: { opacity: 0.4 },
+  barFill:   { height: 4, borderRadius: Radius.full },
+  resetDate: { fontSize: FontSize.xs, color: Colors.textMuted },
+});
+
 // ─── Main screen ──────────────────────────────────────────────────────────────
 
 export default function ProfileScreen() {
+  const { t } = useTranslation();
+
   const profile       = useAppStore((s) => s.profile);
   const session       = useAppStore((s) => s.session);
   const isGuestMode   = useAppStore((s) => s.isGuestMode);
   const updateProfile = useAppStore((s) => s.updateProfile);
   const resetAllData  = useAppStore((s) => s.resetAllData);
   const setLanguage   = useAppStore((s) => s.setLanguage);
-  const aiApiKey      = useAppStore((s) => s.aiApiKey);
-  const setAiApiKey   = useAppStore((s) => s.setAiApiKey);
   const store         = useAppStore((s) => s);
 
   const isAuthenticated = !!session && !isGuestMode;
+  const usage = useMonthlyUsage();
+  const [showUpgradeModal, setShowUpgradeModal] = useState(false);
+
+  // ── Subscription management state ────────────────────────────────────────
+  type RestorePhase = 'idle' | 'loading' | 'success' | 'none' | 'error';
+  const [restorePhase, setRestorePhase] = useState<RestorePhase>('idle');
+  const [restoreMsg,   setRestoreMsg]   = useState('');
+
+  const handleRestore = async () => {
+    setRestorePhase('loading');
+    setRestoreMsg('');
+    const result = await restorePurchases();
+    if (result.restored) {
+      await usage.refresh().catch(() => {});
+      setRestorePhase('success');
+      setRestoreMsg('Pro subscription restored.');
+      setTimeout(() => { setRestorePhase('idle'); setRestoreMsg(''); }, 3000);
+      return;
+    }
+    if (result.reason === 'no_active_subscription') {
+      setRestorePhase('none');
+      setRestoreMsg('No active subscription found.');
+      setTimeout(() => { setRestorePhase('idle'); setRestoreMsg(''); }, 3000);
+      return;
+    }
+    setRestorePhase('error');
+    setRestoreMsg(result.message ?? 'Restore failed. Please try again.');
+    setTimeout(() => { setRestorePhase('idle'); setRestoreMsg(''); }, 4000);
+  };
+
+  const handleManageSubscription = () => {
+    openManageSubscriptions();
+  };
+
+  // ── Option arrays built here so t() is in scope ───────────────────────────
+  const ROLE_OPTIONS: Array<{ value: LifeRole; label: string }> = [
+    { value: 'student',      label: t('profile.role_student') },
+    { value: 'employee',     label: t('profile.role_employee') },
+    { value: 'freelancer',   label: t('profile.role_freelancer') },
+    { value: 'shift-worker', label: t('profile.role_shift_worker') },
+    { value: 'creator',      label: t('profile.role_creator') },
+    { value: 'other',        label: t('profile.role_other') },
+  ];
+
+  const ENERGY_OPTIONS: Array<{ value: EnergyStyle; label: string }> = [
+    { value: 'morning',   label: t('profile.energy_morning') },
+    { value: 'afternoon', label: t('profile.energy_afternoon') },
+    { value: 'evening',   label: t('profile.energy_evening') },
+    { value: 'night',     label: t('profile.energy_night') },
+    { value: 'flexible',  label: t('profile.energy_flexible') },
+  ];
+
+  const WORK_OPTIONS: Array<{ value: WorkStyle; label: string }> = [
+    { value: 'deep',         label: t('profile.work_deep') },
+    { value: 'balanced',     label: t('profile.work_balanced') },
+    { value: 'short-bursts', label: t('profile.work_short_bursts') },
+  ];
 
   // Identity picker state
   const [editingField, setEditingField] = useState<'role' | 'energy' | 'work' | null>(null);
@@ -171,11 +283,6 @@ export default function ProfileScreen() {
   const [scheduleEnd,   setScheduleEnd]   = useState(profile?.fixedScheduleEnd   ?? '');
   const [scheduleSaved, setScheduleSaved] = useState(false);
 
-  // API key state
-  const [apiKeyDraft, setApiKeyDraft] = useState(aiApiKey);
-  const [showKey,     setShowKey]     = useState(false);
-  const [keySaved,    setKeySaved]    = useState(false);
-
   // ── Handlers ───────────────────────────────────────────────────────────────
 
   const handleSaveSchedule = () => {
@@ -183,11 +290,11 @@ export default function ProfileScreen() {
     const end   = scheduleEnd.trim();
 
     if (start && !TIME_RE.test(start)) {
-      Alert.alert('Invalid time', 'Use HH:MM format — e.g. 09:00');
+      Alert.alert(t('profile.schedule_invalid_time_title'), t('profile.schedule_invalid_time_msg'));
       return;
     }
     if (end && !TIME_RE.test(end)) {
-      Alert.alert('Invalid time', 'Use HH:MM format — e.g. 22:00');
+      Alert.alert(t('profile.schedule_invalid_time_title'), t('profile.schedule_invalid_time_msg'));
       return;
     }
 
@@ -197,23 +304,6 @@ export default function ProfileScreen() {
     });
     setScheduleSaved(true);
     setTimeout(() => setScheduleSaved(false), 2000);
-  };
-
-  const handleSaveApiKey = () => {
-    setAiApiKey(apiKeyDraft.trim());
-    setKeySaved(true);
-    setTimeout(() => setKeySaved(false), 2000);
-  };
-
-  const handleClearApiKey = () => {
-    Alert.alert('Clear API Key', 'Remove your Anthropic API key from this device?', [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Clear',
-        style: 'destructive',
-        onPress: () => { setAiApiKey(''); setApiKeyDraft(''); },
-      },
-    ]);
   };
 
   const handleExportData = async () => {
@@ -228,27 +318,27 @@ export default function ProfileScreen() {
         tasks: store.tasks,
         exportedAt: new Date().toISOString(),
       };
-      await Share.share({ message: JSON.stringify(payload, null, 2), title: 'LifeOS Data Export' });
+      await Share.share({ message: JSON.stringify(payload, null, 2), title: t('profile.export_share_title') });
     } catch {
-      Alert.alert('Export Failed', 'Could not export data.');
+      Alert.alert(t('profile.export_failed_title'), t('profile.export_failed_msg'));
     }
   };
 
   const handleSignOut = () => {
-    Alert.alert('Sign Out', 'Sign out of your account?', [
-      { text: 'Cancel', style: 'cancel' },
-      { text: 'Sign Out', style: 'destructive', onPress: () => signOut().catch(console.warn) },
+    Alert.alert(t('profile.sign_out'), t('profile.sign_out_confirm'), [
+      { text: t('common.cancel'), style: 'cancel' },
+      { text: t('profile.sign_out'), style: 'destructive', onPress: () => signOut().catch(console.warn) },
     ]);
   };
 
   const handleResetData = () => {
     Alert.alert(
-      'Reset All Data',
-      'This will permanently delete all your tasks, plans, rules, and preferences. This cannot be undone.',
+      t('profile.reset_data'),
+      t('profile.reset_confirm'),
       [
-        { text: 'Cancel', style: 'cancel' },
+        { text: t('common.cancel'), style: 'cancel' },
         {
-          text: 'Reset Everything',
+          text: t('profile.reset_button'),
           style: 'destructive',
           onPress: () => { resetAllData(); router.replace('/onboarding'); },
         },
@@ -260,13 +350,15 @@ export default function ProfileScreen() {
 
   // ── Derived display values ─────────────────────────────────────────────────
 
+  const notSet = t('profile.not_set');
+
   const initials = profile.name
     ? profile.name.split(' ').map((w) => w[0]).join('').slice(0, 2).toUpperCase()
     : (profile.mainFocus?.charAt(0)?.toUpperCase() ?? 'L');
 
-  const roleLabel    = labelFor(ROLE_OPTIONS,   profile.lifeRole,    'Not set');
-  const energyLabel  = labelFor(ENERGY_OPTIONS, profile.energyStyle, 'Not set');
-  const workLabel    = labelFor(WORK_OPTIONS,   profile.workStyle,   'Not set');
+  const roleLabel    = labelFor(ROLE_OPTIONS,   profile.lifeRole,    notSet);
+  const energyLabel  = labelFor(ENERGY_OPTIONS, profile.energyStyle, notSet);
+  const workLabel    = labelFor(WORK_OPTIONS,   profile.workStyle,   notSet);
   const tracks       = profile.selectedTrackTypes ?? [];
   const currentLang  = profile.language ?? 'en';
   const hasSchedule  = !!(profile.fixedScheduleStart || profile.fixedScheduleEnd);
@@ -285,16 +377,16 @@ export default function ProfileScreen() {
             <Text style={styles.avatarText}>{initials}</Text>
           </View>
           <View style={styles.profileMeta}>
-            <Text style={styles.profileName}>{profile.name || 'Your Profile'}</Text>
+            <Text style={styles.profileName}>{profile.name || t('profile.name_fallback')}</Text>
             <Text style={styles.profileRole}>{roleLabel}</Text>
           </View>
         </View>
 
         {/* ── Identity ───────────────────────────────────────────────────── */}
-        <SectionLabel title="Identity" />
+        <SectionLabel title={t('profile.identity_section')} />
         <Card elevated style={styles.identityCard}>
           <IdentityRow
-            label="Life Role"
+            label={t('profile.life_role_label')}
             displayValue={roleLabel}
             currentValue={profile.lifeRole}
             expanded={editingField === 'role'}
@@ -304,7 +396,7 @@ export default function ProfileScreen() {
           />
           <Divider />
           <IdentityRow
-            label="Energy Style"
+            label={t('profile.energy_style_label')}
             displayValue={energyLabel}
             currentValue={profile.energyStyle}
             expanded={editingField === 'energy'}
@@ -314,7 +406,7 @@ export default function ProfileScreen() {
           />
           <Divider />
           <IdentityRow
-            label="Work Style"
+            label={t('profile.work_style_label')}
             displayValue={workLabel}
             currentValue={profile.workStyle}
             expanded={editingField === 'work'}
@@ -325,24 +417,27 @@ export default function ProfileScreen() {
         </Card>
 
         {/* ── Fixed Schedule ─────────────────────────────────────────────── */}
-        <SectionLabel title="Fixed Schedule" />
+        <SectionLabel title={t('profile.fixed_schedule_section')} />
         <Card elevated>
           <Text style={styles.scheduleDesc}>
-            Your core hours. The Coach plans around this window.
+            {t('profile.fixed_schedule_desc')}
           </Text>
 
           {hasSchedule && !scheduleSaved && (
             <View style={styles.scheduleCurrentRow}>
               <Ionicons name="time-outline" size={14} color={Colors.gold} />
               <Text style={styles.scheduleCurrent}>
-                Active: {profile.fixedScheduleStart ?? '—'} – {profile.fixedScheduleEnd ?? '—'}
+                {t('profile.schedule_active', {
+                  start: profile.fixedScheduleStart ?? '—',
+                  end:   profile.fixedScheduleEnd   ?? '—',
+                })}
               </Text>
             </View>
           )}
 
           <View style={styles.scheduleInputRow}>
             <View style={styles.scheduleField}>
-              <Text style={styles.scheduleFieldLabel}>From</Text>
+              <Text style={styles.scheduleFieldLabel}>{t('profile.schedule_from')}</Text>
               <TextInput
                 style={styles.scheduleInput}
                 value={scheduleStart}
@@ -356,7 +451,7 @@ export default function ProfileScreen() {
             </View>
             <Text style={styles.scheduleSep}>–</Text>
             <View style={styles.scheduleField}>
-              <Text style={styles.scheduleFieldLabel}>To</Text>
+              <Text style={styles.scheduleFieldLabel}>{t('profile.schedule_to')}</Text>
               <TextInput
                 style={styles.scheduleInput}
                 value={scheduleEnd}
@@ -374,22 +469,24 @@ export default function ProfileScreen() {
               activeOpacity={0.8}
             >
               <Text style={[styles.scheduleSaveBtnText, scheduleSaved && styles.scheduleSaveBtnTextDone]}>
-                {scheduleSaved ? 'Saved ✓' : 'Save'}
+                {scheduleSaved ? t('profile.schedule_saved') : t('common.save')}
               </Text>
             </TouchableOpacity>
           </View>
-          <Text style={styles.scheduleHint}>Format: HH:MM  ·  Leave blank to clear</Text>
+          <Text style={styles.scheduleHint}>{t('profile.schedule_hint')}</Text>
         </Card>
 
         {/* ── Life Tracks ────────────────────────────────────────────────── */}
-        <SectionLabel title="Life Tracks" />
+        <SectionLabel title={t('profile.life_tracks_section')} />
         <Card elevated>
           {tracks.length > 0 ? (
             <>
               <View style={styles.chipRow}>
-                {tracks.map((t) => (
-                  <View key={t} style={styles.trackChip}>
-                    <Text style={styles.trackChipText}>{TRACK_LABELS[t] ?? t}</Text>
+                {tracks.map((trackKey) => (
+                  <View key={trackKey} style={styles.trackChip}>
+                    <Text style={styles.trackChipText}>
+                      {t(`lifeTracks.${trackKey}` as any) ?? trackKey}
+                    </Text>
                   </View>
                 ))}
               </View>
@@ -398,21 +495,21 @@ export default function ProfileScreen() {
                 style={styles.tracksLink}
                 activeOpacity={0.7}
               >
-                <Text style={styles.tracksLinkText}>Edit in Plan →</Text>
+                <Text style={styles.tracksLinkText}>{t('profile.tracks_edit_link')}</Text>
               </TouchableOpacity>
             </>
           ) : (
             <View style={styles.tracksEmpty}>
-              <Text style={styles.tracksEmptyText}>No tracks selected.</Text>
+              <Text style={styles.tracksEmptyText}>{t('profile.tracks_empty')}</Text>
               <TouchableOpacity onPress={() => router.push('/(tabs)/plan' as any)} activeOpacity={0.7}>
-                <Text style={styles.tracksLinkText}>Set up in Plan →</Text>
+                <Text style={styles.tracksLinkText}>{t('profile.tracks_setup_link')}</Text>
               </TouchableOpacity>
             </View>
           )}
         </Card>
 
         {/* ── Language ───────────────────────────────────────────────────── */}
-        <SectionLabel title="Language" />
+        <SectionLabel title={t('profile.language_section')} />
         <Card elevated>
           <View style={styles.langRow}>
             {LANGUAGES.map((lang) => {
@@ -434,85 +531,123 @@ export default function ProfileScreen() {
               );
             })}
           </View>
-          <Text style={styles.langNote}>Arabic and Hebrew require an app restart to apply RTL layout.</Text>
+          <Text style={styles.langNote}>{t('profile.language_restart_note')}</Text>
         </Card>
 
-        {/* ── Coach AI (API key) ─────────────────────────────────────────── */}
-        <SectionLabel title="Coach AI" />
+        {/* ── Coach ──────────────────────────────────────────────────────── */}
+        <SectionLabel title={t('profile.coach_section')} />
         <Card elevated>
-          <View style={styles.aiInfoRow}>
-            <Ionicons name="sparkles" size={15} color={Colors.gold} />
-            <Text style={styles.aiInfoText}>
-              Add your Anthropic API key to enable full AI coaching. Stored locally, only sent to the Anthropic API.
-            </Text>
-          </View>
-          <Divider />
-          <View style={styles.apiKeyRow}>
-            <TextInput
-              style={styles.apiKeyInput}
-              value={apiKeyDraft}
-              onChangeText={setApiKeyDraft}
-              placeholder="sk-ant-api03-…"
-              placeholderTextColor={Colors.textMuted}
-              secureTextEntry={!showKey}
-              autoCapitalize="none"
-              autoCorrect={false}
-            />
-            <TouchableOpacity onPress={() => setShowKey(!showKey)} style={styles.eyeBtn}>
-              <Ionicons
-                name={showKey ? 'eye-off-outline' : 'eye-outline'}
-                size={18}
-                color={Colors.textMuted}
-              />
-            </TouchableOpacity>
-          </View>
-          <View style={styles.apiKeyActions}>
-            {!!aiApiKey && (
-              <TouchableOpacity onPress={handleClearApiKey} style={styles.clearKeyBtn}>
-                <Text style={styles.clearKeyText}>Clear Key</Text>
+          {isAuthenticated ? (
+            <>
+              {/* Pro badge — only when tier is confirmed pro */}
+              {!usage.isLoading && !usage.error && usage.tierId === 'pro' && (
+                <>
+                  <View style={styles.proBadgeRow}>
+                    <View style={styles.proBadgeChip}>
+                      <Ionicons name="star" size={11} color={Colors.gold} />
+                      <Text style={styles.proBadgeChipText}>PRO</Text>
+                    </View>
+                    <Text style={styles.proActiveText}>Subscription active</Text>
+                  </View>
+                  <Divider />
+                </>
+              )}
+
+              <AIUsageCard usage={usage} />
+
+              {/* Free user upgrade CTA */}
+              {!usage.isLoading && !usage.error && usage.tierId === 'free' && (
+                <>
+                  <Divider />
+                  <TouchableOpacity
+                    onPress={() => setShowUpgradeModal(true)}
+                    style={styles.upgradeCta}
+                    activeOpacity={0.75}
+                  >
+                    <Ionicons name="sparkles" size={13} color={Colors.gold} />
+                    <Text style={styles.upgradeCtaText}>Unlock more with Pro</Text>
+                    <Ionicons name="chevron-forward" size={13} color={Colors.textMuted} />
+                  </TouchableOpacity>
+                </>
+              )}
+
+              {/* Manage subscription — only for pro users */}
+              {!usage.isLoading && !usage.error && usage.tierId === 'pro' && (
+                <>
+                  <Divider />
+                  <TouchableOpacity
+                    onPress={handleManageSubscription}
+                    style={styles.manageRow}
+                    activeOpacity={0.75}
+                  >
+                    <Ionicons name="settings-outline" size={15} color={Colors.textSecondary} />
+                    <Text style={styles.manageLabel}>Manage subscription</Text>
+                    <Ionicons name="chevron-forward" size={13} color={Colors.textMuted} />
+                  </TouchableOpacity>
+                </>
+              )}
+
+              {/* Restore Purchases — all authenticated users */}
+              <Divider />
+              <TouchableOpacity
+                onPress={handleRestore}
+                style={styles.restoreRow}
+                activeOpacity={0.75}
+                disabled={restorePhase === 'loading'}
+              >
+                {restorePhase === 'loading' ? (
+                  <ActivityIndicator size="small" color={Colors.textMuted} />
+                ) : (
+                  <Text style={styles.restoreLabel}>
+                    Restore Purchases
+                  </Text>
+                )}
               </TouchableOpacity>
-            )}
-            <Button
-              label={keySaved ? 'Saved ✓' : 'Save Key'}
-              onPress={handleSaveApiKey}
-              size="sm"
-              variant={keySaved ? 'ghost' : 'primary'}
-              style={styles.saveKeyBtn}
-            />
-          </View>
-          {!!aiApiKey && (
-            <View style={styles.keyActiveRow}>
-              <View style={styles.keyActiveDot} />
-              <Text style={styles.keyActiveText}>API key configured — full AI coaching active</Text>
+
+              {/* Inline restore feedback */}
+              {restoreMsg !== '' && (
+                <Text style={[styles.restoreMsgText, restorePhase === 'success' && styles.restoreMsgSuccess]}>
+                  {restoreMsg}
+                </Text>
+              )}
+            </>
+          ) : (
+            <View style={styles.coachStatusRow}>
+              <View style={[styles.coachStatusDot, { backgroundColor: Colors.textMuted }]} />
+              <View style={styles.coachStatusBody}>
+                <Text style={styles.coachStatusLabel}>{t('profile.coach_status_offline')}</Text>
+                <Text style={styles.coachStatusDetail}>{t('profile.coach_status_detail_offline')}</Text>
+              </View>
+              <Ionicons name="sparkles" size={16} color={Colors.textMuted} />
             </View>
           )}
         </Card>
 
         {/* ── Data & Privacy ─────────────────────────────────────────────── */}
-        <SectionLabel title="Data & Privacy" />
+        <SectionLabel title={t('profile.data_privacy_section')} />
         <Card elevated>
           <View style={styles.dataRow}>
             <Ionicons name="phone-portrait-outline" size={17} color={Colors.textSecondary} />
-            <Text style={styles.dataLabel}>All data stored locally on this device.</Text>
+            <Text style={styles.dataLabel}>{t('profile.data_local')}</Text>
           </View>
           <Divider />
           <TouchableOpacity style={styles.exportRow} onPress={handleExportData} activeOpacity={0.7}>
             <Ionicons name="share-outline" size={17} color={Colors.gold} />
-            <Text style={styles.exportLabel}>Export Data as JSON</Text>
+            <Text style={styles.exportLabel}>{t('profile.export_json')}</Text>
             <Ionicons name="chevron-forward" size={14} color={Colors.textMuted} />
           </TouchableOpacity>
         </Card>
 
         {/* ── About ──────────────────────────────────────────────────────── */}
-        <SectionLabel title="About" />
+        <SectionLabel title={t('profile.about_section')} />
         <Card elevated>
           <View style={styles.aboutRow}>
-            <Text style={styles.aboutLabel}>Version</Text>
+            <Text style={styles.aboutLabel}>{t('profile.about_version_label')}</Text>
             <Text style={styles.aboutValue}>2.0.0</Text>
           </View>
           <Divider />
           <View style={styles.aboutRow}>
-            <Text style={styles.aboutLabel}>Build</Text>
+            <Text style={styles.aboutLabel}>{t('profile.about_build_label')}</Text>
             <Text style={styles.aboutValue}>Sprint 2 · 2026</Text>
           </View>
         </Card>
@@ -520,15 +655,18 @@ export default function ProfileScreen() {
         {/* ── Danger Zone ────────────────────────────────────────────────── */}
         <View style={styles.dangerZone}>
           {isAuthenticated && (
-            <Button label="Sign Out" onPress={handleSignOut} variant="secondary" fullWidth />
+            <Button label={t('profile.sign_out')} onPress={handleSignOut} variant="secondary" fullWidth />
           )}
-          <Button label="Reset All Data" onPress={handleResetData} variant="danger" fullWidth />
-          <Text style={styles.dangerHint}>
-            Resets all goals, plans, rules, and preferences. Cannot be undone.
-          </Text>
+          <Button label={t('profile.reset_data')} onPress={handleResetData} variant="danger" fullWidth />
+          <Text style={styles.dangerHint}>{t('profile.reset_hint')}</Text>
         </View>
 
       </ScrollView>
+
+      <UpgradeModal
+        visible={showUpgradeModal}
+        onDismiss={() => setShowUpgradeModal(false)}
+      />
     </SafeAreaView>
   );
 }
@@ -556,7 +694,7 @@ const styles = StyleSheet.create({
   sectionLabel: {
     fontSize: FontSize.xs, color: Colors.textMuted,
     textTransform: 'uppercase', letterSpacing: 1,
-    fontWeight: FontWeight.semibold, paddingLeft: 2,
+    fontWeight: FontWeight.semibold, paddingStart: 2,
   },
 
   // Identity
@@ -626,24 +764,70 @@ const styles = StyleSheet.create({
   langNameActive: { color: Colors.gold },
   langNote:       { fontSize: FontSize.xs, color: Colors.textMuted, lineHeight: 17 },
 
-  // Coach AI
-  aiInfoRow:  { flexDirection: 'row', gap: Spacing.sm, alignItems: 'flex-start', paddingVertical: Spacing.xs },
-  aiInfoText: { flex: 1, fontSize: FontSize.xs, color: Colors.textSecondary, lineHeight: 18 },
-  apiKeyRow:  { flexDirection: 'row', alignItems: 'center', gap: Spacing.xs, paddingVertical: Spacing.sm },
-  apiKeyInput: {
-    flex: 1, height: 40, backgroundColor: Colors.surfaceHigh,
-    borderRadius: Radius.sm, borderWidth: 1, borderColor: Colors.border,
-    paddingHorizontal: Spacing.sm, fontSize: FontSize.sm,
-    color: Colors.textPrimary, fontFamily: 'monospace',
+  // Coach — Pro badge
+  proBadgeRow: {
+    flexDirection: 'row', alignItems: 'center', gap: Spacing.sm,
+    paddingVertical: Spacing.xs,
   },
-  eyeBtn:        { padding: Spacing.xs },
-  apiKeyActions: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: Spacing.sm, paddingTop: Spacing.xs },
-  clearKeyBtn:   { paddingHorizontal: Spacing.sm, paddingVertical: 6 },
-  clearKeyText:  { fontSize: FontSize.sm, color: Colors.error },
-  saveKeyBtn:    { minWidth: 90 },
-  keyActiveRow:  { flexDirection: 'row', alignItems: 'center', gap: Spacing.xs, paddingTop: Spacing.sm, borderTopWidth: 1, borderTopColor: Colors.border, marginTop: Spacing.xs },
-  keyActiveDot:  { width: 6, height: 6, borderRadius: 3, backgroundColor: Colors.success },
-  keyActiveText: { fontSize: FontSize.xs, color: Colors.success },
+  proBadgeChip: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    paddingHorizontal: Spacing.sm, paddingVertical: 3,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.goldMuted,
+    borderWidth: 1, borderColor: Colors.gold,
+  },
+  proBadgeChipText: {
+    fontSize: FontSize.xs, fontWeight: FontWeight.bold, color: Colors.gold, letterSpacing: 0.5,
+  },
+  proActiveText: {
+    fontSize: FontSize.sm, color: Colors.textSecondary,
+  },
+
+  // Coach — Manage subscription row
+  manageRow: {
+    flexDirection: 'row', alignItems: 'center', gap: Spacing.sm,
+    paddingVertical: Spacing.xs + 2,
+  },
+  manageLabel: {
+    flex: 1, fontSize: FontSize.sm, color: Colors.textSecondary,
+  },
+
+  // Coach — Restore Purchases row
+  restoreRow: {
+    paddingVertical: Spacing.xs + 2, alignItems: 'flex-start',
+  },
+  restoreLabel: {
+    fontSize: FontSize.sm, color: Colors.textMuted,
+  },
+  restoreLabelBusy: {
+    opacity: 0.4,
+  },
+  restoreMsgText: {
+    fontSize: FontSize.xs, color: Colors.textMuted, marginTop: 2,
+  },
+  restoreMsgSuccess: {
+    color: Colors.success,
+  },
+
+  // Coach upgrade CTA
+  upgradeCta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.xs,
+    paddingVertical: Spacing.xs + 2,
+  },
+  upgradeCtaText: {
+    flex: 1,
+    fontSize: FontSize.sm,
+    color: Colors.gold,
+  },
+
+  // Coach status
+  coachStatusRow:   { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
+  coachStatusDot:   { width: 8, height: 8, borderRadius: 4 },
+  coachStatusBody:  { flex: 1, gap: 2 },
+  coachStatusLabel: { fontSize: FontSize.sm, fontWeight: FontWeight.medium, color: Colors.textPrimary },
+  coachStatusDetail:{ fontSize: FontSize.xs, color: Colors.textSecondary, lineHeight: 17 },
 
   // Data & Privacy
   dataRow:    { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm, paddingVertical: Spacing.xs },
