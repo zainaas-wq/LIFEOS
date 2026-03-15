@@ -2,219 +2,176 @@
 
 **Your AI-powered personal operating system.**
 
-LifeOS is a daily command center that helps you plan your week, define your standards, and track how closely you're living in alignment with your goals.
+LifeOS is a mobile-first productivity platform that combines goal tracking, intelligent daily planning, AI coaching, and a usage-metered subscription model into a single cohesive system. Built on Expo React Native with a Supabase backend.
 
 ---
 
-## Features
+## Product Overview
 
-- **Onboarding** — Define your focus, distractions, habits, and seriousness level
-- **Home Dashboard** — Alignment score ring (0–100), critical action, daily rules, and reflection
-- **Schedule** — Define your recurring weekly events (lectures, gym, work) to block busy time
-- **Goals** — Set goals with weekly hour targets, priorities, and deadlines
-- **Planner** — Generate a smart weekly plan that fills your free time with focused goal sessions; start Focus Mode on any block
-- **Rules** — Define and enforce your personal standards (3 max on Free plan)
-- **Settings** — Edit preferences, view stats, and reset data
+| Capability | Description |
+|---|---|
+| **AI Coach** | Conversational coach powered by Anthropic Claude. Supports daily planning, weekly review, recovery sessions, and general coaching. |
+| **Smart Planner** | Energy-aware daily plan generation. Fills free time around your fixed schedule with goal-aligned sessions. |
+| **Goal Tracking** | Weekly hour targets per goal. Focus timer with session logging. Progress tracked against targets. |
+| **Billing & Tiers** | Free / Pro / Max tiers via RevenueCat. Entitlement gating on premium AI actions. |
+| **Usage Metering** | Per-action credit system. Monthly quota enforced server-side. Usage displayed in the AI tab. |
+| **AI Memory** | Persistent user memory stored in Supabase. Injected into every coaching prompt for personalization. |
+| **Analytics** | Full funnel analytics pipeline. Retention, reengagement, and conversion views built into the database. |
+
+---
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────┐
+│                  Expo React Native               │
+│  app/(tabs)/  ·  src/services/  ·  src/store/   │
+└────────────────────┬────────────────────────────┘
+                     │ HTTPS (Supabase JS client)
+┌────────────────────▼────────────────────────────┐
+│              Supabase Platform                   │
+│                                                  │
+│  ┌─────────────────────────────────────────┐    │
+│  │           Edge Functions (Deno)          │    │
+│  │  ai-chat · activate-purchase · rc-webhook│    │
+│  └─────────────────────────────────────────┘    │
+│                                                  │
+│  ┌─────────────────────────────────────────┐    │
+│  │           PostgreSQL Database            │    │
+│  │  Auth · Plans · Goals · Usage · Memory  │    │
+│  │  Analytics · Billing · AI Memory        │    │
+│  └─────────────────────────────────────────┘    │
+└─────────────────────────────────────────────────┘
+                     │
+┌────────────────────▼────────────────────────────┐
+│           External Services                      │
+│  Anthropic Claude API  ·  RevenueCat Billing     │
+└─────────────────────────────────────────────────┘
+```
+
+See [`docs/architecture.md`](docs/architecture.md) for a full breakdown.
 
 ---
 
 ## Tech Stack
 
-| Layer | Choice |
+| Layer | Technology |
 |---|---|
-| Framework | Expo (React Native) |
-| Language | TypeScript |
-| Navigation | Expo Router (file-based) |
-| State | Zustand + AsyncStorage persistence |
-| UI | Custom components, react-native-svg |
-| Database | AsyncStorage (local, no backend required) |
+| Framework | Expo ~51, React Native |
+| Language | TypeScript (strict) |
+| Navigation | Expo Router ~3.5 (file-based) |
+| State | Zustand ^4.5 + AsyncStorage (key: `lifeos-store-v3`) |
+| Backend | Supabase (Postgres + Auth + Edge Functions) |
+| AI | Anthropic Claude (`claude-haiku-4-5-20251001`) |
+| Billing | RevenueCat (`react-native-purchases`) |
+| SVG | `react-native-svg` (AlignmentRing) |
+| Icons | `@expo/vector-icons` (Ionicons) |
+| Build | EAS Build (development / preview / production profiles) |
 
 ---
 
-## Getting Started
-
-### Prerequisites
-
-- Node.js 18+ or Bun
-- Expo CLI (`npm install -g expo-cli` or use `npx expo`)
-- Expo Go app on your phone (iOS or Android) — [expo.dev/go](https://expo.dev/go)
-
-### Installation
-
-```bash
-# Navigate to the project directory
-cd lifeos
-
-# Install dependencies
-npm install
-
-# Start the development server
-npx expo start
-```
-
-### Previewing on your phone (Expo Go)
-
-1. Make sure your phone and computer are on the **same Wi-Fi network**.
-2. Run `npx expo start` in your terminal.
-3. Open the **Expo Go** app on your phone.
-4. Scan the QR code shown in the terminal with Expo Go (Android) or your Camera app (iOS).
-5. The app will load on your device instantly.
-
-### Running in a browser (web)
-
-```bash
-npx expo start --web
-# or
-npm run web
-```
-
-Open `http://localhost:8081` in your browser. Useful for quick iteration without a device.
-
-### Running on simulators
-
-```bash
-# iOS Simulator (macOS only)
-npm run ios
-
-# Android Emulator
-npm run android
-```
-
----
-
-## Project Structure
+## Repository Structure
 
 ```
 lifeos/
-├── app/                        # Expo Router pages
-│   ├── _layout.tsx             # Root layout (hydration gate)
-│   ├── index.tsx               # Entry redirect (onboarding vs home)
-│   ├── onboarding/
-│   │   └── index.tsx           # 6-step onboarding flow
+├── app/                            # Expo Router pages
+│   ├── _layout.tsx                 # Root layout, auth gate, session tracking
+│   ├── index.tsx                   # Entry redirect (onboarding vs home)
+│   ├── onboarding/index.tsx        # Multi-step onboarding flow
+│   ├── upgrade.tsx                 # Subscription upgrade screen
 │   └── (tabs)/
-│       ├── _layout.tsx         # Tab bar + FocusBanner integration
-│       ├── home.tsx            # Dashboard with alignment ring
-│       ├── schedule.tsx        # Weekly recurring events (CRUD)
-│       ├── goals.tsx           # Goals with hour targets (CRUD)
-│       ├── planner.tsx         # Weekly plan + Focus Mode
-│       ├── rules.tsx           # Rules management
-│       └── settings.tsx        # Preferences and data management
+│       ├── home.tsx                # Dashboard — alignment ring, critical action
+│       ├── ai.tsx                  # AI Coach tab — chat, actions, quota display
+│       ├── plan.tsx                # Plan tab — tracks, schedule, month, friction
+│       ├── planner.tsx             # Daily planner — generated plan + focus mode
+│       ├── profile.tsx             # Profile — Pro badge, subscription management
+│       └── schedule/
+│           ├── index.tsx           # Weekly recurring events (CRUD)
+│           └── import.tsx          # Import schedule via camera (Claude Vision)
 │
 ├── src/
-│   ├── types/
-│   │   └── index.ts            # All TypeScript data models
-│   ├── constants/
-│   │   └── theme.ts            # Colors, spacing, typography
-│   ├── store/
-│   │   └── useAppStore.ts      # Zustand store with AsyncStorage persistence
+│   ├── ai/                         # Local AI engines
+│   │   ├── BackendAIClient.ts      # Routes all AI chat through Supabase Edge Function
+│   │   ├── planningEngine.ts       # generateSmartDailyPlan / generateSmartWeeklyPlan
+│   │   ├── progressEngine.ts       # computeProgressScore for alignment ring
+│   │   ├── adaptiveRescheduler.ts  # rescheduleRemaining (mid-day replanning)
+│   │   ├── scheduleParser.ts       # Claude Vision — parse imported schedules
+│   │   └── planGenerator.ts        # Base greedy scheduler (time-slot engine)
+│   ├── components/plan/            # Plan tab sub-components
+│   ├── constants/theme.ts          # Design tokens (colors, spacing, radius, typography)
+│   ├── i18n/locales/en.ts          # All UI strings
 │   ├── lib/
-│   │   ├── alignmentScore.ts   # Alignment score algorithm (0–100)
-│   │   ├── planGenerator.ts    # Daily plan generation engine
-│   │   ├── weeklyPlanner.ts    # Schedule-aware weekly plan algorithm
-│   │   ├── rulesEngine.ts      # Rule compliance and limits
-│   │   ├── storage.ts          # AsyncStorage helpers
-│   │   └── utils.ts            # Date, time, ID utilities
-│   └── components/
-│       ├── AlignmentRing.tsx   # Animated SVG score ring
-│       ├── GoalCard.tsx        # Goal with progress bar and allocation
-│       ├── PlanBlockCard.tsx   # Plan block with Focus chip
-│       ├── FocusModal.tsx      # Full-screen countdown focus timer
-│       ├── FocusBanner.tsx     # Persistent top banner during focus
-│       ├── TaskCard.tsx        # Task with priority, toggle, delete
-│       ├── RuleItem.tsx        # Rule with toggle, follow, delete
-│       ├── ScheduleItem.tsx    # Timeline schedule entry
-│       ├── SectionHeader.tsx   # Section title with optional action
-│       └── ui/
-│           ├── Button.tsx      # Multi-variant button
-│           ├── Card.tsx        # Surface card with variants
-│           ├── Divider.tsx     # Horizontal rule
-│           └── Input.tsx       # Themed text input with label/error
+│   │   ├── supabase.ts             # Supabase JS client (reads EXPO_PUBLIC_* env vars)
+│   │   └── utils.ts                # Shared helpers
+│   ├── services/                   # All backend integrations
+│   │   ├── analyticsService.ts     # track() / identify() / reset()
+│   │   ├── entitlementService.ts   # canUseFeature() — client-side tier gating
+│   │   ├── memoryService.ts        # upsertMemory / fetchMemory (ai_user_memory)
+│   │   ├── purchaseService.ts      # RevenueCat purchase + mock mode
+│   │   └── usageService.ts         # useMonthlyUsage hook — credits used / quota
+│   ├── store/useAppStore.ts        # Zustand store — all app state + persistence
+│   └── types/                      # TypeScript data models
 │
-├── assets/                     # Icons, splash, adaptive icon
-├── app.json                    # Expo config
-├── package.json
-├── tsconfig.json
-├── babel.config.js
-└── metro.config.js
+├── supabase/
+│   ├── config.toml                 # Supabase CLI project config
+│   ├── functions/                  # Deno Edge Functions
+│   │   ├── _shared/                # Shared modules
+│   │   │   ├── memoryService.ts
+│   │   │   ├── recoveryService.ts
+│   │   │   └── weeklyReviewService.ts
+│   │   ├── ai-chat/index.ts        # Main AI coach endpoint
+│   │   ├── activate-purchase/index.ts
+│   │   └── rc-webhook/index.ts
+│   └── migrations/                 # Ordered Postgres migrations (12 total)
+│
+├── docs/                           # Architecture and integration documentation
+├── .env.example                    # Environment variable template
+├── app.json                        # Expo project config
+├── eas.json                        # EAS Build profiles
+└── tsconfig.json
 ```
 
 ---
 
-## Schedule-Aware Weekly Planner
+## Documentation
 
-### How it works
-
-1. **Add your fixed schedule** (Schedule tab) — recurring events like classes, gym sessions, or work hours that block out your week.
-2. **Add your goals** (Goals tab) — what you want to achieve with a weekly hour target and priority (1 = highest).
-3. **Generate a plan** (Planner tab → Generate Weekly Plan) — the local algorithm:
-   - Computes free slots per day between 08:00 and 22:00 (or 21:00 if a "no screens" rule is active), subtracting your schedule events.
-   - Allocates goal sessions greedily by priority: 50-minute deep work blocks with 10-minute breaks, or 25-minute sessions with 5-minute breaks.
-   - Spreads sessions across the week to hit each goal's hour target.
-4. **Start Focus Mode** — tap any plan block to open the Focus Modal with a countdown timer, progress bar, and motivational messages. A persistent gold banner appears across all tabs during an active session.
-5. **Mark complete** — at the end of a session, mark the block done directly from the Focus Modal.
-
-### Planning algorithm constraints
-
-- Day window: 08:00–22:00 (or 08:00–21:00 with no-screens rule)
-- No blocks are created that overlap with your schedule events
-- Goals are sorted by priority (1 is highest), then by most hours still needed
-- Sessions snap to 50-min or 25-min boundaries
-
----
-
-## Alignment Score Algorithm
-
-The alignment score (0–100) measures how well your day aligns with your intentions:
-
-| Component | Weight | Description |
-|---|---|---|
-| Task completion | 40 pts | Ratio of completed tasks |
-| Rules followed | 30 pts | Ratio of active rules marked followed |
-| Critical action | 20 pts | Whether the critical action is complete |
-| Daily reflection | 10 pts | Whether a reflection was saved |
-
-**Score → Label mapping:**
-- 85–100: Locked In
-- 60–84: Aligned
-- 35–59: Building
-- 0–34: Off Track
-
-The `seriousnessScore` (set during onboarding) applies a multiplier (0.85–1.0) to calibrate expectations based on commitment level.
-
----
-
-## Rules Engine
-
-- Free plan: maximum **3 active rules**
-- Pro plan: unlimited rules
-- Rules track daily compliance (`followedToday` boolean)
-- Compliance rate feeds directly into the alignment score
-- The "No screens after 9PM" rule also constrains the weekly planner to end sessions by 21:00
-
----
-
-## Design System
-
-**Dark minimal, gold accent, no gamification.**
-
-| Token | Value |
+| Document | Description |
 |---|---|
-| Background | `#0A0A0A` |
-| Surface | `#111111` |
-| Gold (primary accent) | `#C9A84C` |
-| Text primary | `#F0F0F0` |
-| Text secondary | `#888888` |
+| [`docs/architecture.md`](docs/architecture.md) | System architecture, data flow, component map |
+| [`docs/backend.md`](docs/backend.md) | Supabase schema, Edge Functions, RLS policies |
+| [`docs/ai-system.md`](docs/ai-system.md) | AI coaching pipeline, prompt architecture, memory system |
+| [`docs/billing.md`](docs/billing.md) | RevenueCat integration, tier model, entitlement gating |
+| [`docs/analytics.md`](docs/analytics.md) | Analytics event pipeline, database views, funnel tracking |
+| [`docs/development-setup.md`](docs/development-setup.md) | Local dev setup, environment variables, running the app |
 
 ---
 
-## Future Roadmap
+## Quick Start
 
-- [ ] AI integration (GPT/Claude API) for plan generation and reflection analysis
-- [ ] Push notifications for rule reminders and focus block start times
-- [ ] Weekly and monthly alignment reports
-- [ ] iCloud / cloud sync for Pro users
-- [ ] Widget support (iOS / Android)
-- [ ] Apple Watch companion
+```bash
+git clone https://github.com/zainaas-wq/LIFEOS.git
+cd LIFEOS
+npm install
+cp .env.example .env
+# Fill in .env with your Supabase project URL and anon key
+npx expo start
+```
+
+See [`docs/development-setup.md`](docs/development-setup.md) for the full setup guide.
+
+---
+
+## Environment Variables
+
+| Variable | Location | Description |
+|---|---|---|
+| `EXPO_PUBLIC_SUPABASE_URL` | `.env` | Supabase project URL |
+| `EXPO_PUBLIC_SUPABASE_ANON_KEY` | `.env` | Supabase anon public key |
+| `EXPO_PUBLIC_RC_MOCK_MODE` | `eas.json` dev profile | Bypass RevenueCat in development |
+| `ANTHROPIC_API_KEY` | Supabase secrets | Claude API key (server-side only) |
+| `SUPABASE_SERVICE_ROLE_KEY` | Supabase secrets | Service role key (Edge Functions only) |
+
+**Never commit real keys.** See `.env.example` for the full template.
 
 ---
 
