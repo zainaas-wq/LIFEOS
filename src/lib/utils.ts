@@ -1,17 +1,38 @@
 import { Platform } from 'react-native';
 
 /**
- * Generates a simple unique ID (UUID-like)
+ * Generates a UUID v4. Uses crypto.randomUUID() available in React Native 0.73+
+ * (Hermes engine). Falls back to a manual implementation for older environments.
  */
 export function generateId(): string {
-  return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  // Fallback: RFC 4122 v4 UUID
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    const v = c === 'x' ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
 }
 
 /**
- * Returns today's date as YYYY-MM-DD
+ * Returns a date as YYYY-MM-DD using the device's local timezone.
+ * Omit the argument to get today's local date.
+ */
+export function getLocalDateStr(d?: Date): string {
+  const date = d ?? new Date();
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+/**
+ * Returns today's date as YYYY-MM-DD (local timezone).
  */
 export function getTodayDate(): string {
-  return new Date().toISOString().split('T')[0];
+  return getLocalDateStr();
 }
 
 /**

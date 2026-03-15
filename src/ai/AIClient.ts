@@ -1,4 +1,4 @@
-import type { ChatMessage, Goal, SkillPlan, Rule, ScheduleEvent, Plan } from '../types';
+import type { ChatMessage, Goal, SkillPlan, Rule, ScheduleEvent, Plan, FocusSession } from '../types';
 
 // ─── Context passed to every AI call ─────────────────────────────────────────
 
@@ -8,6 +8,11 @@ export interface AIContext {
   rules: Rule[];
   scheduleEvents: ScheduleEvent[];
   mainFocus?: string;
+  biggestDistraction?: string;
+  fixedScheduleStart?: string; // HH:MM — planning window start
+  fixedScheduleEnd?: string;   // HH:MM — planning window end
+  focusSessions?: FocusSession[];
+  currentPlan?: Plan;
   todayDate: string; // YYYY-MM-DD
 }
 
@@ -24,22 +29,14 @@ export interface AIClient {
 
 // ─── Factory ──────────────────────────────────────────────────────────────────
 
-export type ClientMode = 'local' | 'remote';
+export type ClientMode = 'local' | 'backend';
 
 let _client: AIClient | null = null;
 
-export function getAIClient(mode: ClientMode = 'local', apiKey?: string): AIClient {
+export function getAIClient(mode: ClientMode = 'local'): AIClient {
   if (_client) return _client;
-
-  if (mode === 'remote' && apiKey) {
-    // Lazy import to avoid bundling RemoteAIClient when not needed
-    const { RemoteAIClient } = require('./RemoteAIClient');
-    _client = new RemoteAIClient(apiKey);
-  } else {
-    const { LocalAIClient } = require('./LocalAIClient');
-    _client = new LocalAIClient();
-  }
-
+  const { LocalAIClient } = require('./LocalAIClient');
+  _client = new LocalAIClient();
   return _client!;
 }
 

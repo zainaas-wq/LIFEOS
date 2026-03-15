@@ -42,7 +42,9 @@
           "photosPermission": "LifeOS needs access to your photos to import schedule screenshots.",
           "cameraPermission": false
         }
-      ]
+      ],
+      "expo-localization",
+      "react-native-purchases"
     ],
     "experiments": {
       "typedRoutes": true

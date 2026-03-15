@@ -16,13 +16,28 @@ expo-env.d.ts
 # macOS
 .DS_Store
 
-# Local env files
+# Local env files — never commit real keys
 .env
 .env.local
 .env.*.local
+.env.production
+.env.staging
+*.env
+
+# Supabase local secrets
+supabase/.env
+supabase/functions/.env
+
+# EAS / Expo secrets
+secrets.json
+google-services.json
+GoogleService-Info.plist
 
 # TypeScript
 *.tsbuildinfo
 
 # Test scripts
 test-parser.mjs
+
+# Claude Code local config (machine-specific permissions)
+.claude/settings.local.json

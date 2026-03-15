@@ -12,7 +12,9 @@ import type {
   Plan, PlanItem, PlanItemType,
   ControlDailyPlan, NudgeItem, UserPreferences,
 } from '../types';
-import { generateDailyPlanItems, timeToMins, minsToTime } from '../ai/planGenerator';
+import { generateSmartDailyPlan } from '../ai/planningEngine';
+import { timeToMins, minsToTime } from '../ai/planGenerator';
+import { generateId } from '../lib/utils';
 
 // ─── Defaults ────────────────────────────────────────────────────────────────
 
@@ -73,17 +75,19 @@ function insertMicroBlocks(items: PlanItem[], prefs: UserPreferences): PlanItem[
 
     result.push(item);
 
-    // Insert mobility buffer after long focus sessions
+    // Insert mobility buffer after long focus sessions.
+    // Skip if planningEngine already placed a break immediately after this item.
     if ((item.type === 'goal' || item.type === 'skill') && i < items.length - 1) {
       const duration = timeToMins(item.endTime) - timeToMins(item.startTime);
-      if (duration >= 45) {
+      const nextItem = items[i + 1];
+      if (duration >= 45 && nextItem.type !== 'break') {
         const bufferStart = item.endTime;
         const bufferEndMins = timeToMins(bufferStart) + prefs.mobilityBufferMins;
-        const nextStart = items[i + 1].startTime;
+        const nextStart = nextItem.startTime;
         // Only insert if there's room before the next block
         if (bufferEndMins <= timeToMins(nextStart)) {
           result.push({
-            id: `buffer-${item.id}`,
+            id: generateId(),
             startTime: bufferStart,
             endTime: minsToTime(bufferEndMins),
             title: 'Move · Stretch · Reset',
@@ -130,7 +134,7 @@ export function computeNextBestAction(items: PlanItem[], nowMins?: number): Plan
 
 // ─── Nudge schedule ───────────────────────────────────────────────────────────
 
-function buildNudgeSchedule(items: PlanItem[]): NudgeItem[] {
+export function buildNudgeSchedule(items: PlanItem[]): NudgeItem[] {
   const nudges: NudgeItem[] = [];
   const actionTypes: PlanItemType[] = ['goal', 'skill', 'event'];
 
@@ -169,14 +173,16 @@ export function generateControlPlan(
   rules: Rule[],
   date: string,
   prefOverrides?: Partial<UserPreferences>,
+  fixedStart?: number,
+  fixedEnd?: number,
 ): ControlDailyPlan {
   const prefs: UserPreferences = {
     ...derivePreferences(rules),
     ...prefOverrides,
   };
 
-  // 1. Generate base plan via existing planGenerator
-  const basePlan: Plan = generateDailyPlanItems(goals, scheduleEvents, skillPlans, rules, date);
+  // 1. Generate base plan via smart planning engine
+  const basePlan: Plan = generateSmartDailyPlan(goals, scheduleEvents, skillPlans, rules, date, fixedStart, fixedEnd);
 
   // 2. Enrich with micro-blocks
   const enrichedItems = insertMicroBlocks(basePlan.items, prefs);

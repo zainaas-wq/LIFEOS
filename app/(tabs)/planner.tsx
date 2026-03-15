@@ -10,13 +10,15 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useAppStore } from '../../src/store/useAppStore';
+import { useEntitlements } from '../../src/services/entitlementService';
+import { UpgradeModal } from '../../src/components/upgrade/UpgradeModal';
 import { NudgeBanner } from '../../src/components/NudgeBanner';
 import { FocusModal } from '../../src/components/FocusModal';
 import { PlanBlockCard } from '../../src/components/PlanBlockCard';
 import { SectionHeader } from '../../src/components/SectionHeader';
 import { Button } from '../../src/components/ui/Button';
 import { Card } from '../../src/components/ui/Card';
-import { getTodayDate, formatDate } from '../../src/lib/utils';
+import { getTodayDate, formatDate, generateId } from '../../src/lib/utils';
 import { getGoalAllocation } from '../../src/lib/weeklyPlanner';
 import { timeToMins } from '../../src/ai/planGenerator';
 import { Colors, FontSize, FontWeight, Radius, Spacing } from '../../src/constants/theme';
@@ -34,16 +36,24 @@ const TYPE_COLOR: Record<string, string> = {
   free:  Colors.textMuted,
 };
 
+const ENERGY_COLOR: Record<string, string> = {
+  high:   '#6C8EBF',
+  medium: Colors.gold,
+  low:    '#4ADE80',
+};
+
 // ─── PlanItem row ─────────────────────────────────────────────────────────────
 
 function PlanItemRow({
   item,
   nowMins,
+  showReasons,
   onToggle,
   onStartFocus,
 }: {
   item: PlanItem;
   nowMins: number;
+  showReasons: boolean;
   onToggle: () => void;
   onStartFocus: () => void;
 }) {
@@ -60,8 +70,9 @@ function PlanItemRow({
       activeOpacity={0.75}
       style={[
         styles.itemRow,
-        { borderLeftColor: color },
+        { borderLeftColor: item.isCritical ? Colors.gold : color },
         isActive && styles.itemRowActive,
+        !!item.isCritical && styles.itemRowCritical,
         item.completed && styles.itemRowDone,
       ]}
     >
@@ -83,19 +94,36 @@ function PlanItemRow({
         </Text>
       </View>
 
-      {/* Title + type */}
+      {/* Title + badges */}
       <View style={styles.itemInfo}>
-        <Text
-          style={[
-            styles.itemTitle,
-            item.completed && styles.itemTitleDone,
-            isPast && !item.completed && styles.itemTitlePast,
-          ]}
-          numberOfLines={1}
-        >
-          {item.title}
-        </Text>
+        <View style={styles.itemTitleRow}>
+          <Text
+            style={[
+              styles.itemTitle,
+              item.completed && styles.itemTitleDone,
+              isPast && !item.completed && styles.itemTitlePast,
+            ]}
+            numberOfLines={1}
+          >
+            {item.title}
+          </Text>
+          {!!item.isCritical && (
+            <View style={styles.criticalChip}>
+              <Text style={styles.criticalChipText}>CRITICAL</Text>
+            </View>
+          )}
+          {item.energyRequired && (
+            <View style={[styles.energyBadge, { backgroundColor: ENERGY_COLOR[item.energyRequired] + '25' }]}>
+              <Text style={[styles.energyBadgeText, { color: ENERGY_COLOR[item.energyRequired] }]}>
+                {item.energyRequired.toUpperCase()}
+              </Text>
+            </View>
+          )}
+        </View>
         <Text style={[styles.itemType, { color }]}>{item.type}</Text>
+        {showReasons && !!item.notes && (
+          <Text style={styles.itemNotes} numberOfLines={2}>{item.notes}</Text>
+        )}
       </View>
 
       {/* Status / Focus button */}
@@ -115,12 +143,13 @@ function PlanItemRow({
 
 // ─── Control Daily View ───────────────────────────────────────────────────────
 
-function ControlDailyView() {
+export function ControlDailyView() {
   const goals                  = useAppStore((s) => s.goals);
   const controlPlan            = useAppStore((s) => s.controlPlan);
   const activeNudge            = useAppStore((s) => s.activeNudge);
   const generateControlPlanAction = useAppStore((s) => s.generateControlPlanAction);
   const toggleControlPlanItem  = useAppStore((s) => s.toggleControlPlanItem);
+  const reschedulePlan         = useAppStore((s) => s.reschedulePlan);
   const setActiveNudge         = useAppStore((s) => s.setActiveNudge);
   const dismissNudge           = useAppStore((s) => s.dismissNudge);
   const snoozeNudge            = useAppStore((s) => s.snoozeNudge);
@@ -130,6 +159,7 @@ function ControlDailyView() {
 
   const today = getTodayDate();
   const [generating, setGenerating] = useState(false);
+  const [showReasons, setShowReasons] = useState(false);
   const [focusItem, setFocusItem] = useState<PlanItem | null>(null);
 
   // Current time in minutes for "now" detection
@@ -179,7 +209,7 @@ function ControlDailyView() {
   const handleStartFocus = (item: PlanItem) => {
     const goal = goals.find((g) => g.id === item.goalId);
     startFocus({
-      id: Math.random().toString(36).slice(2),
+      id: generateId(),
       goalId: item.goalId,
       goalTitle: goal?.title ?? item.title,
       durationMinutes: timeToMins(item.endTime) - timeToMins(item.startTime),
@@ -245,19 +275,39 @@ function ControlDailyView() {
       {/* Plan items */}
       {items.length > 0 && (
         <View style={styles.section}>
-          <SectionHeader
-            title="Today's Schedule"
-            action={`${items.filter((i) => i.completed).length}/${items.length}`}
-          />
+          <View style={styles.scheduleHeader}>
+            <SectionHeader
+              title="Today's Schedule"
+              action={`${items.filter((i) => i.completed).length}/${items.length}`}
+            />
+            <TouchableOpacity
+              onPress={() => setShowReasons((v) => !v)}
+              style={[styles.whyBtn, showReasons && styles.whyBtnActive]}
+              activeOpacity={0.7}
+            >
+              <Text style={[styles.whyBtnText, showReasons && styles.whyBtnTextActive]}>
+                {showReasons ? 'Hide' : 'Why?'}
+              </Text>
+            </TouchableOpacity>
+          </View>
           {items.map((item) => (
             <PlanItemRow
               key={item.id}
               item={item}
               nowMins={nowMins}
+              showReasons={showReasons}
               onToggle={() => toggleControlPlanItem(item.id)}
               onStartFocus={() => handleStartFocus(item)}
             />
           ))}
+          <TouchableOpacity
+            onPress={() => reschedulePlan(today)}
+            style={styles.rescheduleBtn}
+            activeOpacity={0.75}
+          >
+            <Ionicons name="refresh-outline" size={14} color={Colors.textMuted} />
+            <Text style={styles.rescheduleBtnText}>Reschedule Remaining</Text>
+          </TouchableOpacity>
         </View>
       )}
 
@@ -308,8 +358,8 @@ function ControlDailyView() {
 // ─── Weekly sub-view (unchanged) ─────────────────────────────────────────────
 
 function WeeklyView({ goals, weeklyPlan, generatedAt, planSource, generating, aiGenerating,
-  hasApiKey, selectedDay, allocation, dayBlocks, onDaySelect, onGenerate, onAIGenerate,
-  onClear, onBlockPress }: any) {
+  selectedDay, allocation, dayBlocks, onDaySelect, onGenerate, onAIGenerate,
+  onClear, onBlockPress, canAIPlan }: any) {
 
   const blocksForDay = dayBlocks(selectedDay) as PlanBlock[];
   const completedCount = weeklyPlan.filter((b: PlanBlock) => b.completed).length;
@@ -352,16 +402,21 @@ function WeeklyView({ goals, weeklyPlan, generatedAt, planSource, generating, ai
         />
         <TouchableOpacity
           onPress={onAIGenerate}
-          disabled={anyGenerating}
-          style={[styles.aiBtn, aiGenerating && styles.aiBtnLoading, !hasApiKey && styles.aiBtnDim]}
+          disabled={canAIPlan && anyGenerating}
+          style={[styles.aiBtn, aiGenerating && styles.aiBtnLoading, !canAIPlan && styles.aiBtnDim]}
           activeOpacity={0.75}
         >
           {aiGenerating ? (
             <Text style={styles.aiBtnText}>Thinking…</Text>
-          ) : (
+          ) : canAIPlan ? (
             <>
               <Ionicons name="sparkles" size={15} color={Colors.gold} />
               <Text style={styles.aiBtnText}>AI Plan</Text>
+            </>
+          ) : (
+            <>
+              <Ionicons name="lock-closed" size={14} color={Colors.textMuted} />
+              <Text style={[styles.aiBtnText, { color: Colors.textMuted }]}>AI Plan</Text>
             </>
           )}
         </TouchableOpacity>
@@ -440,6 +495,7 @@ export default function PlannerScreen() {
   const [aiGenerating, setAiGenerating] = useState(false);
   const [selectedDay, setSelectedDay] = useState<number>(new Date().getDay());
   const [focusBlock, setFocusBlock] = useState<PlanBlock | null>(null);
+  const [showUpgradeModal, setShowUpgradeModal] = useState(false);
 
   const goals            = useAppStore((s) => s.goals);
   const weeklyPlan       = useAppStore((s) => s.weeklyPlan);
@@ -448,7 +504,9 @@ export default function PlannerScreen() {
   const generateWeekly   = useAppStore((s) => s.generateWeeklyPlanAction);
   const generateAIWeekly = useAppStore((s) => s.generateAIWeeklyPlanAction);
   const clearWeekly      = useAppStore((s) => s.clearWeeklyPlan);
-  const aiApiKey         = useAppStore((s) => s.aiApiKey);
+
+  const entitlements = useEntitlements();
+  const canAIPlan    = entitlements.can('ai_weekly_plan');
 
   const allocation = getGoalAllocation(goals, weeklyPlan);
   const dayBlocks  = (day: number) =>
@@ -462,11 +520,11 @@ export default function PlannerScreen() {
   };
 
   const handleAIGenerate = async () => {
-    if (!goals.length) { Alert.alert('No goals', 'Add goals first in the Goals tab.'); return; }
-    if (!aiApiKey) {
-      Alert.alert('API Key Required', 'Add your Anthropic API key in Settings → AI Planner.');
+    if (!canAIPlan) {
+      setShowUpgradeModal(true);
       return;
     }
+    if (!goals.length) { Alert.alert('No goals', 'Add goals first in the Goals tab.'); return; }
     setAiGenerating(true);
     try { await generateAIWeekly(); }
     catch (err: any) { Alert.alert('AI Plan Failed', err?.message ?? 'Unknown error.'); }
@@ -503,13 +561,13 @@ export default function PlannerScreen() {
           planSource={weeklyPlanSource}
           generating={generating}
           aiGenerating={aiGenerating}
-          hasApiKey={!!aiApiKey}
           selectedDay={selectedDay}
           allocation={allocation}
           dayBlocks={dayBlocks}
           onDaySelect={setSelectedDay}
           onGenerate={handleGenerateWeekly}
           onAIGenerate={handleAIGenerate}
+          canAIPlan={canAIPlan}
           onClear={clearWeekly}
           onBlockPress={setFocusBlock}
         />
@@ -520,6 +578,12 @@ export default function PlannerScreen() {
         goal={focusGoal}
         visible={!!focusBlock}
         onClose={() => setFocusBlock(null)}
+      />
+
+      <UpgradeModal
+        visible={showUpgradeModal}
+        featureName="Weekly AI Planning"
+        onDismiss={() => setShowUpgradeModal(false)}
       />
     </SafeAreaView>
   );
@@ -566,6 +630,27 @@ const styles = StyleSheet.create({
   },
   nbaFocusBtnText: { fontSize: FontSize.sm, fontWeight: FontWeight.bold, color: Colors.textInverse },
 
+  // Schedule header row with Why? button
+  scheduleHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  whyBtn: {
+    paddingHorizontal: Spacing.sm, paddingVertical: 4,
+    borderRadius: Radius.sm, borderWidth: 1, borderColor: Colors.border,
+    backgroundColor: Colors.surfaceElevated,
+  },
+  whyBtnActive: { borderColor: Colors.gold, backgroundColor: Colors.goldMuted },
+  whyBtnText: { fontSize: FontSize.xs, color: Colors.textSecondary, fontWeight: FontWeight.medium },
+  whyBtnTextActive: { color: Colors.gold, fontWeight: FontWeight.bold },
+
+  // Reschedule button
+  rescheduleBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    gap: Spacing.xs, paddingVertical: Spacing.sm,
+    borderWidth: 1, borderColor: Colors.border, borderRadius: Radius.md,
+    borderStyle: 'dashed' as const, backgroundColor: Colors.surfaceElevated,
+    marginTop: Spacing.xs,
+  },
+  rescheduleBtnText: { fontSize: FontSize.xs, color: Colors.textMuted },
+
   // Plan item rows
   itemRow: {
     flexDirection: 'row',
@@ -580,6 +665,7 @@ const styles = StyleSheet.create({
     marginBottom: Spacing.xs,
   },
   itemRowActive: { borderColor: Colors.gold, backgroundColor: Colors.goldMuted + '30' },
+  itemRowCritical: { borderLeftWidth: 4 },
   itemRowDone: { opacity: 0.5 },
   itemCheck: { padding: 2 },
   checkCircle: {
@@ -592,10 +678,21 @@ const styles = StyleSheet.create({
   itemTimeSep: { fontSize: FontSize.xs, color: Colors.textMuted },
   itemTimePast: { color: Colors.textMuted },
   itemInfo: { flex: 1 },
-  itemTitle: { fontSize: FontSize.sm, color: Colors.textPrimary, fontWeight: FontWeight.medium },
+  itemTitleRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 4 },
+  itemTitle: { fontSize: FontSize.sm, color: Colors.textPrimary, fontWeight: FontWeight.medium, flexShrink: 1 },
   itemTitleDone: { textDecorationLine: 'line-through', color: Colors.textMuted },
   itemTitlePast: { color: Colors.textSecondary },
   itemType: { fontSize: FontSize.xs, textTransform: 'uppercase', letterSpacing: 0.4 },
+  itemNotes: { fontSize: 10, color: Colors.textMuted, marginTop: 2, lineHeight: 14 },
+  criticalChip: {
+    backgroundColor: Colors.gold, borderRadius: 3,
+    paddingHorizontal: 5, paddingVertical: 1,
+  },
+  criticalChipText: { fontSize: 8, fontWeight: FontWeight.bold, color: Colors.textInverse, letterSpacing: 0.5 },
+  energyBadge: {
+    borderRadius: 3, paddingHorizontal: 4, paddingVertical: 1,
+  },
+  energyBadgeText: { fontSize: 8, fontWeight: FontWeight.semibold, letterSpacing: 0.4 },
   itemNowBadge: {
     backgroundColor: Colors.gold, borderRadius: Radius.sm,
     paddingHorizontal: 6, paddingVertical: 2,
