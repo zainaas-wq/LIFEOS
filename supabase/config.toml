@@ -1,0 +1,16 @@
+# supabase/config.toml — Edge Function configuration for LifeOS
+#
+# Used by the Supabase CLI for both local development and cloud deployment.
+#
+# activate-purchase: verify_jwt = true (default)
+#   Requires a valid Supabase user JWT.  Called by the app after purchase.
+#
+# rc-webhook: verify_jwt = false
+#   RevenueCat is not a Supabase user and cannot provide a Supabase JWT.
+#   Authentication is via the REVENUECAT_WEBHOOK_AUTH shared secret header.
+#
+# Deploy rc-webhook with: supabase functions deploy rc-webhook --no-verify-jwt
+# (The CLI also reads this file — both methods are equivalent.)
+
+[functions.rc-webhook]
+verify_jwt = false
