@@ -129,7 +129,7 @@ export default function TabsLayout() {
         <Tabs.Screen
           name="coach"
           options={{
-            title: 'Coach',
+            title: 'AI',
             tabBarIcon: ({ focused }) => (
               <TabIcon name={focused ? 'sparkles' : 'sparkles-outline'} focused={focused} />
             ),

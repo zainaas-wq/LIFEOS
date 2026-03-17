@@ -1,3 +1,14 @@
+/**
+ * upgrade.tsx — Premium subscription screen.
+ *
+ * Rebuilt to eliminate the free-plan framing entirely.
+ * This screen communicates what LifeOS IS and what it costs — directly.
+ * No feature table comparison. No "Free vs Pro" framing.
+ * Value is front-and-center. Price is confident. CTA is single and clear.
+ *
+ * Purchase state machine is preserved exactly as before.
+ */
+
 import React, { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
@@ -19,51 +30,55 @@ import {
 } from '../src/services/purchaseService';
 import { useMonthlyUsage } from '../src/services/usageService';
 import { track } from '../src/services/analyticsService';
+import { useAppStore } from '../src/store/useAppStore';
 
 // ── State machine ─────────────────────────────────────────────────────────────
 
 type Phase =
-  | 'loading_offering'    // fetching price from RC on mount
-  | 'ready'               // idle paywall — user can act
-  | 'purchasing'          // purchasePro() / restorePurchases() in flight
-  | 'activating'          // backend confirmed; refreshing local usage cache
-  | 'success'             // cache refreshed — show success screen
-  | 'activation_pending'  // purchase received; backend not yet confirmed
-  | 'error';              // unrecoverable — show message + Try Again
+  | 'loading_offering'
+  | 'ready'
+  | 'purchasing'
+  | 'activating'
+  | 'success'
+  | 'activation_pending'
+  | 'error';
 
-// ── Feature data ──────────────────────────────────────────────────────────────
+// ── What LifeOS does — benefit cards ──────────────────────────────────────────
 
-const FREE_FEATURES = [
-  '100 AI credits / month',
-  'AI coach chat',
-  'AI daily planning',
-  'AI recovery mode',
+const BENEFITS = [
+  {
+    icon: 'calendar-outline'   as const,
+    title: 'Daily AI planning',
+    body: 'Builds a complete schedule around your goals, fixed schedule, and energy — every morning.',
+  },
+  {
+    icon: 'pulse-outline'      as const,
+    title: 'Drift detection & recovery',
+    body: 'Tracks your behavioral consistency, detects drift before it compounds, and guides you back.',
+  },
+  {
+    icon: 'refresh-outline'    as const,
+    title: 'Adaptive rescheduling',
+    body: 'When your day breaks down, the system rebuilds it intelligently around what remains.',
+  },
+  {
+    icon: 'flag-outline'       as const,
+    title: 'Weekly goal intelligence',
+    body: 'Monitors pace toward each goal, flags what\'s at risk, and adjusts targets week by week.',
+  },
+  {
+    icon: 'sparkles-outline'   as const,
+    title: 'AI coaching',
+    body: 'Ask anything about your day, your goals, or your progress — the AI has full context on your life.',
+  },
 ] as const;
-
-// Pro extras displayed on top of Free baseline
-const PRO_EXTRAS = [
-  'Everything in Free',
-  '600 AI credits / month',
-  'Weekly AI planning',
-  'Monthly AI review',
-] as const;
-
-// ── Shared button base (referenced in StyleSheet below) ───────────────────────
-
-const btnBase = {
-  borderRadius: Radius.md,
-  flexDirection:  'row'    as const,
-  alignItems:     'center' as const,
-  justifyContent: 'center' as const,
-  paddingVertical: Spacing.md,
-  gap: Spacing.xs,
-};
 
 // ── Screen ────────────────────────────────────────────────────────────────────
 
 export default function UpgradeScreen() {
   const router = useRouter();
   const { refresh: refreshUsage } = useMonthlyUsage();
+  const profile = useAppStore((s) => s.profile);
 
   const [phase, setPhase]             = useState<Phase>('loading_offering');
   const [offering, setOffering]       = useState<ProOffering | null>(null);
@@ -72,7 +87,6 @@ export default function UpgradeScreen() {
   const [errorMsg, setErrorMsg]       = useState('');
   const [restoreNote, setRestoreNote] = useState('');
 
-  // Load offering price on mount — non-blocking, error is silent
   useEffect(() => {
     track('paywall_viewed');
     getProOffering()
@@ -141,8 +155,6 @@ export default function UpgradeScreen() {
     setPhase('error');
   };
 
-  // ── Try again (from error) ────────────────────────────────────────────────
-
   const handleTryAgain = () => {
     setErrorMsg('');
     setPhase('ready');
@@ -154,20 +166,21 @@ export default function UpgradeScreen() {
     return (
       <SafeAreaView style={styles.container}>
         <View style={styles.successWrap}>
-          <View style={styles.successIcon}>
-            <Ionicons name="checkmark" size={32} color={Colors.success} />
+          <View style={styles.successIconWrap}>
+            <Ionicons name="checkmark" size={32} color={Colors.gold} />
           </View>
-          <Text style={styles.successTitle}>You're now Pro</Text>
+          <Text style={styles.successTitle}>LifeOS Pro is active.</Text>
           <Text style={styles.successBody}>
-            Your subscription is active. All Pro features are available now.
+            Your AI planning, daily intelligence, and full coaching access are all on.
+            {profile?.name ? `\n\nWelcome, ${profile.name}.` : ''}
           </Text>
           <TouchableOpacity
-            onPress={() => router.back()}
+            onPress={() => router.replace('/(tabs)/home' as any)}
             style={styles.successBtn}
             activeOpacity={0.85}
           >
-            <Ionicons name="checkmark" size={15} color={Colors.textInverse} />
-            <Text style={styles.ctaBtnText}>Back to LifeOS</Text>
+            <Text style={styles.ctaBtnText}>Enter LifeOS</Text>
+            <Ionicons name="arrow-forward" size={15} color={Colors.textInverse} />
           </TouchableOpacity>
         </View>
       </SafeAreaView>
@@ -200,70 +213,48 @@ export default function UpgradeScreen() {
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
       >
-        {/* Hero */}
+        {/* ── Hero ──────────────────────────────────────────────────────── */}
         <View style={styles.hero}>
-          <View style={styles.iconBadge}>
-            <Ionicons name="sparkles" size={26} color={Colors.gold} />
-          </View>
           <View style={styles.proBadge}>
-            <Text style={styles.proBadgeText}>PRO</Text>
+            <Ionicons name="sparkles" size={11} color={Colors.gold} />
+            <Text style={styles.proBadgeText}>LIFEOS PRO</Text>
           </View>
-          <Text style={styles.title}>Upgrade to Pro</Text>
-          <Text style={styles.subtitle}>
-            More AI power for people who move with intention.
-          </Text>
+
+          <Text style={styles.title}>Your AI life{'\n'}operating system.</Text>
+
+          {/* Price — confident, not apologetic */}
+          {phase === 'loading_offering' ? (
+            <ActivityIndicator size="small" color={Colors.textMuted} style={{ marginTop: Spacing.sm }} />
+          ) : priceLabel ? (
+            <View style={styles.priceRow}>
+              <Text style={styles.priceAmount}>{priceLabel}</Text>
+              <Text style={styles.pricePeriod}>/month</Text>
+            </View>
+          ) : null}
+
+          {(phase === 'ready' || phase === 'loading_offering') && (
+            <Text style={styles.trialLabel}>Start with 7 days free</Text>
+          )}
         </View>
 
-        {/* Price row */}
-        {phase === 'loading_offering' && (
-          <View style={styles.priceRow}>
-            <ActivityIndicator size="small" color={Colors.textMuted} />
-          </View>
-        )}
-        {phase !== 'loading_offering' && !!priceLabel && (
-          <View style={styles.priceRow}>
-            <Text style={styles.priceText}>{priceLabel}</Text>
-            <Text style={styles.priceNote}> per month · cancel anytime</Text>
-          </View>
-        )}
+        {/* ── Benefits ──────────────────────────────────────────────────── */}
+        <Text style={styles.benefitsHeading}>WHAT IT DOES FOR YOU</Text>
 
-        {/* Feature comparison: two stacked cards */}
-        <View style={styles.compareWrap}>
-          {/* Free */}
-          <View style={styles.compareCard}>
-            <Text style={styles.cardTier}>Free</Text>
-            {FREE_FEATURES.map((f) => (
-              <View key={f} style={styles.featureRow}>
-                <Ionicons name="checkmark" size={13} color={Colors.textMuted} />
-                <Text style={styles.featureFree}>{f}</Text>
+        <View style={styles.benefitsList}>
+          {BENEFITS.map((b, i) => (
+            <View key={i} style={styles.benefitRow}>
+              <View style={styles.benefitIcon}>
+                <Ionicons name={b.icon} size={15} color={Colors.gold} />
               </View>
-            ))}
-          </View>
-
-          {/* Pro */}
-          <View style={[styles.compareCard, styles.compareCardPro]}>
-            <View style={styles.cardProHeader}>
-              <Text style={styles.cardTierPro}>Pro</Text>
-              <View style={styles.cardBadge}>
-                <Text style={styles.cardBadgeText}>RECOMMENDED</Text>
+              <View style={styles.benefitText}>
+                <Text style={styles.benefitTitle}>{b.title}</Text>
+                <Text style={styles.benefitBody}>{b.body}</Text>
               </View>
             </View>
-            {PRO_EXTRAS.map((f, i) => (
-              <View key={f} style={styles.featureRow}>
-                <Ionicons
-                  name={i === 0 ? 'checkmark' : 'sparkles'}
-                  size={i === 0 ? 13 : 11}
-                  color={Colors.gold}
-                />
-                <Text style={[styles.featurePro, i > 0 && styles.featureProExtra]}>
-                  {f}
-                </Text>
-              </View>
-            ))}
-          </View>
+          ))}
         </View>
 
-        {/* activation_pending notice */}
+        {/* ── Status notices ────────────────────────────────────────────── */}
         {phase === 'activation_pending' && (
           <View style={styles.noticeCard}>
             <Ionicons name="time-outline" size={16} color={Colors.warning} />
@@ -271,7 +262,6 @@ export default function UpgradeScreen() {
           </View>
         )}
 
-        {/* error notice */}
         {phase === 'error' && (
           <View style={[styles.noticeCard, styles.noticeError]}>
             <Ionicons name="alert-circle-outline" size={16} color={Colors.error} />
@@ -279,7 +269,6 @@ export default function UpgradeScreen() {
           </View>
         )}
 
-        {/* restore note (no active subscription) */}
         {!!restoreNote && (
           <View style={styles.noticeCard}>
             <Ionicons name="information-circle-outline" size={16} color={Colors.textSecondary} />
@@ -288,15 +277,10 @@ export default function UpgradeScreen() {
         )}
       </ScrollView>
 
-      {/* Bottom bar */}
+      {/* ── Bottom CTA bar ────────────────────────────────────────────── */}
       <View style={styles.bottomBar}>
-        {/* Primary CTA — switches to Restore when activation_pending */}
         {phase === 'activation_pending' ? (
-          <TouchableOpacity
-            onPress={handleRestore}
-            style={styles.ctaBtn}
-            activeOpacity={0.85}
-          >
+          <TouchableOpacity onPress={handleRestore} style={styles.ctaBtn} activeOpacity={0.85}>
             <Ionicons name="refresh-outline" size={15} color={Colors.textInverse} />
             <Text style={styles.ctaBtnText}>Restore Purchases</Text>
           </TouchableOpacity>
@@ -318,28 +302,24 @@ export default function UpgradeScreen() {
               <>
                 <Ionicons name="sparkles" size={15} color={Colors.textInverse} />
                 <Text style={styles.ctaBtnText}>
-                  {priceLabel ? `Get Pro — ${priceLabel}` : 'Get Pro'}
+                  {priceLabel ? 'Start 7-Day Free Trial' : 'Get Pro'}
                 </Text>
               </>
             )}
           </TouchableOpacity>
         )}
 
-        {/* Restore Purchases link — secondary, hidden when already restoring/activating */}
         {!isBusy && phase !== 'activation_pending' && (
-          <TouchableOpacity
-            onPress={handleRestore}
-            style={styles.restoreBtn}
-            activeOpacity={0.7}
-          >
+          <TouchableOpacity onPress={handleRestore} style={styles.restoreBtn} activeOpacity={0.7}>
             <Text style={styles.restoreBtnText}>Restore Purchases</Text>
           </TouchableOpacity>
         )}
 
-        {/* Legal */}
         {(phase === 'ready' || phase === 'loading_offering') && (
           <Text style={styles.legal}>
-            Auto-renews monthly unless cancelled before renewal date.
+            {priceLabel
+              ? `7-day free trial, then ${priceLabel}/month. Auto-renews unless cancelled.`
+              : 'Auto-renews monthly unless cancelled before renewal date.'}
           </Text>
         )}
       </View>
@@ -347,257 +327,109 @@ export default function UpgradeScreen() {
   );
 }
 
-// ── Styles ────────────────────────────────────────────────────────────────────
+// ─── Styles ───────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: Colors.background,
-  },
+  container: { flex: 1, backgroundColor: Colors.background },
 
-  // Navigation
   backBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.xs,
-    paddingHorizontal: Spacing.lg,
-    paddingVertical: Spacing.sm,
+    flexDirection: 'row', alignItems: 'center', gap: Spacing.xs,
+    paddingHorizontal: Spacing.lg, paddingVertical: Spacing.sm,
     alignSelf: 'flex-start',
   },
-  backText: {
-    fontSize: FontSize.md,
-    color: Colors.textSecondary,
-  },
-  dim: {
-    color: Colors.textMuted,
-  },
+  backText: { fontSize: FontSize.md, color: Colors.textSecondary },
+  dim:      { color: Colors.textMuted },
 
-  // Scroll
-  scroll: {
-    flex: 1,
-  },
-  scrollContent: {
-    paddingHorizontal: Spacing.lg,
-    paddingBottom: Spacing.xl,
-    gap: Spacing.lg,
-  },
+  scroll:        { flex: 1 },
+  scrollContent: { paddingHorizontal: Spacing.lg, paddingBottom: Spacing.xl, gap: Spacing.lg },
 
   // Hero
-  hero: {
-    alignItems: 'center',
-    paddingTop: Spacing.md,
-    gap: Spacing.sm,
-  },
-  iconBadge: {
-    width: 60,
-    height: 60,
-    borderRadius: Radius.full,
-    backgroundColor: Colors.goldMuted,
-    borderWidth: 1,
-    borderColor: Colors.goldDim,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
+  hero: { alignItems: 'flex-start', paddingTop: Spacing.md, gap: Spacing.sm },
   proBadge: {
-    backgroundColor: Colors.gold,
-    borderRadius: Radius.sm,
-    paddingHorizontal: Spacing.sm,
-    paddingVertical: 3,
+    flexDirection: 'row', alignItems: 'center', gap: Spacing.xs,
+    backgroundColor: Colors.goldMuted,
+    borderRadius: Radius.full,
+    paddingHorizontal: Spacing.sm, paddingVertical: 4,
+    borderWidth: 1, borderColor: Colors.goldDim,
   },
   proBadgeText: {
-    fontSize: FontSize.xs,
-    fontWeight: FontWeight.bold,
-    color: Colors.textInverse,
-    letterSpacing: 1,
+    fontSize: FontSize.xs, fontWeight: FontWeight.bold,
+    color: Colors.gold, letterSpacing: 1,
   },
   title: {
-    fontSize: FontSize.xxl,
-    fontWeight: FontWeight.bold,
-    color: Colors.textPrimary,
+    fontSize: FontSize.xxxl, fontWeight: FontWeight.bold,
+    color: Colors.textPrimary, lineHeight: 42,
   },
-  subtitle: {
-    fontSize: FontSize.sm,
-    color: Colors.textSecondary,
-    textAlign: 'center',
-    lineHeight: 20,
-  },
+  priceRow:    { flexDirection: 'row', alignItems: 'baseline', gap: 2 },
+  priceAmount: { fontSize: FontSize.xxl, fontWeight: FontWeight.bold, color: Colors.gold },
+  pricePeriod: { fontSize: FontSize.md, color: Colors.textMuted },
+  trialLabel:  { fontSize: FontSize.sm, color: Colors.textSecondary },
 
-  // Price
-  priceRow: {
-    flexDirection: 'row',
-    alignItems: 'baseline',
-    justifyContent: 'center',
-    minHeight: 28,
+  // Benefits
+  benefitsHeading: {
+    fontSize: FontSize.xs, fontWeight: FontWeight.semibold,
+    color: Colors.textMuted, letterSpacing: 1.5,
   },
-  priceText: {
-    fontSize: FontSize.xl,
-    fontWeight: FontWeight.bold,
-    color: Colors.gold,
+  benefitsList: { gap: Spacing.md },
+  benefitRow: { flexDirection: 'row', gap: Spacing.md, alignItems: 'flex-start' },
+  benefitIcon: {
+    width: 34, height: 34, borderRadius: Radius.md,
+    backgroundColor: Colors.goldMuted, borderWidth: 1, borderColor: Colors.goldDim,
+    alignItems: 'center', justifyContent: 'center', flexShrink: 0, marginTop: 2,
   },
-  priceNote: {
-    fontSize: FontSize.xs,
-    color: Colors.textMuted,
-  },
+  benefitText:  { flex: 1, gap: 3 },
+  benefitTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.textPrimary },
+  benefitBody:  { fontSize: FontSize.sm, color: Colors.textSecondary, lineHeight: 20 },
 
-  // Feature comparison
-  compareWrap: {
-    gap: Spacing.sm,
-  },
-  compareCard: {
-    backgroundColor: Colors.surface,
-    borderRadius: Radius.lg,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    padding: Spacing.md,
-    gap: Spacing.xs,
-  },
-  compareCardPro: {
-    backgroundColor: Colors.surfaceElevated,
-    borderColor: Colors.goldDim,
-    ...Shadow.gold,
-  },
-  cardTier: {
-    fontSize: FontSize.md,
-    fontWeight: FontWeight.semibold,
-    color: Colors.textSecondary,
-    marginBottom: Spacing.xs,
-  },
-  cardProHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.sm,
-    marginBottom: Spacing.xs,
-  },
-  cardTierPro: {
-    fontSize: FontSize.md,
-    fontWeight: FontWeight.semibold,
-    color: Colors.gold,
-  },
-  cardBadge: {
-    backgroundColor: Colors.goldMuted,
-    borderRadius: Radius.sm,
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-  },
-  cardBadgeText: {
-    fontSize: 9,
-    fontWeight: FontWeight.bold,
-    color: Colors.gold,
-    letterSpacing: 0.5,
-  },
-  featureRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.xs,
-  },
-  featureFree: {
-    fontSize: FontSize.sm,
-    color: Colors.textMuted,
-  },
-  featurePro: {
-    fontSize: FontSize.sm,
-    color: Colors.textSecondary,
-  },
-  featureProExtra: {
-    color: Colors.gold,
-    fontWeight: FontWeight.medium,
-  },
-
-  // Notices (pending / error / restore note)
+  // Notices
   noticeCard: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: Spacing.sm,
-    backgroundColor: Colors.surface,
-    borderRadius: Radius.md,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    padding: Spacing.md,
+    flexDirection: 'row', alignItems: 'flex-start', gap: Spacing.sm,
+    backgroundColor: Colors.surface, borderRadius: Radius.md,
+    borderWidth: 1, borderColor: Colors.border, padding: Spacing.md,
   },
-  noticeError: {
-    borderColor: Colors.errorMuted,
-    backgroundColor: Colors.errorMuted,
-  },
-  noticeText: {
-    flex: 1,
-    fontSize: FontSize.sm,
-    color: Colors.textSecondary,
-    lineHeight: 20,
-  },
-  noticeTextError: {
-    color: Colors.error,
-  },
+  noticeError:     { borderColor: Colors.errorMuted, backgroundColor: Colors.errorMuted },
+  noticeText:      { flex: 1, fontSize: FontSize.sm, color: Colors.textSecondary, lineHeight: 20 },
+  noticeTextError: { color: Colors.error },
 
   // Bottom bar
   bottomBar: {
-    paddingHorizontal: Spacing.lg,
-    paddingBottom: Spacing.md,
-    paddingTop: Spacing.sm,
-    gap: Spacing.sm,
-    borderTopWidth: 1,
-    borderTopColor: Colors.border,
+    paddingHorizontal: Spacing.lg, paddingBottom: Spacing.md, paddingTop: Spacing.sm,
+    gap: Spacing.sm, borderTopWidth: 1, borderTopColor: Colors.border,
     backgroundColor: Colors.background,
   },
   ctaBtn: {
-    ...btnBase,
-    backgroundColor: Colors.gold,
-    ...Shadow.gold,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    gap: Spacing.sm, backgroundColor: Colors.gold, borderRadius: Radius.md,
+    paddingVertical: Spacing.md, ...Shadow.gold,
   },
-  ctaBtnBusy: {
-    opacity: 0.7,
-  },
-  ctaBtnText: {
-    fontSize: FontSize.md,
-    fontWeight: FontWeight.bold,
-    color: Colors.textInverse,
-  },
-  restoreBtn: {
-    alignItems: 'center',
-    paddingVertical: Spacing.xs,
-  },
-  restoreBtnText: {
-    fontSize: FontSize.sm,
-    color: Colors.textMuted,
-  },
-  legal: {
-    fontSize: FontSize.xs,
-    color: Colors.textMuted,
-    textAlign: 'center',
-    lineHeight: 16,
-  },
+  ctaBtnBusy: { opacity: 0.7 },
+  ctaBtnText: { fontSize: FontSize.md, fontWeight: FontWeight.bold, color: Colors.textInverse },
+  restoreBtn: { alignItems: 'center', paddingVertical: Spacing.xs },
+  restoreBtnText: { fontSize: FontSize.sm, color: Colors.textMuted },
+  legal: { fontSize: FontSize.xs, color: Colors.textMuted, textAlign: 'center', lineHeight: 16 },
 
-  // Success screen
+  // Success
   successWrap: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: Spacing.lg,
-    gap: Spacing.md,
+    flex: 1, alignItems: 'center', justifyContent: 'center',
+    paddingHorizontal: Spacing.lg, gap: Spacing.md,
   },
-  successIcon: {
-    width: 72,
-    height: 72,
-    borderRadius: Radius.full,
-    backgroundColor: Colors.successMuted,
-    alignItems: 'center',
-    justifyContent: 'center',
+  successIconWrap: {
+    width: 72, height: 72, borderRadius: Radius.full,
+    backgroundColor: Colors.goldMuted, borderWidth: 1, borderColor: Colors.goldDim,
+    alignItems: 'center', justifyContent: 'center',
+    ...Shadow.gold,
   },
   successTitle: {
-    fontSize: FontSize.xxl,
-    fontWeight: FontWeight.bold,
-    color: Colors.textPrimary,
-    textAlign: 'center',
+    fontSize: FontSize.xxl, fontWeight: FontWeight.bold,
+    color: Colors.textPrimary, textAlign: 'center',
   },
   successBody: {
-    fontSize: FontSize.md,
-    color: Colors.textSecondary,
-    textAlign: 'center',
-    lineHeight: 22,
+    fontSize: FontSize.md, color: Colors.textSecondary,
+    textAlign: 'center', lineHeight: 24,
   },
   successBtn: {
-    ...btnBase,
-    backgroundColor: Colors.gold,
-    width: '100%',
-    ...Shadow.gold,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    gap: Spacing.sm, backgroundColor: Colors.gold, borderRadius: Radius.md,
+    paddingVertical: Spacing.md, width: '100%', ...Shadow.gold,
   },
 });

@@ -125,6 +125,9 @@ interface AppStore {
   // ── Seed loaded flag ──────────────────────────────────────────────────────
   seedLoaded: boolean;
 
+  // ── Paywall ───────────────────────────────────────────────────────────────
+  paywallSeen: boolean;   // true after user dismisses paywall (not necessarily subscribed)
+
   // ── Actions ───────────────────────────────────────────────────────────────
 
   // Auth
@@ -225,6 +228,9 @@ interface AppStore {
   hydrateFromCloud: (userId: string) => Promise<void>;
   saveProgressSnapshot: (result: AlignmentResult, date: string) => Promise<void>;
 
+  // Paywall
+  setPaywallSeen: () => void;
+
   // Reset
   resetAllData: () => void;
 }
@@ -264,6 +270,7 @@ export const useAppStore = create<AppStore>()(
       dismissedReplanForItemIds: [],
       enforcementFiredIds: [],
       seedLoaded: false,
+      paywallSeen: false,
 
       // ── Auth ────────────────────────────────────────────────────────────────
 
@@ -895,6 +902,8 @@ export const useAppStore = create<AppStore>()(
       archiveEnforcementDay: () =>
         set({ enforcementFiredIds: [], dismissedReplanForItemIds: [], lastReplanItemId: null, replanSuggested: false }),
 
+      setPaywallSeen: () => set({ paywallSeen: true }),
+
       // ── Cloud sync ───────────────────────────────────────────────────────────
 
       hydrateFromCloud: async (userId) => {
@@ -974,6 +983,7 @@ export const useAppStore = create<AppStore>()(
           dismissedReplanForItemIds: [],
           enforcementFiredIds: [],
           seedLoaded: false,
+          paywallSeen: false,
           // aiApiKey intentionally preserved
         }),
     }),

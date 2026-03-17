@@ -8,8 +8,8 @@ import {
   TouchableOpacity,
   KeyboardAvoidingView,
   Platform,
-} from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+  useWindowDimensions,
+} from 'react-native';import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
@@ -177,6 +177,8 @@ export default function HomeScreen() {
                 'home.greeting_evening';
   const greetingName = profile?.name ? `, ${profile.name}` : '';
   const greetingText = `${t(greetingKey)}${greetingName}`;
+  const { width } = useWindowDimensions();
+  const isDesktop = width >= 768; // breakpoint for grid
 
   // ── Render ────────────────────────────────────────────────────────────────
   return (
@@ -191,114 +193,37 @@ export default function HomeScreen() {
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
         >
-          {/* ── Header ─────────────────────────────────────────────────────── */}
+          {/* Header */}
           <View style={styles.header}>
-            <Text style={styles.greeting}>{greetingText}</Text>
-            <Text style={styles.date}>{formatDate(today)}</Text>
+            <View>
+              <Text style={styles.greeting}>{greetingText}</Text>
+              <Text style={styles.date}>{formatDate(today)}</Text>
+            </View>
+            <TouchableOpacity onPress={() => router.push('/(tabs)/profile' as any)} activeOpacity={0.8}>
+              <View style={styles.profileAvatar}>
+                <Ionicons name="person" size={16} color={Colors.gold} />
+              </View>
+            </TouchableOpacity>
           </View>
 
-          {/* ── Recovery Banner (compact, high-pressure only) ───────────────── */}
+          {/* Top Banners */}
           {isRecovery && (
             <View style={styles.recoveryBanner}>
               <View style={styles.recoveryLeft}>
                 <View style={styles.recoveryIconWrap}>
-                  <Ionicons name="alert-circle" size={13} color={Colors.gold} />
+                  <Ionicons name="alert-circle" size={14} color={Colors.gold} />
                 </View>
                 <Text style={styles.recoveryMsg} numberOfLines={2}>
                   {dailyDecision?.recoveryMessage ?? t('home.recovery_banner_default')}
                 </Text>
               </View>
-              <View style={styles.driftBadge}>
-                <Text style={styles.driftNum}>{driftScore}</Text>
-                <Text style={styles.driftLabel}>{t('home.drift_label')}</Text>
-              </View>
             </View>
           )}
 
-          {/* ── Minimum Viable Day — THE dominant element ──────────────────── */}
-          {minViableDay && (
-            <View style={[styles.mvdCard, isHighPressure && styles.mvdCardPressure]}>
-              <Text style={styles.mvdLabel}>TODAY'S COMMITMENT</Text>
-              <Text style={styles.mvdText}>{minViableDay}</Text>
-            </View>
-          )}
-
-          {/* ── Must-Do ────────────────────────────────────────────────────── */}
-          {mustDoItems.length > 0 && (
-            <View style={styles.section}>
-              <Text style={styles.sectionTitle}>{t('home.must_do_title')}</Text>
-              <Card gold>
-                {mustDoItems.map((title, idx) => {
-                  const planItem = controlPlan?.plan.items.find(
-                    (i) => i.title === title && (i.type === 'goal' || i.type === 'skill'),
-                  );
-                  const urgency  = planItem ? getUrgencyLevel(planItem, nowMins) : 'none';
-
-                  // P1 fix: suppress urgency if the user is already focused on this item
-                  const isFocusing = !!activeFocus && !!planItem?.goalId &&
-                    activeFocus.goalId === planItem.goalId;
-
-                  // P2 fix: only show hint when urgency is actionable (not 'none')
-                  const hint = isFocusing
-                    ? 'In focus now'
-                    : urgency !== 'none'
-                      ? getUrgencyHint(planItem!, nowMins)
-                      : null;
-
-                  const hintIsPositive = isFocusing;
-                  const canFocus = !!planItem && !planItem.completed && !isFocusing;
-
-                  return (
-                    <TouchableOpacity
-                      key={idx}
-                      style={[styles.mustDoItem, idx > 0 && styles.mustDoItemBorder]}
-                      onPress={() => canFocus && handleStartFocusForMustDo(title)}
-                      activeOpacity={canFocus ? 0.7 : 1}
-                    >
-                      <Ionicons
-                        name={
-                          isFocusing    ? 'pulse'         :
-                          urgency === 'overdue' ? 'alert-circle' :
-                          urgency === 'urgent'  ? 'flash'        :
-                          'flash-outline'
-                        }
-                        size={13}
-                        color={
-                          isFocusing           ? Colors.success :
-                          urgency === 'overdue' ? Colors.error   :
-                          Colors.gold
-                        }
-                      />
-                      <View style={{ flex: 1 }}>
-                        <Text style={styles.mustDoText}>{title}</Text>
-                        {hint && (
-                          <Text style={[
-                            styles.mustDoHint,
-                            hintIsPositive               && styles.mustDoHintPositive,
-                            urgency === 'urgent'  && !isFocusing && styles.mustDoHintUrgent,
-                            urgency === 'overdue' && !isFocusing && styles.mustDoHintOverdue,
-                          ]}>
-                            {hint}
-                          </Text>
-                        )}
-                      </View>
-                      {canFocus && (
-                        <View style={styles.mustDoFocusBtn}>
-                          <Ionicons name="play" size={11} color={Colors.gold} />
-                        </View>
-                      )}
-                    </TouchableOpacity>
-                  );
-                })}
-              </Card>
-            </View>
-          )}
-
-          {/* ── Replan suggestion ──────────────────────────────────────────── */}
           {replanSuggested && (
             <View style={styles.replanCard}>
               <View style={styles.replanLeft}>
-                <Ionicons name="refresh-outline" size={14} color={Colors.gold} />
+                <Ionicons name="refresh-outline" size={16} color={Colors.purpleLight} />
                 <View style={{ flex: 1 }}>
                   <Text style={styles.replanTitle}>A must-do window passed</Text>
                   <Text style={styles.replanSub}>Replan the rest of today around now?</Text>
@@ -315,99 +240,129 @@ export default function HomeScreen() {
             </View>
           )}
 
-          {/* ── Critical Action (3rd priority slot, high-pressure mode) ──────── */}
-          {isHighPressure && (() => {
-            const criticalItem = controlPlan?.plan.items.find((i) => !!i.isCritical && !i.completed);
-            if (!criticalItem) return null;
-            return (
-              <Card gold style={styles.section}>
-                <View style={styles.criticalHeader}>
-                  <Ionicons name="flash" size={13} color={Colors.gold} />
-                  <Text style={styles.criticalLabel}>{t('home.todays_focus')}</Text>
-                </View>
-                <Text style={styles.criticalAction}>{criticalItem.title}</Text>
-              </Card>
-            );
-          })()}
+          {/* MAIN GRID */}
+          <View style={isDesktop ? styles.grid : styles.blockGrid}>
 
-          {/* ── "See more" gate — collapses secondary sections under pressure ── */}
-          {isHighPressure && (
-            <TouchableOpacity
-              onPress={() => setShowExpanded((v) => !v)}
-              style={styles.expandToggle}
-              activeOpacity={0.7}
-            >
-              <Text style={styles.expandToggleText}>
-                {showExpanded ? 'Collapse' : 'See everything else'}
-              </Text>
-              <Ionicons
-                name={showExpanded ? 'chevron-up' : 'chevron-down'}
-                size={13}
-                color={Colors.textMuted}
-              />
-            </TouchableOpacity>
-          )}
-
-          {/* ══════════════════════════════════════════════════════════════════
-              SECONDARY SECTIONS — visible on normal days; gated on pressure
-          ══════════════════════════════════════════════════════════════════ */}
-          {(!isHighPressure || showExpanded) && (
-            <>
-              {/* Alignment Ring */}
-              <View style={styles.ringWrap}>
-                <AlignmentRing result={alignmentResult} size={160} />
-                <View style={styles.breakdown}>
-                  <ScorePill label={t('home.score_tasks')}    value={alignmentResult.taskScore}       max={40} />
-                  <ScorePill label={t('home.score_rules')}    value={alignmentResult.ruleScore}       max={30} />
-                  <ScorePill label={t('home.score_critical')} value={alignmentResult.criticalScore}   max={20} />
-                  <ScorePill label={t('home.score_reflect')}  value={alignmentResult.reflectionScore} max={10} />
+            {/* ROW 1: Daily Commitment & Analytics */}
+            <View style={[styles.gridRow, isDesktop ? null : styles.mobileRowSwap]}>
+              {minViableDay && (
+                <View style={[styles.mvdCard, isHighPressure && styles.mvdCardPressure]}>
+                  <View>
+                    <Text style={styles.mvdLabel}>TODAY'S COMMITMENT</Text>
+                    <Text style={styles.mvdText}>{minViableDay}</Text>
+                  </View>
+                  <View style={styles.mvdGlow} />
                 </View>
+              )}
+              
+              <View style={styles.analyticsCard}>
+                 <Text style={styles.analyticsTitle}>Alignment Score</Text>
+                 <View style={styles.ringWrap}>
+                   <AlignmentRing result={alignmentResult} size={110} />
+                   <View style={styles.breakdown}>
+                     <View style={styles.scoreCol}>
+                       <Text style={styles.scoreVal}>{alignmentResult.taskScore}</Text>
+                       <Text style={styles.scoreTarget}>/40 Task</Text>
+                     </View>
+                     <View style={styles.scoreCol}>
+                       <Text style={styles.scoreVal}>{alignmentResult.ruleScore}</Text>
+                       <Text style={styles.scoreTarget}>/30 Rule</Text>
+                     </View>
+                     <View style={styles.scoreCol}>
+                       <Text style={styles.scoreVal}>{alignmentResult.criticalScore}</Text>
+                       <Text style={styles.scoreTarget}>/20 Crit</Text>
+                     </View>
+                   </View>
+                 </View>
+                 {isRecovery && (
+                   <View style={styles.driftBadge}>
+                     <Text style={styles.driftNum}>{driftScore}</Text>
+                     <Text style={styles.driftLabel}>{t('home.drift_label')}</Text>
+                   </View>
+                 )}
+              </View>
+            </View>
+
+            {/* ROW 2: Must-Dos & Focus */}
+            <View style={styles.gridRow}>
+              
+              <View style={styles.mustDoCard}>
+                <View style={styles.cardHeader}>
+                  <Ionicons name="list" size={18} color={Colors.textMuted} />
+                  <Text style={styles.cardTitle}>{t('home.must_do_title')}</Text>
+                </View>
+
+                {mustDoItems.length > 0 ? (
+                  <View style={styles.mustDoList}>
+                    {mustDoItems.map((title, idx) => {
+                      const planItem = controlPlan?.plan.items.find(
+                        (i) => i.title === title && (i.type === 'goal' || i.type === 'skill'),
+                      );
+                      const urgency  = planItem ? getUrgencyLevel(planItem, nowMins) : 'none';
+                      const isFocusing = !!activeFocus && !!planItem?.goalId && activeFocus.goalId === planItem.goalId;
+                      const hint = isFocusing ? 'In focus now' : urgency !== 'none' ? getUrgencyHint(planItem!, nowMins) : null;
+                      const canFocus = !!planItem && !planItem.completed && !isFocusing;
+
+                      return (
+                        <TouchableOpacity
+                          key={idx}
+                          style={[styles.mustDoItem, idx > 0 && styles.mustDoItemBorder]}
+                          onPress={() => canFocus && handleStartFocusForMustDo(title)}
+                          activeOpacity={canFocus ? 0.7 : 1}
+                        >
+                          <Ionicons
+                            name={isFocusing ? 'pulse' : urgency === 'overdue' ? 'alert-circle' : urgency === 'urgent' ? 'flash' : 'flash-outline'}
+                            size={16}
+                            color={isFocusing ? Colors.success : urgency === 'overdue' ? Colors.error : Colors.gold}
+                          />
+                          <View style={{ flex: 1 }}>
+                            <Text style={styles.mustDoText}>{title}</Text>
+                            {hint && (
+                              <Text style={[styles.mustDoHint, isFocusing && styles.mustDoHintPositive, urgency === 'urgent' && !isFocusing && styles.mustDoHintUrgent, urgency === 'overdue' && !isFocusing && styles.mustDoHintOverdue]}>
+                                {hint}
+                              </Text>
+                            )}
+                          </View>
+                          {canFocus && (
+                            <View style={styles.mustDoFocusBtn}>
+                              <Ionicons name="play" size={13} color={Colors.gold} />
+                            </View>
+                          )}
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                ) : (
+                  <View style={styles.emptyState}>
+                    <Text style={styles.emptyHint}>{t('home.no_plan_today')}</Text>
+                    <TouchableOpacity onPress={() => router.push('/(tabs)/plan' as any)}>
+                      <Text style={styles.emptyLink}>{t('home.go_to_plan')}</Text>
+                    </TouchableOpacity>
+                  </View>
+                )}
               </View>
 
-              {/* At-Risk Goals */}
-              {atRiskGoals.length > 0 && (
-                <View style={styles.section}>
-                  <Text style={styles.sectionTitle}>{t('home.at_risk_title')}</Text>
-                  <View style={styles.riskStrip}>
-                    {atRiskGoals.map((g) => (
-                      <View key={g.goalId} style={styles.riskChip}>
-                        <Text style={styles.riskTitle} numberOfLines={1}>{g.goalTitle}</Text>
-                        <Text style={styles.riskSub}>
-                          {t('home.at_risk_shortfall', { hours: g.shortfallHours })}
-                        </Text>
-                        <Text style={styles.riskPace}>
-                          {t('home.at_risk_pace', { hours: g.hoursNeededPerRemainingDay })}
-                        </Text>
-                      </View>
-                    ))}
-                  </View>
+              <View style={styles.focusStatsCard}>
+                <View style={styles.cardHeader}>
+                  <Ionicons name="timer" size={18} color={Colors.purpleLight} />
+                  <Text style={styles.cardTitle}>Focus Engine</Text>
                 </View>
-              )}
 
-              {/* Missed Carryover */}
-              {pendingMissed.length > 0 && (
-                <View style={styles.section}>
-                  <Text style={styles.sectionTitle}>{t('home.missed_carryover_title')}</Text>
-                  <Card elevated>
-                    {pendingMissed.map((task, idx) => (
-                      <MissedTaskRow
-                        key={task.id}
-                        task={task}
-                        isLast={idx === pendingMissed.length - 1}
-                        onRecover={() => markMissedTaskRecovered(task.id)}
-                        onDefer={() => deferMissedTask(task.id)}
-                        recoverLabel={t('home.missed_carryover_recover')}
-                        deferLabel={t('home.missed_carryover_defer')}
-                      />
-                    ))}
-                  </Card>
-                </View>
-              )}
+                {/* Critical Action */}
+                {(() => {
+                  const criticalItem = controlPlan?.plan.items.find((i) => !!i.isCritical && (!isHighPressure || !i.completed));
+                  if (!criticalItem) return null;
+                  return (
+                    <View style={styles.criticalBox}>
+                      <Text style={styles.criticalLabel}>{t('home.todays_focus')}</Text>
+                      <Text style={styles.criticalAction}>{criticalItem.title}</Text>
+                    </View>
+                  );
+                })()}
 
-              {/* Focus stats */}
-              {(todaySessionCount > 0 || activeFocus) && (
-                <Card gold style={styles.focusCard}>
-                  <View style={styles.focusRow}>
+                {/* Focus Summary */}
+                {(todaySessionCount > 0 || activeFocus) && (
+                  <View style={styles.focusSummary}>
                     <Ionicons name="flash" size={16} color={Colors.gold} />
                     <Text style={styles.focusLabel}>
                       {activeFocus
@@ -415,98 +370,111 @@ export default function HomeScreen() {
                         : t('home.focus_summary', { count: todaySessionCount, mins: todayFocusMin })}
                     </Text>
                   </View>
-                </Card>
-              )}
+                )}
 
-              {/* Distraction log */}
-              <TouchableOpacity
-                onPress={() => logDistraction()}
-                style={styles.distractionBtn}
-                activeOpacity={0.75}
-              >
-                <Ionicons name="warning-outline" size={13} color={Colors.textMuted} />
-                <Text style={styles.distractionBtnText}>
-                  {todayDistractions > 0
-                    ? t('home.distraction_count', { count: todayDistractions })
-                    : t('home.distraction_prompt')}
-                </Text>
-              </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.coachPrompt}
+                  onPress={() => router.push('/(tabs)/coach' as any)}
+                  activeOpacity={0.8}
+                >
+                  <Ionicons name="sparkles" size={16} color={Colors.purpleLight} />
+                  <Text style={styles.coachText}>{t('home.ask_coach')}</Text>
+                  <Ionicons name="arrow-forward" size={14} color={Colors.textMuted} />
+                </TouchableOpacity>
 
-              {/* Critical Action (normal mode) */}
-              {!isHighPressure && (() => {
-                const criticalItem = controlPlan?.plan.items.find((i) => !!i.isCritical);
-                if (criticalItem) {
-                  return (
-                    <Card gold style={styles.section}>
-                      <View style={styles.criticalHeader}>
-                        <Ionicons name="flash" size={13} color={Colors.gold} />
-                        <Text style={styles.criticalLabel}>{t('home.todays_focus')}</Text>
-                      </View>
-                      <Text style={styles.criticalAction}>{criticalItem.title}</Text>
-                    </Card>
-                  );
-                }
-                return (
-                  <Card style={styles.section}>
-                    <View style={styles.emptyRow}>
-                      <Text style={styles.emptyHint}>{t('home.no_plan_today')}</Text>
-                      <TouchableOpacity onPress={() => router.push('/(tabs)/plan' as any)}>
-                        <Text style={styles.emptyLink}>{t('home.go_to_plan')}</Text>
-                      </TouchableOpacity>
-                    </View>
-                  </Card>
-                );
-              })()}
+                <TouchableOpacity
+                  onPress={() => logDistraction()}
+                  style={styles.distractionBtn}
+                  activeOpacity={0.75}
+                >
+                  <Ionicons name="warning-outline" size={14} color={Colors.textMuted} />
+                  <Text style={styles.distractionBtnText}>
+                    {todayDistractions > 0 ? t('home.distraction_count', { count: todayDistractions }) : t('home.distraction_prompt')}
+                  </Text>
+                </TouchableOpacity>
 
-              {/* Coach shortcut */}
-              <TouchableOpacity
-                style={styles.coachPrompt}
-                onPress={() => router.push('/(tabs)/coach' as any)}
-                activeOpacity={0.8}
-              >
-                <View style={styles.coachIcon}>
-                  <Ionicons name="sparkles" size={14} color={Colors.gold} />
-                </View>
-                <Text style={styles.coachText}>{t('home.ask_coach')}</Text>
-                <Ionicons name="arrow-forward" size={14} color={Colors.textMuted} />
-              </TouchableOpacity>
-
-              {/* Daily Reflection */}
-              <View style={styles.section}>
-                <Text style={styles.sectionTitle}>{t('home.reflection_title')}</Text>
-                <Card elevated>
-                  <TextInput
-                    value={reflectionText}
-                    onChangeText={(text) => { setReflectionText(text); setReflectionSaved(false); }}
-                    placeholder={t('home.reflection_placeholder')}
-                    placeholderTextColor={Colors.textMuted}
-                    multiline
-                    numberOfLines={4}
-                    style={styles.reflectionInput}
-                    editable={!reflectionSaved}
-                  />
-                  {!reflectionSaved && reflectionText.trim().length > 0 && (
-                    <Button
-                      label={t('home.reflection_save')}
-                      onPress={handleSaveReflection}
-                      variant="ghost"
-                      size="sm"
-                      style={styles.reflectionBtn}
-                    />
-                  )}
-                  {reflectionSaved && (
-                    <View style={styles.reflectionSavedRow}>
-                      <Ionicons name="checkmark-circle" size={14} color={Colors.success} />
-                      <Text style={styles.reflectionSavedText}>{t('home.reflection_saved')}</Text>
-                      <TouchableOpacity onPress={() => setReflectionSaved(false)}>
-                        <Text style={styles.reflectionEdit}>{t('common.edit')}</Text>
-                      </TouchableOpacity>
-                    </View>
-                  )}
-                </Card>
               </View>
-            </>
-          )}
+
+            </View>
+
+            {/* ROW 3: Missed Carryover & At-Risk Goals */}
+            <View style={styles.gridRow}>
+               {(pendingMissed.length > 0 || !isDesktop) && (
+                 <View style={styles.bottomCard}>
+                    <View style={styles.cardHeader}>
+                      <Ionicons name="time" size={18} color={Colors.warning} />
+                      <Text style={styles.cardTitle}>{t('home.missed_carryover_title')}</Text>
+                    </View>
+                    {pendingMissed.length > 0 ? (
+                      <View style={styles.missedList}>
+                        {pendingMissed.map((task, idx) => (
+                          <MissedTaskRow
+                            key={task.id} task={task} isLast={idx === pendingMissed.length - 1}
+                            onRecover={() => markMissedTaskRecovered(task.id)}
+                            onDefer={() => deferMissedTask(task.id)}
+                            recoverLabel={t('home.missed_carryover_recover')} deferLabel={t('home.missed_carryover_defer')}
+                          />
+                        ))}
+                      </View>
+                    ) : (
+                      <Text style={styles.emptySub}>No missed tasks</Text>
+                    )}
+                 </View>
+               )}
+
+               {(atRiskGoals.length > 0 || !isDesktop) && (
+                 <View style={styles.bottomCard}>
+                    <View style={styles.cardHeader}>
+                      <Ionicons name="trending-down" size={18} color={Colors.error} />
+                      <Text style={styles.cardTitle}>{t('home.at_risk_title')}</Text>
+                    </View>
+                    {atRiskGoals.length > 0 ? (
+                      <View style={styles.riskList}>
+                        {atRiskGoals.map((g) => (
+                          <View key={g.goalId} style={styles.riskChip}>
+                            <Text style={styles.riskTitle} numberOfLines={1}>{g.goalTitle}</Text>
+                            <Text style={styles.riskSub}>{t('home.at_risk_shortfall', { hours: g.shortfallHours })}</Text>
+                          </View>
+                        ))}
+                      </View>
+                    ) : (
+                      <Text style={styles.emptySub}>No goals at risk</Text>
+                    )}
+                 </View>
+               )}
+            </View>
+
+          </View>
+
+          {/* BELOW GRID: Reflection */}
+          <View style={styles.reflectionCard}>
+            <View style={styles.cardHeader}>
+              <Ionicons name="journal" size={18} color={Colors.textMuted} />
+              <Text style={styles.cardTitle}>{t('home.reflection_title')}</Text>
+            </View>
+            <TextInput
+              value={reflectionText}
+              onChangeText={(text) => { setReflectionText(text); setReflectionSaved(false); }}
+              placeholder={t('home.reflection_placeholder')}
+              placeholderTextColor={Colors.textMuted}
+              multiline numberOfLines={4}
+              style={styles.reflectionInput}
+              editable={!reflectionSaved}
+            />
+            {!reflectionSaved && reflectionText.trim().length > 0 && (
+              <Button label={t('home.reflection_save')} onPress={handleSaveReflection} variant="ghost" size="sm" style={styles.reflectionBtn} />
+            )}
+            {reflectionSaved && (
+              <View style={styles.reflectionSavedRow}>
+                <Ionicons name="checkmark-circle" size={15} color={Colors.success} />
+                <Text style={styles.reflectionSavedText}>{t('home.reflection_saved')}</Text>
+                <TouchableOpacity onPress={() => setReflectionSaved(false)}>
+                  <Text style={styles.reflectionEdit}>{t('common.edit')}</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+          </View>
+
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -514,21 +482,17 @@ export default function HomeScreen() {
 }
 
 // ─── Missed Task Row ──────────────────────────────────────────────────────────
-
 function MissedTaskRow({
   task, isLast, onRecover, onDefer, recoverLabel, deferLabel,
 }: {
-  task: MissedTask; isLast: boolean;
-  onRecover: () => void; onDefer: () => void;
+  task: MissedTask; isLast: boolean; onRecover: () => void; onDefer: () => void;
   recoverLabel: string; deferLabel: string;
 }) {
   return (
     <View style={[missed.row, !isLast && missed.rowBorder]}>
       <View style={{ flex: 1 }}>
-        <Text style={missed.title} numberOfLines={2}>{task.title}</Text>
-        {task.goalTitle && (
-          <Text style={missed.sub}>{task.goalTitle} · {task.originalDate}</Text>
-        )}
+        <Text style={missed.title} numberOfLines={1}>{task.title}</Text>
+        {task.goalTitle && <Text style={missed.sub}>{task.goalTitle} · {task.originalDate}</Text>}
       </View>
       <View style={missed.actions}>
         <TouchableOpacity onPress={onRecover} style={missed.recoverBtn} activeOpacity={0.75}>
@@ -553,149 +517,95 @@ const missed = StyleSheet.create({
   deferText:   { fontSize: FontSize.xs, color: Colors.textMuted },
 });
 
-// ─── Score Pill ───────────────────────────────────────────────────────────────
-
-function ScorePill({ label, value, max }: { label: string; value: number; max: number }) {
-  return (
-    <View style={pill.wrap}>
-      <Text style={pill.value}>{value}</Text>
-      <Text style={pill.max}>/{max}</Text>
-      <Text style={pill.label}>{label}</Text>
-    </View>
-  );
-}
-const pill = StyleSheet.create({
-  wrap:  { alignItems: 'center', gap: 2 },
-  value: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.textPrimary },
-  max:   { fontSize: FontSize.xs, color: Colors.textMuted },
-  label: { fontSize: FontSize.xs, color: Colors.textSecondary, textTransform: 'uppercase', letterSpacing: 0.5 },
-});
-
 // ─── Styles ───────────────────────────────────────────────────────────────────
-
 const styles = StyleSheet.create({
   safe:    { flex: 1, backgroundColor: Colors.background },
   flex:    { flex: 1 },
   scroll:  { flex: 1 },
-  content: { padding: Spacing.lg, paddingBottom: Spacing.xxl, gap: Spacing.md },
+  content: { padding: Spacing.lg, paddingBottom: Spacing.xxl, gap: Spacing.xl },
 
-  header:   { gap: 2 },
-  greeting: { fontSize: FontSize.xs, color: Colors.textMuted, textTransform: 'uppercase', letterSpacing: 1 },
-  date:     { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.textPrimary },
+  header:   { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  greeting: { fontSize: FontSize.sm, color: Colors.purpleLight, textTransform: 'uppercase', letterSpacing: 1.5, fontWeight: FontWeight.semibold },
+  date:     { fontSize: FontSize.xxxl, fontWeight: FontWeight.bold, color: Colors.textPrimary, letterSpacing: -0.5 },
+  profileAvatar: { width: 44, height: 44, borderRadius: Radius.full, backgroundColor: Colors.surfaceElevated, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: Colors.border },
 
-  // Recovery banner — compact in the new layout
-  recoveryBanner: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    backgroundColor: Colors.surfaceElevated,
-    borderRadius: Radius.md, borderWidth: 1, borderColor: Colors.goldDim,
-    paddingHorizontal: Spacing.md, paddingVertical: Spacing.sm, gap: Spacing.sm,
-  },
-  recoveryLeft:    { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm, flex: 1 },
-  recoveryIconWrap:{ width: 22, height: 22, borderRadius: Radius.full, backgroundColor: Colors.goldMuted, alignItems: 'center', justifyContent: 'center' },
-  recoveryMsg:     { flex: 1, fontSize: FontSize.xs, color: Colors.textSecondary, lineHeight: 16 },
-  driftBadge:      { alignItems: 'center', minWidth: 34 },
-  driftNum:        { fontSize: FontSize.md, fontWeight: FontWeight.bold, color: Colors.gold },
-  driftLabel:      { fontSize: FontSize.xs - 1, color: Colors.textMuted, textTransform: 'uppercase', letterSpacing: 0.5 },
+  recoveryBanner: { flexDirection: 'row', alignItems: 'center', backgroundColor: Colors.surfaceElevated, borderRadius: Radius.lg, borderWidth: 1, borderColor: Colors.goldDim, padding: Spacing.md, gap: Spacing.sm },
+  recoveryLeft: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm, flex: 1 },
+  recoveryIconWrap: { width: 28, height: 28, borderRadius: Radius.full, backgroundColor: Colors.goldMuted, alignItems: 'center', justifyContent: 'center' },
+  recoveryMsg: { flex: 1, fontSize: FontSize.sm, color: Colors.textSecondary, lineHeight: 20 },
 
-  // Minimum viable day — THE dominant element
-  mvdCard: {
-    backgroundColor: Colors.surfaceElevated,
-    borderRadius: Radius.lg, borderWidth: 1, borderColor: Colors.border,
-    padding: Spacing.lg,
-  },
-  mvdCardPressure: {
-    borderColor: Colors.goldDim,
-    ...Shadow.gold,
-  },
-  mvdLabel: {
-    fontSize: FontSize.xs, color: Colors.gold,
-    textTransform: 'uppercase', letterSpacing: 1.5,
-    marginBottom: Spacing.sm, fontWeight: FontWeight.semibold,
-  },
-  mvdText: {
-    fontSize: FontSize.xxl, fontWeight: FontWeight.bold,
-    color: Colors.textPrimary, lineHeight: 32,
-  },
+  replanCard: { backgroundColor: Colors.surfaceElevated, borderRadius: Radius.lg, borderWidth: 1, borderColor: Colors.purpleMuted, padding: Spacing.lg, gap: Spacing.md },
+  replanLeft: { flexDirection: 'row', alignItems: 'flex-start', gap: Spacing.md },
+  replanTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.textPrimary },
+  replanSub: { fontSize: FontSize.sm, color: Colors.textMuted, marginTop: 4 },
+  replanActions: { flexDirection: 'row', alignItems: 'center', gap: Spacing.lg, paddingLeft: 34 },
+  replanYes: { backgroundColor: Colors.purple, borderRadius: Radius.md, paddingHorizontal: Spacing.lg, paddingVertical: 8 },
+  replanYesText: { fontSize: FontSize.sm, fontWeight: FontWeight.bold, color: Colors.textInverse },
+  replanNo: { fontSize: FontSize.sm, color: Colors.textMuted },
 
-  // Must-do
-  mustDoItem:        { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm, paddingVertical: Spacing.sm },
-  mustDoItemBorder:  { borderTopWidth: 1, borderTopColor: Colors.goldDim },
-  mustDoText:        { fontSize: FontSize.sm, color: Colors.textPrimary, fontWeight: FontWeight.medium },
-  mustDoHint:        { fontSize: FontSize.xs, color: Colors.textMuted, marginTop: 2 },
+  grid: { gap: Spacing.lg },
+  blockGrid: { gap: Spacing.lg },
+  gridRow: { flexDirection: Platform.OS === 'web' ? 'row' : 'column', gap: Spacing.lg },
+  mobileRowSwap: { flexDirection: 'column-reverse' },
+
+  // Cards
+  mvdCard: { flex: 2, backgroundColor: '#18151D', borderRadius: Radius.xl, padding: Spacing.xl, justifyContent: 'center', overflow: 'hidden', borderWidth: 1, borderColor: 'rgba(157, 78, 221, 0.2)' },
+  mvdCardPressure: { borderColor: Colors.goldDim, ...Shadow.gold },
+  mvdLabel: { fontSize: FontSize.xs, color: Colors.purpleLight, textTransform: 'uppercase', letterSpacing: 2, marginBottom: Spacing.sm, fontWeight: FontWeight.bold },
+  mvdText: { fontSize: FontSize.display, fontWeight: FontWeight.bold, color: Colors.textPrimary, lineHeight: 48, letterSpacing: -1 },
+  mvdGlow: { position: 'absolute', right: -50, bottom: -50, width: 200, height: 200, borderRadius: 100, backgroundColor: Colors.purpleMuted, opacity: 0.3 },
+
+  analyticsCard: { flex: 1, backgroundColor: Colors.surfaceElevated, borderRadius: Radius.xl, padding: Spacing.lg, justifyContent: 'center', borderWidth: 1, borderColor: Colors.border },
+  analyticsTitle: { fontSize: FontSize.xs, color: Colors.textMuted, textTransform: 'uppercase', letterSpacing: 1, marginBottom: Spacing.md, textAlign: 'center' },
+  ringWrap: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: Spacing.lg },
+  breakdown: { gap: Spacing.sm },
+  scoreCol: { alignItems: 'flex-start' },
+  scoreVal: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.textPrimary },
+  scoreTarget: { fontSize: FontSize.xs, color: Colors.textSecondary },
+  driftBadge: { position: 'absolute', top: Spacing.sm, right: Spacing.sm, alignItems: 'center', backgroundColor: Colors.surfaceHigh, paddingHorizontal: 8, paddingVertical: 4, borderRadius: Radius.md },
+  driftNum: { fontSize: FontSize.md, fontWeight: FontWeight.bold, color: Colors.gold },
+  driftLabel: { fontSize: 10, color: Colors.textMuted, textTransform: 'uppercase' },
+
+  cardHeader: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm, marginBottom: Spacing.md },
+  cardTitle: { fontSize: FontSize.sm, color: Colors.textPrimary, fontWeight: FontWeight.semibold, textTransform: 'uppercase', letterSpacing: 1 },
+
+  mustDoCard: { flex: 1, backgroundColor: Colors.surfaceElevated, borderRadius: Radius.xl, padding: Spacing.lg, borderWidth: 1, borderColor: Colors.border, minHeight: 200 },
+  mustDoList: { gap: 0 },
+  mustDoItem: { flexDirection: 'row', alignItems: 'center', gap: Spacing.md, paddingVertical: Spacing.md },
+  mustDoItemBorder: { borderTopWidth: 1, borderTopColor: Colors.borderLight },
+  mustDoText: { fontSize: FontSize.md, color: Colors.textPrimary, fontWeight: FontWeight.medium },
+  mustDoHint: { fontSize: FontSize.xs, color: Colors.textMuted, marginTop: 4 },
   mustDoHintPositive:{ color: Colors.success },
   mustDoHintUrgent:  { color: Colors.gold },
   mustDoHintOverdue: { color: Colors.error },
-  mustDoFocusBtn:    { width: 24, height: 24, borderRadius: Radius.full, backgroundColor: Colors.goldMuted, alignItems: 'center', justifyContent: 'center' },
+  mustDoFocusBtn: { width: 32, height: 32, borderRadius: Radius.full, backgroundColor: Colors.goldMuted, alignItems: 'center', justifyContent: 'center' },
+  emptyState: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: Spacing.sm },
+  emptyHint: { fontSize: FontSize.sm, color: Colors.textMuted },
+  emptyLink: { fontSize: FontSize.sm, color: Colors.gold },
 
-  // Replan card
-  replanCard: {
-    backgroundColor: Colors.surfaceElevated,
-    borderRadius: Radius.md, borderWidth: 1, borderColor: Colors.goldDim,
-    padding: Spacing.md, gap: Spacing.sm,
-  },
-  replanLeft:    { flexDirection: 'row', alignItems: 'flex-start', gap: Spacing.sm },
-  replanTitle:   { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.textPrimary },
-  replanSub:     { fontSize: FontSize.xs, color: Colors.textMuted, marginTop: 2, lineHeight: 17 },
-  replanActions: { flexDirection: 'row', alignItems: 'center', gap: Spacing.md, paddingLeft: 22 },
-  replanYes:     { backgroundColor: Colors.gold, borderRadius: Radius.sm, paddingHorizontal: Spacing.md, paddingVertical: 5 },
-  replanYesText: { fontSize: FontSize.xs, fontWeight: FontWeight.bold, color: Colors.textInverse },
-  replanNo:      { fontSize: FontSize.xs, color: Colors.textMuted },
-
-  // "See more" gate
-  expandToggle: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-    gap: Spacing.xs, paddingVertical: Spacing.sm,
-  },
-  expandToggleText: { fontSize: FontSize.xs, color: Colors.textMuted },
-
-  // Alignment ring (in secondary zone)
-  ringWrap:  { alignItems: 'center', paddingVertical: Spacing.md, gap: Spacing.md },
-  breakdown: { flexDirection: 'row', justifyContent: 'space-around', width: '100%', paddingHorizontal: Spacing.md },
-
-  // At-risk goals
-  riskStrip: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm },
-  riskChip:  { flex: 1, minWidth: 120, backgroundColor: Colors.surfaceElevated, borderRadius: Radius.md, borderWidth: 1, borderColor: Colors.border, padding: Spacing.sm, gap: 2 },
-  riskTitle: { fontSize: FontSize.xs, fontWeight: FontWeight.semibold, color: Colors.textPrimary },
-  riskSub:   { fontSize: FontSize.xs, color: Colors.gold },
-  riskPace:  { fontSize: FontSize.xs, color: Colors.textMuted },
-
-  // Focus stats
-  focusCard:  { gap: 0 },
-  focusRow:   { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
+  focusStatsCard: { flex: 1, backgroundColor: Colors.surfaceElevated, borderRadius: Radius.xl, padding: Spacing.lg, borderWidth: 1, borderColor: Colors.border, gap: Spacing.lg },
+  criticalBox: { backgroundColor: 'rgba(201, 168, 76, 0.08)', borderRadius: Radius.lg, padding: Spacing.md, borderWidth: 1, borderColor: Colors.goldMuted },
+  criticalLabel: { fontSize: FontSize.xs, color: Colors.gold, fontWeight: FontWeight.semibold, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 4 },
+  criticalAction: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.textPrimary },
+  focusSummary: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm, backgroundColor: Colors.surfaceHigh, padding: Spacing.md, borderRadius: Radius.lg },
   focusLabel: { fontSize: FontSize.sm, color: Colors.gold, fontWeight: FontWeight.medium, flex: 1 },
-
-  // Distraction
-  distractionBtn: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-    gap: Spacing.xs, paddingVertical: Spacing.xs + 2,
-    backgroundColor: Colors.surfaceElevated, borderRadius: Radius.md,
-    borderWidth: 1, borderColor: Colors.border,
-  },
+  coachPrompt: { flexDirection: 'row', alignItems: 'center', backgroundColor: Colors.surfaceHigh, padding: Spacing.md, borderRadius: Radius.lg, gap: Spacing.sm },
+  coachText: { flex: 1, fontSize: FontSize.sm, color: Colors.textPrimary, fontWeight: FontWeight.medium },
+  distractionBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: Spacing.xs, paddingVertical: Spacing.sm, backgroundColor: Colors.surfaceHigh, borderRadius: Radius.md },
   distractionBtnText: { fontSize: FontSize.xs, color: Colors.textMuted },
 
-  // Critical action
-  section:        { gap: Spacing.xs },
-  sectionTitle:   { fontSize: FontSize.xs, color: Colors.textMuted, textTransform: 'uppercase', letterSpacing: 1 },
-  criticalHeader: { flexDirection: 'row', alignItems: 'center', gap: Spacing.xs, marginBottom: Spacing.xs },
-  criticalLabel:  { fontSize: FontSize.xs, color: Colors.gold, fontWeight: FontWeight.semibold, textTransform: 'uppercase', letterSpacing: 1 },
-  criticalAction: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.textPrimary, lineHeight: 28 },
-  emptyRow:       { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  emptyHint:      { fontSize: FontSize.sm, color: Colors.textMuted },
-  emptyLink:      { fontSize: FontSize.sm, color: Colors.gold },
+  bottomCard: { flex: 1, backgroundColor: Colors.surfaceElevated, borderRadius: Radius.xl, padding: Spacing.lg, borderWidth: 1, borderColor: Colors.border },
+  missedList: { gap: 0 },
+  riskList: { gap: Spacing.sm },
+  riskChip: { backgroundColor: Colors.surfaceHigh, borderRadius: Radius.md, padding: Spacing.md, gap: 4 },
+  riskTitle: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.textPrimary },
+  riskSub: { fontSize: FontSize.xs, color: Colors.gold },
+  emptySub: { fontSize: FontSize.sm, color: Colors.textMuted, fontStyle: 'italic' },
 
-  // Coach
-  coachPrompt: {
-    flexDirection: 'row', alignItems: 'center', gap: Spacing.sm,
-    backgroundColor: Colors.surfaceElevated, borderRadius: Radius.md,
-    borderWidth: 1, borderColor: Colors.goldDim, padding: Spacing.md,
-  },
-  coachIcon: { width: 28, height: 28, borderRadius: Radius.full, backgroundColor: Colors.goldMuted, alignItems: 'center', justifyContent: 'center' },
-  coachText: { flex: 1, fontSize: FontSize.sm, color: Colors.textSecondary },
-
-  // Reflection
-  reflectionInput:     { color: Colors.textPrimary, fontSize: FontSize.md, lineHeight: 24, minHeight: 90, textAlignVertical: 'top' },
-  reflectionBtn:       { alignSelf: 'flex-end', marginTop: Spacing.sm },
-  reflectionSavedRow:  { flexDirection: 'row', alignItems: 'center', gap: Spacing.xs, marginTop: Spacing.sm },
-  reflectionSavedText: { fontSize: FontSize.sm, color: Colors.success, flex: 1 },
-  reflectionEdit:      { fontSize: FontSize.sm, color: Colors.gold },
+  reflectionCard: { backgroundColor: Colors.surfaceElevated, borderRadius: Radius.xl, padding: Spacing.lg, borderWidth: 1, borderColor: Colors.border },
+  reflectionInput: { color: Colors.textPrimary, fontSize: FontSize.md, lineHeight: 24, minHeight: 100, textAlignVertical: 'top', backgroundColor: Colors.surfaceHigh, borderRadius: Radius.md, padding: Spacing.md },
+  reflectionBtn: { alignSelf: 'flex-end', marginTop: Spacing.md },
+  reflectionSavedRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm, marginTop: Spacing.md, backgroundColor: Colors.successMuted, padding: Spacing.sm, borderRadius: Radius.md },
+  reflectionSavedText: { fontSize: FontSize.sm, color: Colors.success, flex: 1, fontWeight: FontWeight.medium },
+  reflectionEdit: { fontSize: FontSize.sm, color: Colors.textPrimary },
 });
