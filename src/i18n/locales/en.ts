@@ -85,6 +85,23 @@ const en = {
     // Critical action card
     todays_focus: "Today's Focus",
     go_to_plan: 'Go to Plan →',
+    // Behavior engine — recovery banner
+    recovery_banner_title: 'Recovery Mode',
+    recovery_banner_default: 'You have unfinished business from previous days.',
+    // Behavior engine — missed carryover
+    missed_carryover_title: 'Still Pending',
+    missed_carryover_recover: 'Mark Done',
+    missed_carryover_defer: 'Defer',
+    missed_none: 'Nothing carried over. Clean slate.',
+    // Behavior engine — at-risk goals
+    at_risk_title: 'At Risk This Week',
+    at_risk_shortfall: '{{hours}}h behind',
+    at_risk_pace: '{{hours}}h/day to recover',
+    // Behavior engine — must-do
+    must_do_title: "Today's Must-Do",
+    minimum_viable_day: 'Minimum win:',
+    // Drift
+    drift_label: 'Drift',
     // Coach shortcut
     ask_coach: 'Ask your Coach…',
     // Daily reflection

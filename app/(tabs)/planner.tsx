@@ -150,7 +150,6 @@ export function ControlDailyView() {
   const generateControlPlanAction = useAppStore((s) => s.generateControlPlanAction);
   const toggleControlPlanItem  = useAppStore((s) => s.toggleControlPlanItem);
   const reschedulePlan         = useAppStore((s) => s.reschedulePlan);
-  const setActiveNudge         = useAppStore((s) => s.setActiveNudge);
   const dismissNudge           = useAppStore((s) => s.dismissNudge);
   const snoozeNudge            = useAppStore((s) => s.snoozeNudge);
   const startFocus             = useAppStore((s) => s.startFocus);
@@ -162,37 +161,19 @@ export function ControlDailyView() {
   const [showReasons, setShowReasons] = useState(false);
   const [focusItem, setFocusItem] = useState<PlanItem | null>(null);
 
-  // Current time in minutes for "now" detection
+  // Clock tick for "NOW" badge — nudge firing now lives in checkEnforcementTick
   const [nowMins, setNowMins] = useState(() => {
     const d = new Date();
     return d.getHours() * 60 + d.getMinutes();
   });
 
-  // Nudge + clock ticker (every 60s)
   useEffect(() => {
     const interval = setInterval(() => {
       const d = new Date();
-      const mins = d.getHours() * 60 + d.getMinutes();
-      setNowMins(mins);
-
-      if (!controlPlan) return;
-      const nowStr = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
-
-      // Find first pending nudge at current time
-      for (const nudge of controlPlan.nudgeSchedule) {
-        if (nudge.triggerTime === nowStr) {
-          // Check if snoozed
-          if (nudge.snoozedUntil && nudge.snoozedUntil > nowStr) continue;
-          // Check if the item is already completed
-          const item = controlPlan.plan.items.find((i) => i.id === nudge.itemId);
-          if (item?.completed) continue;
-          setActiveNudge(nudge);
-          break;
-        }
-      }
+      setNowMins(d.getHours() * 60 + d.getMinutes());
     }, 60_000);
     return () => clearInterval(interval);
-  }, [controlPlan]);
+  }, []);
 
   const handleGenerate = useCallback(() => {
     if (!goals.length) {

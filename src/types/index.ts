@@ -337,6 +337,60 @@ export interface DailyReflection {
   createdAt: string;
 }
 
+// ─── Behavior Engine — Missed Tasks & Daily Decision ─────────────────────────
+
+/**
+ * A work-type plan item that was not completed on its scheduled day.
+ * Archived automatically when a new day's plan is generated.
+ * status:
+ *   pending   — still needs attention
+ *   recovered — completed in a subsequent session
+ *   deferred  — user explicitly moved it out of the queue
+ */
+export interface MissedTask {
+  id: string;
+  title: string;
+  type: PlanItemType;
+  goalId?: string;
+  goalTitle?: string;
+  isCritical: boolean;
+  energyRequired?: 'high' | 'medium' | 'low';
+  originalDate: string;     // YYYY-MM-DD — the day it was missed
+  status: 'pending' | 'recovered' | 'deferred';
+}
+
+/**
+ * Per-goal weekly progress assessment.
+ * isAtRisk = true when the goal cannot realistically hit its weekly target
+ * given logged hours and days remaining.
+ */
+export interface GoalRiskAssessment {
+  goalId: string;
+  goalTitle: string;
+  weeklyHoursTarget: number;
+  loggedHoursThisWeek: number;
+  shortfallHours: number;
+  daysRemainingInWeek: number;
+  isAtRisk: boolean;
+  hoursNeededPerRemainingDay: number;
+}
+
+/**
+ * Output of the daily decision engine.
+ * Answers: what matters today, what is at risk, what was missed, am I drifting?
+ */
+export interface DailyDecision {
+  date: string;
+  mustDoItems: string[];              // Titles of the top non-negotiable items
+  atRiskGoals: GoalRiskAssessment[];  // Only goals that are actively at risk
+  missedCarryover: MissedTask[];      // Pending missed tasks from last 7 days
+  minimumViableDay: string;           // Human-readable "win condition" for today
+  driftScore: number;                 // 0–100: 0 = on track, 100 = severe drift
+  isInRecoveryMode: boolean;          // true when drift is significant
+  recoveryMessage?: string;           // Contextual message for recovery banner
+  generatedAt: string;
+}
+
 // ─── Alignment Score ──────────────────────────────────────────────────────────
 
 export interface AlignmentInput {

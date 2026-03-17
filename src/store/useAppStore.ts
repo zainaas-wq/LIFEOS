@@ -23,7 +23,17 @@ import type {
   DistractionLog,
   NudgeItem,
   AlignmentResult,
+  MissedTask,
+  DailyDecision,
 } from '../types';
+import {
+  computeDailyDecision,
+  extractMissedTasksFromPlan,
+} from '../ai/dailyDecisionEngine';
+import {
+  buildBehavioralNudge,
+  getOverdueMustDo,
+} from '../ai/enforcementEngine';
 import * as goalsService from '../services/goalsService';
 import * as skillPlansService from '../services/skillPlansService';
 import * as scheduleService from '../services/scheduleService';
@@ -101,6 +111,16 @@ interface AppStore {
   controlPlan: ControlDailyPlan | null;
   distractionLogs: DistractionLog[];
   activeNudge: NudgeItem | null;
+
+  // ── Behavior engine ───────────────────────────────────────────────────────
+  missedTasks: MissedTask[];
+  dailyDecision: DailyDecision | null;
+
+  // ── Enforcement layer ─────────────────────────────────────────────────────
+  replanSuggested: boolean;
+  lastReplanItemId: string | null;         // which item triggered the replan card
+  dismissedReplanForItemIds: string[];     // item IDs whose replan was dismissed
+  enforcementFiredIds: string[];           // nudge IDs fired today (prevents re-firing)
 
   // ── Seed loaded flag ──────────────────────────────────────────────────────
   seedLoaded: boolean;
@@ -190,6 +210,17 @@ interface AppStore {
   dismissNudge: () => void;
   snoozeNudge: (mins: number) => void;
 
+  // Behavior engine
+  archiveMissedTasksFromPlan: (date: string) => void;
+  markMissedTaskRecovered: (id: string) => void;
+  deferMissedTask: (id: string) => void;
+  computeDailyDecisionAction: (date: string) => void;
+
+  // Enforcement layer
+  checkEnforcementTick: (nowMins: number) => void;
+  dismissReplanSuggestion: () => void;
+  archiveEnforcementDay: () => void;  // call on new day to reset fired IDs
+
   // Cloud sync
   hydrateFromCloud: (userId: string) => Promise<void>;
   saveProgressSnapshot: (result: AlignmentResult, date: string) => Promise<void>;
@@ -226,6 +257,12 @@ export const useAppStore = create<AppStore>()(
       controlPlan: null,
       distractionLogs: [],
       activeNudge: null,
+      missedTasks: [],
+      dailyDecision: null,
+      replanSuggested: false,
+      lastReplanItemId: null,
+      dismissedReplanForItemIds: [],
+      enforcementFiredIds: [],
       seedLoaded: false,
 
       // ── Auth ────────────────────────────────────────────────────────────────
@@ -646,15 +683,24 @@ export const useAppStore = create<AppStore>()(
 
       generateControlPlanAction: (date) => {
         const { goals, scheduleEvents, skillPlans, rules, profile, session, isGuestMode } = get();
+
+        // Archive missed tasks from the PREVIOUS plan before overwriting it.
+        // This must happen before set({ controlPlan }) so we read the old plan.
+        get().archiveMissedTasksFromPlan(date);
+
         const { fixedStart, fixedEnd } = parseFixedWindow(
           profile?.fixedScheduleStart,
           profile?.fixedScheduleEnd,
         );
         const plan = generateControlPlan(goals, scheduleEvents, skillPlans, rules, date, undefined, fixedStart, fixedEnd);
-        set({ controlPlan: plan });
+        // Clear replan dismissals — new plan = fresh state.
+        set({ controlPlan: plan, replanSuggested: false, dismissedReplanForItemIds: [], lastReplanItemId: null });
         if (session && !isGuestMode) {
           planService.upsertDailyPlan(session.user.id, plan).catch(console.warn);
         }
+
+        // Recompute behavioral snapshot with the new plan.
+        get().computeDailyDecisionAction(date);
       },
 
       toggleControlPlanItem: (itemId) => {
@@ -724,6 +770,130 @@ export const useAppStore = create<AppStore>()(
             activeNudge: { ...s.activeNudge, snoozedUntil: `${h}:${m}` },
           };
         }),
+
+      // ── Behavior Engine ──────────────────────────────────────────────────────
+
+      archiveMissedTasksFromPlan: (date) => {
+        const { controlPlan, missedTasks, goals } = get();
+        // Only archive when the stored plan is for a DIFFERENT (past) date.
+        if (!controlPlan || controlPlan.date >= date) return;
+
+        const goalTitles: Record<string, string> = {};
+        for (const g of goals) goalTitles[g.id] = g.title;
+
+        const newMissed = extractMissedTasksFromPlan(
+          controlPlan,
+          controlPlan.date,
+          missedTasks,
+          goalTitles,
+        );
+        if (newMissed.length > 0) {
+          set((s) => ({ missedTasks: [...newMissed, ...s.missedTasks] }));
+        }
+      },
+
+      markMissedTaskRecovered: (id) => {
+        set((s) => ({
+          missedTasks: s.missedTasks.map((t) =>
+            t.id === id ? { ...t, status: 'recovered' } : t,
+          ),
+        }));
+        // P0 fix: recompute decision so recovery banner + carryover list update immediately
+        get().computeDailyDecisionAction(getTodayDate());
+      },
+
+      deferMissedTask: (id) => {
+        set((s) => ({
+          missedTasks: s.missedTasks.map((t) =>
+            t.id === id ? { ...t, status: 'deferred' } : t,
+          ),
+        }));
+        // P0 fix: same — reflect the change immediately
+        get().computeDailyDecisionAction(getTodayDate());
+      },
+
+      computeDailyDecisionAction: (date) => {
+        const { goals, focusSessions, missedTasks, controlPlan } = get();
+        const decision = computeDailyDecision(
+          date,
+          goals,
+          focusSessions,
+          missedTasks,
+          controlPlan,
+        );
+        set({ dailyDecision: decision });
+      },
+
+      // ── Enforcement tick ─────────────────────────────────────────────────────
+
+      checkEnforcementTick: (nowMins) => {
+        const {
+          dailyDecision,
+          controlPlan,
+          activeNudge,
+          enforcementFiredIds,
+          dismissedReplanForItemIds,
+          replanSuggested,
+        } = get();
+
+        // Never interrupt an already-active nudge — let the user dismiss first.
+        if (activeNudge) return;
+
+        const firedSet  = new Set(enforcementFiredIds);
+        const hours     = Math.floor(nowMins / 60);
+        const mins      = nowMins % 60;
+        const nowStr    = `${String(hours).padStart(2, '0')}:${String(mins).padStart(2, '0')}`;
+
+        // ── 1. Schedule-based nudges (formerly in planner.tsx interval) ──────
+        //    Runs centrally so nudges appear on every tab, not just planner.
+        if (controlPlan) {
+          for (const nudge of controlPlan.nudgeSchedule) {
+            if (nudge.triggerTime !== nowStr) continue;
+            if (nudge.snoozedUntil && nudge.snoozedUntil > nowStr) continue;
+            const item = controlPlan.plan.items.find((i) => i.id === nudge.itemId);
+            if (item?.completed) continue;
+            if (firedSet.has(nudge.id)) continue;
+            firedSet.add(nudge.id);
+            set({ activeNudge: nudge, enforcementFiredIds: Array.from(firedSet) });
+            return; // one nudge at a time
+          }
+        }
+
+        // ── 2. Overdue must-do → replan suggestion ───────────────────────────
+        //    P0 fix: respects dismissed items — won't bounce every 60 seconds.
+        const mustDoTitles   = dailyDecision?.mustDoItems ?? [];
+        const overdueMustDo  = getOverdueMustDo(mustDoTitles, controlPlan, nowMins);
+        if (overdueMustDo && !replanSuggested) {
+          const dismissedSet = new Set(dismissedReplanForItemIds);
+          if (!dismissedSet.has(overdueMustDo.id)) {
+            set({ replanSuggested: true, lastReplanItemId: overdueMustDo.id });
+          }
+        }
+
+        // ── 3. Behavioral nudges (drift, missed critical, must-do urgent) ─────
+        const nudge = buildBehavioralNudge(dailyDecision, controlPlan, nowMins, firedSet);
+        if (nudge) {
+          firedSet.add(nudge.id);
+          set({ activeNudge: nudge, enforcementFiredIds: Array.from(firedSet) });
+        }
+      },
+
+      // P0 fix: records which item triggered this dismissal — won't resurface
+      // for that item until the day resets or the plan is regenerated.
+      dismissReplanSuggestion: () => {
+        const { lastReplanItemId, dismissedReplanForItemIds } = get();
+        set({
+          replanSuggested: false,
+          dismissedReplanForItemIds: lastReplanItemId
+            ? [...dismissedReplanForItemIds, lastReplanItemId]
+            : dismissedReplanForItemIds,
+          lastReplanItemId: null,
+        });
+      },
+
+      // Called when a new day begins (from tabs layout on mount with date mismatch).
+      archiveEnforcementDay: () =>
+        set({ enforcementFiredIds: [], dismissedReplanForItemIds: [], lastReplanItemId: null, replanSuggested: false }),
 
       // ── Cloud sync ───────────────────────────────────────────────────────────
 
@@ -797,6 +967,12 @@ export const useAppStore = create<AppStore>()(
           controlPlan: null,
           distractionLogs: [],
           activeNudge: null,
+          missedTasks: [],
+          dailyDecision: null,
+          replanSuggested: false,
+          lastReplanItemId: null,
+          dismissedReplanForItemIds: [],
+          enforcementFiredIds: [],
           seedLoaded: false,
           // aiApiKey intentionally preserved
         }),
@@ -860,4 +1036,8 @@ export const useAIContext = () =>
     focusSessions: s.focusSessions,
     currentPlan: s.controlPlan?.plan,
     todayDate: getTodayDate(),
+    // Behavioral signals for coach context
+    missedTasksCount: s.missedTasks.filter((t) => t.status === 'pending').length,
+    driftScore: s.dailyDecision?.driftScore ?? 0,
+    isInRecoveryMode: s.dailyDecision?.isInRecoveryMode ?? false,
   }));
