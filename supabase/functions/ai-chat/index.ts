@@ -604,7 +604,7 @@ Deno.serve(async (req: Request) => {
   }
 
   const supabaseUrl     = Deno.env.get('SUPABASE_URL');
-  const supabaseAnonKey = Deno.env.get('SUPABASE_ANON_KEY');
+  const supabaseAnonKey = Deno.env.get('ANON_KEY');
   if (!supabaseUrl || !supabaseAnonKey) {
     return errorResponse('Server misconfigured', 'provider_error', 500);
   }
@@ -646,7 +646,7 @@ Deno.serve(async (req: Request) => {
   }
 
   // ── Admin client (needed for memory fetch, tier resolution, quota, usage log)
-  const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
+  const serviceRoleKey = Deno.env.get('SERVICE_ROLE_KEY');
   const adminClient    = serviceRoleKey ? createClient(supabaseUrl, serviceRoleKey) : null;
 
   // ── Fetch user memory + resolve tier in parallel (independent DB lookups) ─
