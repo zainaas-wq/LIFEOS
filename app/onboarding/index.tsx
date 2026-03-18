@@ -201,7 +201,7 @@ export default function OnboardingScreen() {
     });
 
     track('onboarding_completed');
-    router.replace('/(tabs)/home');
+    router.replace('/');
   };
 
   const progressWidth = progressAnim.interpolate({

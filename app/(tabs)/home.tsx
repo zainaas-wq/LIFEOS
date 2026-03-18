@@ -8,8 +8,7 @@ import {
   TouchableOpacity,
   KeyboardAvoidingView,
   Platform,
-  useWindowDimensions,
-} from 'react-native';import { SafeAreaView } from 'react-native-safe-area-context';
+  useWindowDimensions,} from 'react-native';import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
@@ -82,7 +81,7 @@ export default function HomeScreen() {
   const mustDoItems   = dailyDecision?.mustDoItems ?? [];
   const isRecovery    = dailyDecision?.isInRecoveryMode ?? false;
   const driftScore    = dailyDecision?.driftScore ?? 0;
-  const minViableDay  = dailyDecision?.minimumViableDay;
+  const minViableDay  = dailyDecision?.minViableDay ?? null;
 
   // High-pressure = recovery mode OR any must-do item has urgency
   const isHighPressure = useMemo(() => {
@@ -132,7 +131,6 @@ export default function HomeScreen() {
 
   // ── Handlers ──────────────────────────────────────────────────────────────
 
-  // P1 fix: guard against overwriting an active focus session
   const handleStartFocusForMustDo = (title: string) => {
     if (activeFocus) return;
     if (!controlPlan) return;
@@ -177,8 +175,8 @@ export default function HomeScreen() {
                 'home.greeting_evening';
   const greetingName = profile?.name ? `, ${profile.name}` : '';
   const greetingText = `${t(greetingKey)}${greetingName}`;
-  const { width } = useWindowDimensions();
-  const isDesktop = width >= 768; // breakpoint for grid
+
+  const [showSecondary, setShowSecondary] = useState(false);
 
   // ── Render ────────────────────────────────────────────────────────────────
   return (
@@ -211,7 +209,7 @@ export default function HomeScreen() {
             <View style={styles.recoveryBanner}>
               <View style={styles.recoveryLeft}>
                 <View style={styles.recoveryIconWrap}>
-                  <Ionicons name="alert-circle" size={14} color={Colors.gold} />
+                  <Ionicons name="alert-circle" size={14} color={Colors.error} />
                 </View>
                 <Text style={styles.recoveryMsg} numberOfLines={2}>
                   {dailyDecision?.recoveryMessage ?? t('home.recovery_banner_default')}
@@ -226,7 +224,7 @@ export default function HomeScreen() {
                 <Ionicons name="refresh-outline" size={16} color={Colors.purpleLight} />
                 <View style={{ flex: 1 }}>
                   <Text style={styles.replanTitle}>A must-do window passed</Text>
-                  <Text style={styles.replanSub}>Replan the rest of today around now?</Text>
+                  <Text style={styles.replanSub}>Replan the rest of today to stay on track?</Text>
                 </View>
               </View>
               <View style={styles.replanActions}>
@@ -234,41 +232,114 @@ export default function HomeScreen() {
                   <Text style={styles.replanYesText}>Replan</Text>
                 </TouchableOpacity>
                 <TouchableOpacity onPress={dismissReplanSuggestion} activeOpacity={0.7}>
-                  <Text style={styles.replanNo}>Not now</Text>
+                  <Text style={styles.replanNo}>Ignore</Text>
                 </TouchableOpacity>
               </View>
             </View>
           )}
 
-          {/* MAIN GRID */}
-          <View style={isDesktop ? styles.grid : styles.blockGrid}>
+          {/* ══════════════════════════════════════════════════════════════════
+              TOP ROW: DOMINANT MVD
+          ══════════════════════════════════════════════════════════════════ */}
+          {minViableDay && (
+            <View style={styles.mvdSection}>
+              <Text style={styles.mvdLabel}>TODAY'S COMMITMENT</Text>
+              <Text style={styles.mvdText}>{minViableDay}</Text>
+            </View>
+          )}
 
-            {/* ROW 1: Daily Commitment & Analytics */}
-            <View style={[styles.gridRow, isDesktop ? null : styles.mobileRowSwap]}>
-              {minViableDay && (
-                <View style={[styles.mvdCard, isHighPressure && styles.mvdCardPressure]}>
-                  <View>
-                    <Text style={styles.mvdLabel}>TODAY'S COMMITMENT</Text>
-                    <Text style={styles.mvdText}>{minViableDay}</Text>
-                  </View>
-                  <View style={styles.mvdGlow} />
-                </View>
-              )}
-              
-              <View style={styles.analyticsCard}>
-                 <Text style={styles.analyticsTitle}>Alignment Score</Text>
+          {/* ══════════════════════════════════════════════════════════════════
+              MIDDLE ROW: MUST-DO ITEMS (MAX 3)
+          ══════════════════════════════════════════════════════════════════ */}
+          <View style={styles.mustDoSection}>
+            {mustDoItems.length > 0 ? (
+              <View style={styles.mustDoList}>
+                {mustDoItems.slice(0, 3).map((title, idx) => {
+                  const planItem = controlPlan?.plan.items.find(
+                    (i) => i.title === title && (i.type === 'goal' || i.type === 'skill'),
+                  );
+                  const urgency  = planItem ? getUrgencyLevel(planItem, nowMins) : 'none';
+                  const isFocusing = !!activeFocus && !!planItem?.goalId && activeFocus.goalId === planItem.goalId;
+                  
+                  // NO default hint text when urgency = none
+                  let hint = null;
+                  if (isFocusing) hint = 'In focus now';
+                  else if (urgency !== 'none') hint = getUrgencyHint(planItem!, nowMins);
+
+                  const canFocus = !!planItem && !planItem.completed && !isFocusing;
+
+                  // Subtly color-coded
+                  const dotColor = isFocusing ? Colors.success : urgency === 'overdue' ? Colors.error : urgency === 'urgent' ? Colors.gold : Colors.purpleMuted;
+
+                  return (
+                    <TouchableOpacity
+                      key={idx}
+                      style={[styles.mustDoItem, isFocusing && styles.mustDoItemFocusing]}
+                      onPress={() => canFocus && handleStartFocusForMustDo(title)}
+                      activeOpacity={canFocus ? 0.7 : 1}
+                    >
+                      <View style={[styles.urgencyDot, { backgroundColor: dotColor }]} />
+                      
+                      <View style={{ flex: 1 }}>
+                        <Text style={[styles.mustDoText, isFocusing && styles.mustDoTextFocus]}>{title}</Text>
+                        {hint && (
+                          <Text style={[
+                            styles.mustDoHint,
+                            isFocusing && styles.mustDoHintPositive,
+                            urgency === 'urgent' && !isFocusing && styles.mustDoHintUrgent,
+                            urgency === 'overdue' && !isFocusing && styles.mustDoHintOverdue
+                          ]}>
+                            {hint}
+                          </Text>
+                        )}
+                      </View>
+                      
+                      {canFocus && (
+                        <View style={styles.mustDoStartBtn}>
+                          <Text style={styles.mustDoStartText}>Start</Text>
+                        </View>
+                      )}
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            ) : (
+              <View style={styles.emptyState}>
+                <Ionicons name="checkmark-circle" size={32} color={Colors.success} style={{marginBottom: 8}} />
+                <Text style={styles.emptyHint}>No mandatory actions left today.</Text>
+                <TouchableOpacity onPress={() => router.push('/(tabs)/plan' as any)}>
+                  <Text style={styles.emptyLink}>View full plan →</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+          </View>
+
+          {/* ══════════════════════════════════════════════════════════════════
+              BOTTOM ROW: SECONDARY INFORMATION, COLLAPSED IF UNDER PRESSURE
+          ══════════════════════════════════════════════════════════════════ */}
+          
+          {isHighPressure && !showSecondary ? (
+            <TouchableOpacity onPress={() => setShowSecondary(true)} style={styles.revealBtn} activeOpacity={0.7}>
+              <Text style={styles.revealText}>Hold to reveal secondary stats</Text>
+              <Ionicons name="chevron-down" size={14} color={Colors.textMuted} />
+            </TouchableOpacity>
+          ) : (
+            <View style={styles.secondarySection}>
+              {/* Analytics */}
+              <View style={styles.statsCard}>
+                 <Text style={styles.statsTitle}>ALIGNMENT SCORE</Text>
                  <View style={styles.ringWrap}>
-                   <AlignmentRing result={alignmentResult} size={110} />
+                   <AlignmentRing result={alignmentResult} size={90} />
                    <View style={styles.breakdown}>
-                     <View style={styles.scoreCol}>
+                     <View style={styles.scoreRow}>
                        <Text style={styles.scoreVal}>{alignmentResult.taskScore}</Text>
-                       <Text style={styles.scoreTarget}>/40 Task</Text>
+                       <Text style={styles.scoreTarget}>/40 Tasks</Text>
                      </View>
-                     <View style={styles.scoreCol}>
+                     <View style={styles.scoreRow}>
                        <Text style={styles.scoreVal}>{alignmentResult.ruleScore}</Text>
-                       <Text style={styles.scoreTarget}>/30 Rule</Text>
+                       <Text style={styles.scoreTarget}>/30 Rules</Text>
                      </View>
-                     <View style={styles.scoreCol}>
+                     <View style={styles.scoreRow}>
                        <Text style={styles.scoreVal}>{alignmentResult.criticalScore}</Text>
                        <Text style={styles.scoreTarget}>/20 Crit</Text>
                      </View>
@@ -281,199 +352,86 @@ export default function HomeScreen() {
                    </View>
                  )}
               </View>
-            </View>
 
-            {/* ROW 2: Must-Dos & Focus */}
-            <View style={styles.gridRow}>
-              
-              <View style={styles.mustDoCard}>
-                <View style={styles.cardHeader}>
-                  <Ionicons name="list" size={18} color={Colors.textMuted} />
-                  <Text style={styles.cardTitle}>{t('home.must_do_title')}</Text>
+              {/* Missed / At Risk */}
+              {(pendingMissed.length > 0 || atRiskGoals.length > 0) && (
+                <View style={styles.splitCards}>
+                  {pendingMissed.length > 0 && (
+                    <View style={styles.subCard}>
+                       <View style={styles.cardHeader}>
+                         <Ionicons name="time" size={16} color={Colors.warning} />
+                         <Text style={styles.cardTitle}>{t('home.missed_carryover_title')}</Text>
+                       </View>
+                       <View style={styles.missedList}>
+                         {pendingMissed.map((task, idx) => (
+                           <MissedTaskRow
+                             key={task.id} task={task} isLast={idx === pendingMissed.length - 1}
+                             onRecover={() => markMissedTaskRecovered(task.id)}
+                             onDefer={() => deferMissedTask(task.id)}
+                             recoverLabel={t('home.missed_carryover_recover')} deferLabel={t('home.missed_carryover_defer')}
+                           />
+                         ))}
+                       </View>
+                    </View>
+                  )}
+
+                  {atRiskGoals.length > 0 && (
+                    <View style={styles.subCard}>
+                       <View style={styles.cardHeader}>
+                         <Ionicons name="trending-down" size={16} color={Colors.error} />
+                         <Text style={styles.cardTitle}>{t('home.at_risk_title')}</Text>
+                       </View>
+                       <View style={styles.riskList}>
+                         {atRiskGoals.map((g) => (
+                           <View key={g.goalId} style={styles.riskChip}>
+                             <Text style={styles.riskTitle} numberOfLines={1}>{g.goalTitle}</Text>
+                             <Text style={styles.riskSub}>{t('home.at_risk_shortfall', { hours: g.shortfallHours })}</Text>
+                           </View>
+                         ))}
+                       </View>
+                    </View>
+                  )}
                 </View>
+              )}
 
-                {mustDoItems.length > 0 ? (
-                  <View style={styles.mustDoList}>
-                    {mustDoItems.map((title, idx) => {
-                      const planItem = controlPlan?.plan.items.find(
-                        (i) => i.title === title && (i.type === 'goal' || i.type === 'skill'),
-                      );
-                      const urgency  = planItem ? getUrgencyLevel(planItem, nowMins) : 'none';
-                      const isFocusing = !!activeFocus && !!planItem?.goalId && activeFocus.goalId === planItem.goalId;
-                      const hint = isFocusing ? 'In focus now' : urgency !== 'none' ? getUrgencyHint(planItem!, nowMins) : null;
-                      const canFocus = !!planItem && !planItem.completed && !isFocusing;
-
-                      return (
-                        <TouchableOpacity
-                          key={idx}
-                          style={[styles.mustDoItem, idx > 0 && styles.mustDoItemBorder]}
-                          onPress={() => canFocus && handleStartFocusForMustDo(title)}
-                          activeOpacity={canFocus ? 0.7 : 1}
-                        >
-                          <Ionicons
-                            name={isFocusing ? 'pulse' : urgency === 'overdue' ? 'alert-circle' : urgency === 'urgent' ? 'flash' : 'flash-outline'}
-                            size={16}
-                            color={isFocusing ? Colors.success : urgency === 'overdue' ? Colors.error : Colors.gold}
-                          />
-                          <View style={{ flex: 1 }}>
-                            <Text style={styles.mustDoText}>{title}</Text>
-                            {hint && (
-                              <Text style={[styles.mustDoHint, isFocusing && styles.mustDoHintPositive, urgency === 'urgent' && !isFocusing && styles.mustDoHintUrgent, urgency === 'overdue' && !isFocusing && styles.mustDoHintOverdue]}>
-                                {hint}
-                              </Text>
-                            )}
-                          </View>
-                          {canFocus && (
-                            <View style={styles.mustDoFocusBtn}>
-                              <Ionicons name="play" size={13} color={Colors.gold} />
-                            </View>
-                          )}
-                        </TouchableOpacity>
-                      );
-                    })}
-                  </View>
-                ) : (
-                  <View style={styles.emptyState}>
-                    <Text style={styles.emptyHint}>{t('home.no_plan_today')}</Text>
-                    <TouchableOpacity onPress={() => router.push('/(tabs)/plan' as any)}>
-                      <Text style={styles.emptyLink}>{t('home.go_to_plan')}</Text>
+              {/* Reflection */}
+              <View style={styles.reflectionCard}>
+                <View style={styles.cardHeader}>
+                  <Ionicons name="journal" size={16} color={Colors.textMuted} />
+                  <Text style={styles.cardTitle}>{t('home.reflection_title')}</Text>
+                </View>
+                <TextInput
+                  value={reflectionText}
+                  onChangeText={(text) => { setReflectionText(text); setReflectionSaved(false); }}
+                  placeholder={t('home.reflection_placeholder')}
+                  placeholderTextColor={Colors.textMuted}
+                  multiline numberOfLines={3}
+                  style={styles.reflectionInput}
+                  editable={!reflectionSaved}
+                />
+                {!reflectionSaved && reflectionText.trim().length > 0 && (
+                  <TouchableOpacity style={styles.reflectionBtn} onPress={handleSaveReflection}>
+                    <Text style={styles.reflectionBtnText}>Save</Text>
+                  </TouchableOpacity>
+                )}
+                {reflectionSaved && (
+                  <View style={styles.reflectionSavedRow}>
+                    <Ionicons name="checkmark-circle" size={15} color={Colors.success} />
+                    <Text style={styles.reflectionSavedText}>{t('home.reflection_saved')}</Text>
+                    <TouchableOpacity onPress={() => setReflectionSaved(false)}>
+                      <Text style={styles.reflectionEdit}>{t('common.edit')}</Text>
                     </TouchableOpacity>
                   </View>
                 )}
               </View>
-
-              <View style={styles.focusStatsCard}>
-                <View style={styles.cardHeader}>
-                  <Ionicons name="timer" size={18} color={Colors.purpleLight} />
-                  <Text style={styles.cardTitle}>Focus Engine</Text>
-                </View>
-
-                {/* Critical Action */}
-                {(() => {
-                  const criticalItem = controlPlan?.plan.items.find((i) => !!i.isCritical && (!isHighPressure || !i.completed));
-                  if (!criticalItem) return null;
-                  return (
-                    <View style={styles.criticalBox}>
-                      <Text style={styles.criticalLabel}>{t('home.todays_focus')}</Text>
-                      <Text style={styles.criticalAction}>{criticalItem.title}</Text>
-                    </View>
-                  );
-                })()}
-
-                {/* Focus Summary */}
-                {(todaySessionCount > 0 || activeFocus) && (
-                  <View style={styles.focusSummary}>
-                    <Ionicons name="flash" size={16} color={Colors.gold} />
-                    <Text style={styles.focusLabel}>
-                      {activeFocus
-                        ? t('home.focus_active_label', { title: activeFocus.goalTitle })
-                        : t('home.focus_summary', { count: todaySessionCount, mins: todayFocusMin })}
-                    </Text>
-                  </View>
-                )}
-
-                <TouchableOpacity
-                  style={styles.coachPrompt}
-                  onPress={() => router.push('/(tabs)/coach' as any)}
-                  activeOpacity={0.8}
-                >
-                  <Ionicons name="sparkles" size={16} color={Colors.purpleLight} />
-                  <Text style={styles.coachText}>{t('home.ask_coach')}</Text>
-                  <Ionicons name="arrow-forward" size={14} color={Colors.textMuted} />
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  onPress={() => logDistraction()}
-                  style={styles.distractionBtn}
-                  activeOpacity={0.75}
-                >
-                  <Ionicons name="warning-outline" size={14} color={Colors.textMuted} />
-                  <Text style={styles.distractionBtnText}>
-                    {todayDistractions > 0 ? t('home.distraction_count', { count: todayDistractions }) : t('home.distraction_prompt')}
-                  </Text>
-                </TouchableOpacity>
-
-              </View>
-
+              
+              {isHighPressure && (
+                 <TouchableOpacity onPress={() => setShowSecondary(false)} style={styles.collapseBtn}>
+                    <Text style={styles.revealText}>Hide</Text>
+                 </TouchableOpacity>
+              )}
             </View>
-
-            {/* ROW 3: Missed Carryover & At-Risk Goals */}
-            <View style={styles.gridRow}>
-               {(pendingMissed.length > 0 || !isDesktop) && (
-                 <View style={styles.bottomCard}>
-                    <View style={styles.cardHeader}>
-                      <Ionicons name="time" size={18} color={Colors.warning} />
-                      <Text style={styles.cardTitle}>{t('home.missed_carryover_title')}</Text>
-                    </View>
-                    {pendingMissed.length > 0 ? (
-                      <View style={styles.missedList}>
-                        {pendingMissed.map((task, idx) => (
-                          <MissedTaskRow
-                            key={task.id} task={task} isLast={idx === pendingMissed.length - 1}
-                            onRecover={() => markMissedTaskRecovered(task.id)}
-                            onDefer={() => deferMissedTask(task.id)}
-                            recoverLabel={t('home.missed_carryover_recover')} deferLabel={t('home.missed_carryover_defer')}
-                          />
-                        ))}
-                      </View>
-                    ) : (
-                      <Text style={styles.emptySub}>No missed tasks</Text>
-                    )}
-                 </View>
-               )}
-
-               {(atRiskGoals.length > 0 || !isDesktop) && (
-                 <View style={styles.bottomCard}>
-                    <View style={styles.cardHeader}>
-                      <Ionicons name="trending-down" size={18} color={Colors.error} />
-                      <Text style={styles.cardTitle}>{t('home.at_risk_title')}</Text>
-                    </View>
-                    {atRiskGoals.length > 0 ? (
-                      <View style={styles.riskList}>
-                        {atRiskGoals.map((g) => (
-                          <View key={g.goalId} style={styles.riskChip}>
-                            <Text style={styles.riskTitle} numberOfLines={1}>{g.goalTitle}</Text>
-                            <Text style={styles.riskSub}>{t('home.at_risk_shortfall', { hours: g.shortfallHours })}</Text>
-                          </View>
-                        ))}
-                      </View>
-                    ) : (
-                      <Text style={styles.emptySub}>No goals at risk</Text>
-                    )}
-                 </View>
-               )}
-            </View>
-
-          </View>
-
-          {/* BELOW GRID: Reflection */}
-          <View style={styles.reflectionCard}>
-            <View style={styles.cardHeader}>
-              <Ionicons name="journal" size={18} color={Colors.textMuted} />
-              <Text style={styles.cardTitle}>{t('home.reflection_title')}</Text>
-            </View>
-            <TextInput
-              value={reflectionText}
-              onChangeText={(text) => { setReflectionText(text); setReflectionSaved(false); }}
-              placeholder={t('home.reflection_placeholder')}
-              placeholderTextColor={Colors.textMuted}
-              multiline numberOfLines={4}
-              style={styles.reflectionInput}
-              editable={!reflectionSaved}
-            />
-            {!reflectionSaved && reflectionText.trim().length > 0 && (
-              <Button label={t('home.reflection_save')} onPress={handleSaveReflection} variant="ghost" size="sm" style={styles.reflectionBtn} />
-            )}
-            {reflectionSaved && (
-              <View style={styles.reflectionSavedRow}>
-                <Ionicons name="checkmark-circle" size={15} color={Colors.success} />
-                <Text style={styles.reflectionSavedText}>{t('home.reflection_saved')}</Text>
-                <TouchableOpacity onPress={() => setReflectionSaved(false)}>
-                  <Text style={styles.reflectionEdit}>{t('common.edit')}</Text>
-                </TouchableOpacity>
-              </View>
-            )}
-          </View>
+          )}
 
         </ScrollView>
       </KeyboardAvoidingView>
@@ -525,87 +483,90 @@ const styles = StyleSheet.create({
   content: { padding: Spacing.lg, paddingBottom: Spacing.xxl, gap: Spacing.xl },
 
   header:   { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  greeting: { fontSize: FontSize.sm, color: Colors.purpleLight, textTransform: 'uppercase', letterSpacing: 1.5, fontWeight: FontWeight.semibold },
-  date:     { fontSize: FontSize.xxxl, fontWeight: FontWeight.bold, color: Colors.textPrimary, letterSpacing: -0.5 },
-  profileAvatar: { width: 44, height: 44, borderRadius: Radius.full, backgroundColor: Colors.surfaceElevated, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: Colors.border },
+  greeting: { fontSize: FontSize.xs, color: Colors.textMuted, textTransform: 'uppercase', letterSpacing: 1.5, fontWeight: FontWeight.semibold },
+  date:     { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.textPrimary, letterSpacing: -0.5 },
+  profileAvatar: { width: 40, height: 40, borderRadius: Radius.full, backgroundColor: Colors.surfaceElevated, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: Colors.border },
 
-  recoveryBanner: { flexDirection: 'row', alignItems: 'center', backgroundColor: Colors.surfaceElevated, borderRadius: Radius.lg, borderWidth: 1, borderColor: Colors.goldDim, padding: Spacing.md, gap: Spacing.sm },
+  recoveryBanner: { flexDirection: 'row', alignItems: 'center', backgroundColor: Colors.errorMuted, borderRadius: Radius.md, borderWidth: 1, borderColor: '#5C2D2D', padding: Spacing.md, gap: Spacing.sm },
   recoveryLeft: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm, flex: 1 },
-  recoveryIconWrap: { width: 28, height: 28, borderRadius: Radius.full, backgroundColor: Colors.goldMuted, alignItems: 'center', justifyContent: 'center' },
-  recoveryMsg: { flex: 1, fontSize: FontSize.sm, color: Colors.textSecondary, lineHeight: 20 },
+  recoveryIconWrap: { width: 28, height: 28, borderRadius: Radius.full, backgroundColor: 'rgba(248, 113, 113, 0.2)', alignItems: 'center', justifyContent: 'center' },
+  recoveryMsg: { flex: 1, fontSize: FontSize.sm, color: Colors.textPrimary, lineHeight: 20 },
 
-  replanCard: { backgroundColor: Colors.surfaceElevated, borderRadius: Radius.lg, borderWidth: 1, borderColor: Colors.purpleMuted, padding: Spacing.lg, gap: Spacing.md },
+  replanCard: { backgroundColor: Colors.surfaceElevated, borderRadius: Radius.md, borderWidth: 1, borderColor: Colors.purpleMuted, padding: Spacing.lg, gap: Spacing.md },
   replanLeft: { flexDirection: 'row', alignItems: 'flex-start', gap: Spacing.md },
   replanTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.textPrimary },
   replanSub: { fontSize: FontSize.sm, color: Colors.textMuted, marginTop: 4 },
   replanActions: { flexDirection: 'row', alignItems: 'center', gap: Spacing.lg, paddingLeft: 34 },
-  replanYes: { backgroundColor: Colors.purple, borderRadius: Radius.md, paddingHorizontal: Spacing.lg, paddingVertical: 8 },
+  replanYes: { backgroundColor: Colors.purple, borderRadius: Radius.sm, paddingHorizontal: Spacing.lg, paddingVertical: 6 },
   replanYesText: { fontSize: FontSize.sm, fontWeight: FontWeight.bold, color: Colors.textInverse },
   replanNo: { fontSize: FontSize.sm, color: Colors.textMuted },
 
-  grid: { gap: Spacing.lg },
-  blockGrid: { gap: Spacing.lg },
-  gridRow: { flexDirection: Platform.OS === 'web' ? 'row' : 'column', gap: Spacing.lg },
-  mobileRowSwap: { flexDirection: 'column-reverse' },
+  // MVD (Dominant, emotional)
+  mvdSection: { marginVertical: Spacing.sm },
+  mvdLabel: { fontSize: FontSize.sm, color: Colors.purpleLight, textTransform: 'uppercase', letterSpacing: 2, marginBottom: Spacing.xs, fontWeight: FontWeight.bold },
+  mvdText: { fontSize: FontSize.display, fontWeight: FontWeight.bold, color: Colors.textPrimary, lineHeight: 46, letterSpacing: -1 },
 
-  // Cards
-  mvdCard: { flex: 2, backgroundColor: '#18151D', borderRadius: Radius.xl, padding: Spacing.xl, justifyContent: 'center', overflow: 'hidden', borderWidth: 1, borderColor: 'rgba(157, 78, 221, 0.2)' },
-  mvdCardPressure: { borderColor: Colors.goldDim, ...Shadow.gold },
-  mvdLabel: { fontSize: FontSize.xs, color: Colors.purpleLight, textTransform: 'uppercase', letterSpacing: 2, marginBottom: Spacing.sm, fontWeight: FontWeight.bold },
-  mvdText: { fontSize: FontSize.display, fontWeight: FontWeight.bold, color: Colors.textPrimary, lineHeight: 48, letterSpacing: -1 },
-  mvdGlow: { position: 'absolute', right: -50, bottom: -50, width: 200, height: 200, borderRadius: 100, backgroundColor: Colors.purpleMuted, opacity: 0.3 },
-
-  analyticsCard: { flex: 1, backgroundColor: Colors.surfaceElevated, borderRadius: Radius.xl, padding: Spacing.lg, justifyContent: 'center', borderWidth: 1, borderColor: Colors.border },
-  analyticsTitle: { fontSize: FontSize.xs, color: Colors.textMuted, textTransform: 'uppercase', letterSpacing: 1, marginBottom: Spacing.md, textAlign: 'center' },
-  ringWrap: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: Spacing.lg },
-  breakdown: { gap: Spacing.sm },
-  scoreCol: { alignItems: 'flex-start' },
-  scoreVal: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.textPrimary },
-  scoreTarget: { fontSize: FontSize.xs, color: Colors.textSecondary },
-  driftBadge: { position: 'absolute', top: Spacing.sm, right: Spacing.sm, alignItems: 'center', backgroundColor: Colors.surfaceHigh, paddingHorizontal: 8, paddingVertical: 4, borderRadius: Radius.md },
-  driftNum: { fontSize: FontSize.md, fontWeight: FontWeight.bold, color: Colors.gold },
-  driftLabel: { fontSize: 10, color: Colors.textMuted, textTransform: 'uppercase' },
-
-  cardHeader: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm, marginBottom: Spacing.md },
-  cardTitle: { fontSize: FontSize.sm, color: Colors.textPrimary, fontWeight: FontWeight.semibold, textTransform: 'uppercase', letterSpacing: 1 },
-
-  mustDoCard: { flex: 1, backgroundColor: Colors.surfaceElevated, borderRadius: Radius.xl, padding: Spacing.lg, borderWidth: 1, borderColor: Colors.border, minHeight: 200 },
-  mustDoList: { gap: 0 },
-  mustDoItem: { flexDirection: 'row', alignItems: 'center', gap: Spacing.md, paddingVertical: Spacing.md },
-  mustDoItemBorder: { borderTopWidth: 1, borderTopColor: Colors.borderLight },
-  mustDoText: { fontSize: FontSize.md, color: Colors.textPrimary, fontWeight: FontWeight.medium },
+  // Must-do Tasks
+  mustDoSection: { gap: Spacing.md },
+  mustDoList: { gap: Spacing.sm },
+  mustDoItem: { 
+    flexDirection: 'row', alignItems: 'center', gap: Spacing.md, 
+    padding: Spacing.md, backgroundColor: Colors.surfaceElevated,
+    borderRadius: Radius.lg, borderWidth: 1, borderColor: Colors.border 
+  },
+  mustDoItemFocusing: { borderColor: Colors.success, backgroundColor: 'rgba(74, 222, 128, 0.05)' },
+  urgencyDot: { width: 8, height: 8, borderRadius: 4 },
+  mustDoText: { fontSize: FontSize.lg, color: Colors.textPrimary, fontWeight: FontWeight.medium },
+  mustDoTextFocus: { color: Colors.success, fontWeight: FontWeight.bold },
   mustDoHint: { fontSize: FontSize.xs, color: Colors.textMuted, marginTop: 4 },
   mustDoHintPositive:{ color: Colors.success },
   mustDoHintUrgent:  { color: Colors.gold },
   mustDoHintOverdue: { color: Colors.error },
-  mustDoFocusBtn: { width: 32, height: 32, borderRadius: Radius.full, backgroundColor: Colors.goldMuted, alignItems: 'center', justifyContent: 'center' },
-  emptyState: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: Spacing.sm },
-  emptyHint: { fontSize: FontSize.sm, color: Colors.textMuted },
-  emptyLink: { fontSize: FontSize.sm, color: Colors.gold },
+  mustDoStartBtn: { 
+    backgroundColor: Colors.purpleMuted, paddingHorizontal: Spacing.md, paddingVertical: 6, 
+    borderRadius: Radius.full, borderWidth: 1, borderColor: Colors.purple 
+  },
+  mustDoStartText: { fontSize: FontSize.sm, color: Colors.purpleLight, fontWeight: FontWeight.bold },
+  
+  emptyState: { paddingVertical: Spacing.xl, alignItems: 'center', justifyContent: 'center', backgroundColor: Colors.surfaceElevated, borderRadius: Radius.lg, borderWidth: 1, borderColor: Colors.border, borderStyle: 'dashed' },
+  emptyHint: { fontSize: FontSize.md, color: Colors.textPrimary, fontWeight: FontWeight.medium },
+  emptyLink: { fontSize: FontSize.sm, color: Colors.textMuted, marginTop: Spacing.sm },
 
-  focusStatsCard: { flex: 1, backgroundColor: Colors.surfaceElevated, borderRadius: Radius.xl, padding: Spacing.lg, borderWidth: 1, borderColor: Colors.border, gap: Spacing.lg },
-  criticalBox: { backgroundColor: 'rgba(201, 168, 76, 0.08)', borderRadius: Radius.lg, padding: Spacing.md, borderWidth: 1, borderColor: Colors.goldMuted },
-  criticalLabel: { fontSize: FontSize.xs, color: Colors.gold, fontWeight: FontWeight.semibold, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 4 },
-  criticalAction: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.textPrimary },
-  focusSummary: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm, backgroundColor: Colors.surfaceHigh, padding: Spacing.md, borderRadius: Radius.lg },
-  focusLabel: { fontSize: FontSize.sm, color: Colors.gold, fontWeight: FontWeight.medium, flex: 1 },
-  coachPrompt: { flexDirection: 'row', alignItems: 'center', backgroundColor: Colors.surfaceHigh, padding: Spacing.md, borderRadius: Radius.lg, gap: Spacing.sm },
-  coachText: { flex: 1, fontSize: FontSize.sm, color: Colors.textPrimary, fontWeight: FontWeight.medium },
-  distractionBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: Spacing.xs, paddingVertical: Spacing.sm, backgroundColor: Colors.surfaceHigh, borderRadius: Radius.md },
-  distractionBtnText: { fontSize: FontSize.xs, color: Colors.textMuted },
+  // Secondary layer
+  revealBtn: { alignItems: 'center', paddingVertical: Spacing.md, gap: 4, opacity: 0.6 },
+  revealText: { fontSize: FontSize.xs, color: Colors.textMuted, textTransform: 'uppercase', letterSpacing: 1 },
+  collapseBtn: { alignItems: 'center', paddingVertical: Spacing.md },
+  
+  secondarySection: { gap: Spacing.xl, marginTop: Spacing.lg, opacity: 0.9 },
 
-  bottomCard: { flex: 1, backgroundColor: Colors.surfaceElevated, borderRadius: Radius.xl, padding: Spacing.lg, borderWidth: 1, borderColor: Colors.border },
+  // Analytics
+  statsCard: { backgroundColor: Colors.surfaceElevated, borderRadius: Radius.lg, padding: Spacing.lg, borderWidth: 1, borderColor: Colors.border, position: 'relative' },
+  statsTitle: { fontSize: FontSize.xs, color: Colors.textMuted, textTransform: 'uppercase', letterSpacing: 1, marginBottom: Spacing.md },
+  ringWrap: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-start', gap: Spacing.xl },
+  breakdown: { gap: Spacing.sm },
+  scoreRow: { flexDirection: 'row', alignItems: 'baseline', gap: Spacing.sm },
+  scoreVal: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.textPrimary, width: 28 },
+  scoreTarget: { fontSize: FontSize.xs, color: Colors.textSecondary },
+  driftBadge: { position: 'absolute', top: Spacing.md, right: Spacing.md, alignItems: 'flex-end' },
+  driftNum: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.gold },
+  driftLabel: { fontSize: 9, color: Colors.textMuted, textTransform: 'uppercase', letterSpacing: 1 },
+
+  splitCards: { flexDirection: Platform.OS === 'web' ? 'row' : 'column', gap: Spacing.lg },
+  subCard: { flex: 1, backgroundColor: Colors.surfaceElevated, borderRadius: Radius.lg, padding: Spacing.md, borderWidth: 1, borderColor: Colors.border },
+  cardHeader: { flexDirection: 'row', alignItems: 'center', gap: Spacing.xs, marginBottom: Spacing.sm },
+  cardTitle: { fontSize: FontSize.xs, color: Colors.textSecondary, fontWeight: FontWeight.semibold, textTransform: 'uppercase', letterSpacing: 1 },
+  
   missedList: { gap: 0 },
   riskList: { gap: Spacing.sm },
-  riskChip: { backgroundColor: Colors.surfaceHigh, borderRadius: Radius.md, padding: Spacing.md, gap: 4 },
+  riskChip: { backgroundColor: Colors.surface, borderRadius: Radius.md, padding: Spacing.sm, gap: 2, borderWidth: 1, borderColor: Colors.borderLight },
   riskTitle: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.textPrimary },
-  riskSub: { fontSize: FontSize.xs, color: Colors.gold },
-  emptySub: { fontSize: FontSize.sm, color: Colors.textMuted, fontStyle: 'italic' },
+  riskSub: { fontSize: FontSize.xs, color: Colors.error },
 
-  reflectionCard: { backgroundColor: Colors.surfaceElevated, borderRadius: Radius.xl, padding: Spacing.lg, borderWidth: 1, borderColor: Colors.border },
-  reflectionInput: { color: Colors.textPrimary, fontSize: FontSize.md, lineHeight: 24, minHeight: 100, textAlignVertical: 'top', backgroundColor: Colors.surfaceHigh, borderRadius: Radius.md, padding: Spacing.md },
-  reflectionBtn: { alignSelf: 'flex-end', marginTop: Spacing.md },
-  reflectionSavedRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm, marginTop: Spacing.md, backgroundColor: Colors.successMuted, padding: Spacing.sm, borderRadius: Radius.md },
+  reflectionCard: { backgroundColor: Colors.surfaceElevated, borderRadius: Radius.lg, padding: Spacing.md, borderWidth: 1, borderColor: Colors.border },
+  reflectionInput: { color: Colors.textPrimary, fontSize: FontSize.md, lineHeight: 22, minHeight: 80, textAlignVertical: 'top' },
+  reflectionBtn: { alignSelf: 'flex-end', marginTop: Spacing.sm, backgroundColor: Colors.surfaceHigh, paddingHorizontal: Spacing.md, paddingVertical: 6, borderRadius: Radius.sm },
+  reflectionBtnText: { color: Colors.textPrimary, fontSize: FontSize.sm },
+  reflectionSavedRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm, marginTop: Spacing.sm, backgroundColor: Colors.successMuted, padding: Spacing.sm, borderRadius: Radius.sm },
   reflectionSavedText: { fontSize: FontSize.sm, color: Colors.success, flex: 1, fontWeight: FontWeight.medium },
   reflectionEdit: { fontSize: FontSize.sm, color: Colors.textPrimary },
 });

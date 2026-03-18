@@ -11,6 +11,10 @@ export const Colors = {
   goldDim: '#8A6E2F',
   goldMuted: 'rgba(201, 168, 76, 0.15)',
 
+  purple: '#9D4EDD',
+  purpleLight: '#C77DFF',
+  purpleMuted: 'rgba(157, 78, 221, 0.15)',
+
   textPrimary: '#F0F0F0',
   textSecondary: '#888888',
   textMuted: '#555555',
@@ -78,6 +82,13 @@ export const Shadow = {
   },
   gold: {
     shadowColor: '#C9A84C',
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.3,
+    shadowRadius: 16,
+    elevation: 8,
+  },
+  purple: {
+    shadowColor: '#9D4EDD',
     shadowOffset: { width: 0, height: 0 },
     shadowOpacity: 0.3,
     shadowRadius: 16,

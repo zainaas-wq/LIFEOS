@@ -47,13 +47,10 @@ import { UpgradeModal } from '../../src/components/upgrade/UpgradeModal';
 // ─── Quick action prompts (English — sent to AI) ──────────────────────────────
 
 const QUICK_ACTION_PROMPTS = [
-  'Build my daily plan for today',
-  'Rebuild my weekly plan',
-  'Review my week — what went well and what should I focus on next week',
-  'I missed some tasks — help me recover today intelligently',
-  'I keep getting distracted — give me an anti-distraction strategy',
-  'Which of my goals am I behind on and what should I prioritize?',
-  'Give me a monthly review of my progress and goals this month',
+  'Help me fix my day. I missed some tasks and need to recover intelligently.',
+  'I feel stuck and overwhelmed. Help me break things down so I can start.',
+  'My schedule is too packed. Help me rebalance and drop what is not essential.',
+  'What is the single most important thing I should do right now based on my goals?',
 ];
 
 // ─── Context strip ────────────────────────────────────────────────────────────
@@ -330,13 +327,10 @@ export default function CoachScreen() {
   // Quick actions with feature gating
   type QA = { label: string; prompt: string; feature: PlanFeature; event: AnalyticsEventName; icon: string };
   const quickActions: QA[] = [
-    { label: t('coach.quick_actions.build_day'),          prompt: QUICK_ACTION_PROMPTS[0], feature: 'ai_build_day',      event: 'build_day_used',     icon: 'calendar-outline'   },
-    { label: t('coach.quick_actions.recover_today'),      prompt: QUICK_ACTION_PROMPTS[3], feature: 'ai_recover_day',    event: 'recover_day_used',   icon: 'refresh-outline'    },
-    { label: t('coach.quick_actions.improve_progress'),   prompt: QUICK_ACTION_PROMPTS[5], feature: 'ai_chat',           event: 'ai_chat_used',       icon: 'trending-up-outline' },
-    { label: t('coach.quick_actions.reduce_distraction'), prompt: QUICK_ACTION_PROMPTS[4], feature: 'ai_chat',           event: 'ai_chat_used',       icon: 'shield-outline'     },
-    { label: t('coach.quick_actions.rebuild_week'),       prompt: QUICK_ACTION_PROMPTS[1], feature: 'ai_weekly_plan',    event: 'ai_chat_used',       icon: 'grid-outline'       },
-    { label: t('coach.quick_actions.weekly_review'),      prompt: QUICK_ACTION_PROMPTS[2], feature: 'ai_weekly_plan',    event: 'weekly_review_used', icon: 'bar-chart-outline'  },
-    { label: t('coach.quick_actions.monthly_review'),     prompt: QUICK_ACTION_PROMPTS[6], feature: 'ai_monthly_review', event: 'ai_chat_used',       icon: 'calendar'           },
+    { label: 'Fix my day', prompt: QUICK_ACTION_PROMPTS[0], feature: 'ai_recover_day', event: 'recover_day_used', icon: 'refresh-outline' },
+    { label: 'I feel stuck', prompt: QUICK_ACTION_PROMPTS[1], feature: 'ai_chat', event: 'ai_chat_used', icon: 'hand-left-outline' },
+    { label: 'Rebalance my schedule', prompt: QUICK_ACTION_PROMPTS[2], feature: 'ai_weekly_plan', event: 'ai_chat_used', icon: 'options-outline' },
+    { label: 'What should I do now?', prompt: QUICK_ACTION_PROMPTS[3], feature: 'ai_chat', event: 'ai_chat_used', icon: 'flash-outline' },
   ];
 
   const getClient = useCallback((): AIClient => {
@@ -419,7 +413,7 @@ export default function CoachScreen() {
             <View>
               <Text style={s.headerTitle}>LifeOS Intelligence</Text>
               <Text style={s.headerSub}>
-                {session && !isGuestMode ? 'AI-powered · context-aware' : 'Local mode'}
+                {session && !isGuestMode ? 'System Intelligence Active' : 'Local Intelligence'}
               </Text>
             </View>
           </View>
@@ -458,40 +452,9 @@ export default function CoachScreen() {
               />
             )}
 
-            {/* Voice + Image premium affordances */}
-            <View style={s.inputRow}>
-              <TouchableOpacity
-                style={s.inputAffordance}
-                onPress={handleVoice}
-                activeOpacity={0.8}
-              >
-                <View style={s.affordanceIcon}>
-                  <Ionicons name="mic-outline" size={18} color={Colors.gold} />
-                </View>
-                <Text style={s.affordanceTitle}>Voice Input</Text>
-                <Text style={s.affordanceSub}>Speak your plan</Text>
-                <View style={s.comingSoonBadge}>
-                  <Text style={s.comingSoonText}>SOON</Text>
-                </View>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={s.inputAffordance}
-                onPress={handleImageImport}
-                activeOpacity={0.8}
-              >
-                <View style={s.affordanceIcon}>
-                  <Ionicons name="image-outline" size={18} color={Colors.gold} />
-                </View>
-                <Text style={s.affordanceTitle}>Import Schedule</Text>
-                <Text style={s.affordanceSub}>Photo → AI plan</Text>
-              </TouchableOpacity>
-            </View>
-
-            {/* Quick action cards */}
-            <Text style={s.sectionLabel}>QUICK ACTIONS</Text>
+            {/* Action Buttons */}
             <View style={s.actionCards}>
-              {quickActions.slice(0, 4).map((qa) => {
+              {quickActions.map((qa) => {
                 const locked = !entitlements.can(qa.feature);
                 return (
                   <TouchableOpacity
@@ -520,7 +483,7 @@ export default function CoachScreen() {
 
             {/* Secondary actions (collapsed row) */}
             <View style={s.chipsRow}>
-              {quickActions.slice(4).map((qa) => {
+              {[].map((qa: any) => {
                 const locked = !entitlements.can(qa.feature);
                 return (
                   <TouchableOpacity
@@ -534,6 +497,16 @@ export default function CoachScreen() {
                   </TouchableOpacity>
                 );
               })}
+            </View>
+            
+            <View style={s.multimodalRow}>
+              <TouchableOpacity style={s.micBox} onPress={handleVoice} activeOpacity={0.7}>
+                <Ionicons name="mic" size={24} color={Colors.surfaceElevated} />
+                <Text style={s.micBoxText}>Tap to Speak</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={s.imgBox} onPress={handleImageImport} activeOpacity={0.7}>
+                <Ionicons name="image-outline" size={20} color={Colors.textMuted} />
+              </TouchableOpacity>
             </View>
           </ScrollView>
         ) : (
@@ -651,7 +624,13 @@ const s = StyleSheet.create({
   clearBtn:    { padding: Spacing.xs },
 
   // Landing content
-  landingContent: { padding: Spacing.lg, gap: Spacing.lg, paddingBottom: Spacing.xxl },
+  landingContent: { padding: Spacing.lg, gap: Spacing.xl, paddingBottom: Spacing.xxl + 24 },
+
+  multimodalRow: { flexDirection: 'row', gap: Spacing.md, alignItems: 'center', marginTop: Spacing.lg },
+  micBox: { flex: 1, backgroundColor: Colors.gold, borderRadius: Radius.full, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: Spacing.sm, paddingVertical: Spacing.md },
+  micBoxText: { color: Colors.surfaceElevated, fontSize: FontSize.md, fontWeight: FontWeight.bold },
+  imgBox: { width: 54, height: 54, borderRadius: Radius.full, backgroundColor: Colors.surfaceElevated, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: Colors.border },
+
 
   // Input affordances (voice + image)
   inputRow: { flexDirection: 'row', gap: Spacing.sm },
@@ -679,14 +658,14 @@ const s = StyleSheet.create({
 
   // Action cards (primary)
   actionCards: { gap: Spacing.sm },
-  actionCard: {
+  actionCard: { marginBottom: 12, 
     flexDirection: 'row', alignItems: 'center', gap: Spacing.sm,
     backgroundColor: Colors.surfaceElevated, borderRadius: Radius.lg,
     borderWidth: 1, borderColor: Colors.border, padding: Spacing.md,
   },
   actionCardLocked: { opacity: 0.5 },
-  actionIcon: {
-    width: 32, height: 32, borderRadius: Radius.md,
+  actionIcon: { 
+    width: 32, height: 32, borderRadius: Radius.full,
     backgroundColor: Colors.goldMuted, borderWidth: 1, borderColor: Colors.goldDim,
     alignItems: 'center', justifyContent: 'center',
   },
