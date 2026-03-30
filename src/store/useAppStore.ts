@@ -213,6 +213,15 @@ interface AppStore {
    */
   driftHistory: DriftRecord[];
 
+  // ── AI credits (Batch 11) ─────────────────────────────────────────────────
+  /**
+   * Current AI credit balance from server (ai_user_credits table).
+   * Ephemeral — NOT persisted. Refreshed on session change and after each AI call.
+   * null = not yet loaded or guest mode.
+   */
+  aiBalance: number | null;
+  aiBalanceLoading: boolean;
+
   // ── Review ────────────────────────────────────────────────────────────────
 
   /**
@@ -229,6 +238,9 @@ interface AppStore {
   pendingReview: DailyReview | null;
 
   // ── Actions ───────────────────────────────────────────────────────────────
+
+  // AI credits (Batch 11)
+  refreshAIBalance: () => Promise<void>;
 
   // Auth
   setSession: (session: Session | null) => void;
@@ -475,6 +487,25 @@ export const useAppStore = create<AppStore>()(
       driftHistory: [],
       dailyReviews: [],
       pendingReview: null,
+
+      // ── AI credits ──────────────────────────────────────────────────────────
+      aiBalance: null,
+      aiBalanceLoading: false,
+
+      // ── AI credits ──────────────────────────────────────────────────────────
+
+      refreshAIBalance: async () => {
+        const { session, isGuestMode } = get();
+        if (isGuestMode || !session?.user?.id) return;
+        set({ aiBalanceLoading: true });
+        try {
+          const { fetchAIBalance } = await import('../services/aiCreditsService');
+          const b = await fetchAIBalance(session.user.id);
+          set({ aiBalance: b?.currentBalance ?? null, aiBalanceLoading: false });
+        } catch {
+          set({ aiBalanceLoading: false });
+        }
+      },
 
       // ── Auth ────────────────────────────────────────────────────────────────
 

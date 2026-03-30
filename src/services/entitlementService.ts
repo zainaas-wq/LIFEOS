@@ -10,6 +10,8 @@ export type PlanFeature =
   | 'ai_recover_day'
   | 'ai_monthly_review'      // Pro only
   | 'ai_weekly_plan'         // Pro only — covers both weekly planning and weekly review
+  | 'ai_voice'               // Pro only — voice input via Whisper transcription
+  | 'ai_image'               // Pro only — image analysis via GPT-4 Vision
   | 'predictive_insights'    // Pro only — predictive action hints + explanation layer
   | 'advanced_recovery'      // Pro only — recovery ranked by effectiveness + risk profile
   | 'weekly_insights_depth'  // Pro only — 30-day outcome window
@@ -31,12 +33,14 @@ export const PLAN_ENTITLEMENTS: Record<string, ReadonlySet<PlanFeature>> = {
   pro: new Set<PlanFeature>([
     'ai_chat', 'ai_build_day', 'ai_recover_day',
     'ai_monthly_review', 'ai_weekly_plan',
+    'ai_voice', 'ai_image',
     'predictive_insights', 'advanced_recovery',
     'weekly_insights_depth', 'outcome_dashboard',
   ]),
   max: new Set<PlanFeature>([
     'ai_chat', 'ai_build_day', 'ai_recover_day',
     'ai_monthly_review', 'ai_weekly_plan',
+    'ai_voice', 'ai_image',
     'predictive_insights', 'advanced_recovery',
     'weekly_insights_depth', 'outcome_dashboard',
   ]),

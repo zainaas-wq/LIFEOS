@@ -29,6 +29,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
+import * as ImagePicker from 'expo-image-picker';
 import { useTranslation } from 'react-i18next';
 import { useDirection } from '../../src/hooks/useDirection';
 import { useAppStore, useAIContext } from '../../src/store/useAppStore';
@@ -41,9 +42,11 @@ import { Colors, FontSize, FontWeight, Radius, Shadow, Spacing } from '../../src
 import { useEntitlements } from '../../src/services/entitlementService';
 import type { PlanFeature } from '../../src/services/entitlementService';
 import type { UseMonthlyUsageResult } from '../../src/services/usageService';
+import { useAIBalance } from '../../src/services/aiCreditsService';
 import { track } from '../../src/services/analyticsService';
 import type { AnalyticsEventName } from '../../src/services/analyticsService';
 import { UpgradeModal } from '../../src/components/upgrade/UpgradeModal';
+import { CreditsCard } from '../../src/components/ui/CreditsCard';
 
 // ─── Quick action prompts (English — sent to AI) ──────────────────────────────
 
@@ -324,8 +327,10 @@ export default function CoachScreen() {
   const dailyDecision  = useAppStore((s) => s.dailyDecision);
   const aiContext      = useAIContext();
 
-  const entitlements = useEntitlements();
+  const entitlements   = useEntitlements();
   const { refresh: refreshUsage } = entitlements;
+  const aiCredits      = useAIBalance();
+  const refreshBalance = useAppStore((s) => s.refreshAIBalance);
 
   const [input, setInput]     = useState('');
   const [loading, setLoading] = useState(false);
@@ -387,10 +392,11 @@ export default function CoachScreen() {
       } finally {
         setLoading(false);
         refreshUsage();
+        refreshBalance();
         setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 100);
       }
     },
-    [loading, chatHistory, aiContext, getClient, addChatMessage, setCurrentPlan, refreshUsage],
+    [loading, chatHistory, aiContext, getClient, addChatMessage, setCurrentPlan, refreshUsage, refreshBalance],
   );
 
   const handleAction = (qa: QA) => {
@@ -403,16 +409,93 @@ export default function CoachScreen() {
 
   const handleVoice = () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    if (!entitlements.isPro) {
+      setUpgradeFeat('Voice Input');
+      return;
+    }
+    // Voice recording requires expo-av (not yet installed).
+    // Gateway is ready — wire when expo-av is added.
+    track('ai_request_started', { mode: 'voice' } as any);
     Alert.alert(
-      t('coach.voice_alert_title'),
-      t('coach.voice_alert_msg'),
-      [{ text: t('coach.voice_alert_btn'), style: 'default' }],
+      'Voice Input',
+      'Voice recording is coming soon. Install expo-av to enable microphone access.',
+      [{ text: 'Got it', style: 'default' }],
     );
   };
 
-  const handleImageImport = () => {
-    router.push('/(tabs)/schedule/import' as any);
-  };
+  const handleImageImport = useCallback(async () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    if (!entitlements.isPro) {
+      setUpgradeFeat('Image Analysis');
+      return;
+    }
+    if (!session || isGuestMode) {
+      Alert.alert('Sign in required', 'Image analysis requires an active session.');
+      return;
+    }
+
+    try {
+      const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!perm.granted) {
+        Alert.alert('Permission needed', 'Allow photo access to analyze images.');
+        return;
+      }
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: false,
+        quality: 0.5,
+        base64: true,
+      });
+      if (result.canceled || !result.assets?.[0]?.base64) return;
+
+      const base64 = result.assets[0].base64;
+      track('ai_image_used');
+      track('ai_request_started', { mode: 'image' } as any);
+
+      const userMsg: ChatMessage = makeUserMsg('[Image uploaded — analyzing…]');
+      addChatMessage(userMsg);
+      setLoading(true);
+      setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 50);
+
+      const endpoint = `${process.env.EXPO_PUBLIC_SUPABASE_URL ?? ''}/functions/v1/ai-chat`;
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization:  `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({
+          request_mode: 'image',
+          image_data:   base64,
+          message:      'Analyze this image and help me with my schedule or planning.',
+          context:      { todayDate: getTodayDate(), tracks: [], schedule: [], frictions: [], focusSummary: { weeklyMinsByGoal: {}, totalWeeklyMins: 0 } },
+        }),
+      });
+
+      const data = await res.json().catch(() => null);
+
+      if (!res.ok || data?.error) {
+        if (data?.code === 'insufficient_credits') {
+          track('ai_insufficient_credits');
+          addChatMessage({ id: generateId(), role: 'assistant', content: '_Your AI credits are exhausted. They refill automatically on a 30-day cycle._', createdAt: new Date().toISOString() });
+        } else {
+          track('ai_request_failed', { mode: 'image' } as any);
+          addChatMessage({ id: generateId(), role: 'assistant', content: `_Image analysis failed: ${data?.error ?? 'Unknown error'}_`, createdAt: new Date().toISOString() });
+        }
+      } else {
+        track('ai_request_succeeded', { mode: 'image' } as any);
+        addChatMessage({ id: generateId(), role: 'assistant', content: data.content, createdAt: data.createdAt ?? new Date().toISOString() });
+      }
+    } catch (err: any) {
+      track('ai_request_failed', { mode: 'image' } as any);
+      addChatMessage({ id: generateId(), role: 'assistant', content: `_Image analysis error: ${err?.message ?? 'Something went wrong'}_`, createdAt: new Date().toISOString() });
+    } finally {
+      setLoading(false);
+      refreshUsage();
+      refreshBalance();
+      setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 100);
+    }
+  }, [entitlements.isPro, session, isGuestMode, addChatMessage, refreshUsage, refreshBalance]);
 
   // ── Render ──────────────────────────────────────────────────────────────────
   return (
@@ -518,21 +601,38 @@ export default function CoachScreen() {
             </View>
             
             <View style={[s.multimodalRow, { flexDirection: dir.rowDir }]}>
-              <TouchableOpacity style={s.affordanceBtn} onPress={handleVoice} activeOpacity={0.7}>
+              <TouchableOpacity
+                style={[s.affordanceBtn, !entitlements.isPro && s.affordanceBtnLocked]}
+                onPress={handleVoice}
+                activeOpacity={0.7}
+              >
                 <View style={[s.affordanceBtnIcon, { backgroundColor: Colors.goldMuted, borderColor: Colors.goldDim }]}>
                   <Ionicons name="mic-outline" size={20} color={Colors.gold} />
                 </View>
                 <Text style={s.affordanceBtnLabel}>{t('coach.tap_to_speak')}</Text>
-                <Text style={s.affordanceBtnSub}>Voice</Text>
+                <Text style={s.affordanceBtnSub}>Voice · 2 credits{!entitlements.isPro ? ' · Pro' : ''}</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={s.affordanceBtn} onPress={handleImageImport} activeOpacity={0.7}>
+              <TouchableOpacity
+                style={[s.affordanceBtn, !entitlements.isPro && s.affordanceBtnLocked]}
+                onPress={handleImageImport}
+                activeOpacity={0.7}
+              >
                 <View style={[s.affordanceBtnIcon, { backgroundColor: Colors.purpleMuted, borderColor: 'rgba(157,78,221,0.25)' }]}>
                   <Ionicons name="image-outline" size={20} color={Colors.purpleLight} />
                 </View>
-                <Text style={s.affordanceBtnLabel}>Import Schedule</Text>
-                <Text style={s.affordanceBtnSub}>Photo</Text>
+                <Text style={s.affordanceBtnLabel}>Image Analysis</Text>
+                <Text style={s.affordanceBtnSub}>Photo · 3 credits{!entitlements.isPro ? ' · Pro' : ''}</Text>
               </TouchableOpacity>
             </View>
+
+            {/* Credits card — shown when authenticated */}
+            {session && !isGuestMode && (
+              <CreditsCard
+                balance={aiCredits.balance}
+                isLoading={aiCredits.isLoading}
+                onUpgrade={() => { track('upgrade_cta_opened'); setUpgradeFeat('AI Credits'); }}
+              />
+            )}
           </ScrollView>
         ) : (
           /* ── CHAT MODE ─────────────────────────────────────────────────── */
@@ -655,6 +755,7 @@ const s = StyleSheet.create({
   affordanceBtnIcon:  { width: 48, height: 48, borderRadius: Radius.full, alignItems: 'center', justifyContent: 'center', borderWidth: 1, marginBottom: 4 },
   affordanceBtnLabel: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.textPrimary, textAlign: 'center' },
   affordanceBtnSub:   { fontSize: FontSize.xs, color: Colors.textMuted },
+  affordanceBtnLocked: { opacity: 0.55 },
 
 
   // Input affordances (voice + image)

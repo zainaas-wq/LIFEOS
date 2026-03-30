@@ -120,6 +120,7 @@ export class BackendAIClient implements AIClient {
       role?: string;
       content?: string;
       createdAt?: string;
+      credits_remaining?: number;
       usage?: { promptTokens?: number; completionTokens?: number; totalTokens?: number; provider?: string };
       error?: string;
       code?: string;
@@ -153,7 +154,12 @@ export class BackendAIClient implements AIClient {
         throw new Error('Session expired. Please sign in again.');
       }
 
-      // Quota exhaustion — specific credits message, then local fallback
+      // Credit exhaustion (new credit system) — specific message, then local fallback
+      if (res.status === 402 || responseData?.code === 'insufficient_credits') {
+        return this.quotaFallback(userMessage, history, context);
+      }
+
+      // Quota exhaustion (legacy token system) — same fallback
       if (res.status === 429 || responseData?.code === 'quota_exceeded') {
         return this.quotaFallback(userMessage, history, context);
       }

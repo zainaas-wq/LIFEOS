@@ -58,7 +58,15 @@ export type AnalyticsEventName =
   | 'streak_recovered'       // user recovered after a 1-day gap (recovery saved streak)
   | 'reentry_after_gap'      // user returned after 2+ missed days
   | 'day_missed'             // day archived without a review saved
-  | 'review_skipped';        // end-of-day passed without the user saving a review
+  | 'review_skipped'         // end-of-day passed without the user saving a review
+  // ── AI monetization events (Batch 11) ────────────────────────────────────
+  | 'ai_request_started'     // user initiated any AI request (text/voice/image)
+  | 'ai_request_succeeded'   // AI request completed successfully
+  | 'ai_request_failed'      // AI request failed (provider error / timeout)
+  | 'ai_insufficient_credits'// user tried AI with 0 balance
+  | 'ai_voice_used'          // voice request sent to gateway
+  | 'ai_image_used'          // image request sent to gateway
+  | 'ai_credits_refreshed';  // balance fetched / refill detected
 
 // ─── Event properties ─────────────────────────────────────────────────────────
 
