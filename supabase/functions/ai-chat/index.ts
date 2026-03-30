@@ -1,5 +1,5 @@
 /**
- * LifeOS — ai-chat Edge Function  (Batch 11: credit-aware multimodal gateway)
+ * LifeOS — ai-chat Edge Function  (Batch 15: multi-provider gateway)
  *
  * POST /functions/v1/ai-chat
  * Authorization: Bearer <supabase-jwt>
@@ -15,11 +15,16 @@
  *   1. Resolve tier from ai_user_tier
  *   2. Call consume_ai_credits PG function — bootstraps row, handles refill, deducts atomically
  *   3. On provider failure → call refund_ai_credits
- *   4. Log usage to ai_usage_log (request_mode + credits_used)
+ *   4. Log usage to ai_usage_log (request_mode + credits_used + provider observability)
  *
- * Provider routing (Supabase secret AI_PROVIDER):
- *   "openai"    → OpenAI gpt-4o-mini / whisper-1 / gpt-4o (vision)   (default)
- *   "anthropic" → Anthropic claude-haiku-4-5-20251001 (text only)
+ * Provider routing (Batch 15):
+ *   Text requests are routed by providerRouter based on context.aiMode:
+ *     quick_nudge / focused_answer → NVIDIA NIM (primary), OpenAI (fallback)
+ *     recovery_coach / strategic_planning / review_reflection → OpenAI (primary), NIM (fallback)
+ *   Voice / Image remain on OpenAI (specialized APIs — Whisper + GPT-4o Vision).
+ *
+ *   FORCE_PROVIDER env var overrides routing for all text requests.
+ *   Required secrets: OPENAI_API_KEY, NVIDIA_NIM_API_KEY
  */
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
@@ -36,6 +41,8 @@ import {
   gatherRecoveryData,
   buildRecoverySystemPrompt,
 } from '../_shared/recoveryService.ts';
+import { routeTextRequest, modelNameForLogging } from '../_shared/providerRouter.ts';
+import type { RouteExecutionResult } from '../_shared/providers/types.ts';
 
 // ─── Credit costs (server-authoritative) ─────────────────────────────────────
 
@@ -90,17 +97,25 @@ interface ChatContext {
   biggestDistraction?: string;
   fixedScheduleStart?: string;
   fixedScheduleEnd?: string;
-  tracks: TrackItem[];
-  schedule: ScheduleItem[];
-  frictions: FrictionItem[];
-  focusSummary: {
+  tracks?: TrackItem[];
+  schedule?: ScheduleItem[];
+  frictions?: FrictionItem[];
+  focusSummary?: {
     weeklyMinsByGoal: Record<string, number>;
     totalWeeklyMins: number;
   };
   todayPlan?: {
-    date: string;
+    date?: string;
     items: PlanItem[];
   };
+  // Batch 14 orchestration fields (optional — backward compatible)
+  aiMode?:            string;
+  responseStyleHint?: string;
+  contextDepth?:      string;
+  // Focused-depth fields (Batch 14 buildAIContextPacket)
+  recentPattern?:     string;
+  adaptationHint?:    string;
+  tracks_raw?:        TrackItem[];   // alias used by focused depth
 }
 
 interface HistoryMessage {
@@ -114,10 +129,10 @@ interface RequestBody {
   history?: HistoryMessage[];
   context?: ChatContext;
   // Voice mode
-  voice_data?: string;  // base64-encoded audio
-  voice_mime?: string;  // e.g. 'audio/m4a', 'audio/webm'
+  voice_data?: string;
+  voice_mime?: string;
   // Image mode
-  image_data?: string;  // base64-encoded JPEG/PNG
+  image_data?: string;
   // request_mode — defaults to 'text' when absent (backward compat)
   request_mode?: RequestMode;
 }
@@ -126,12 +141,7 @@ interface TokenUsage {
   promptTokens: number;
   completionTokens: number;
   totalTokens: number;
-  provider: ProviderName;
-}
-
-interface ProviderResult {
-  content: string;
-  usage: TokenUsage;
+  provider: string;
 }
 
 interface SuccessResponse {
@@ -155,32 +165,6 @@ interface ErrorResponse {
     | 'insufficient_credits';
 }
 
-// ─── Provider abstraction ─────────────────────────────────────────────────────
-
-type ProviderName = 'openai' | 'anthropic';
-
-function resolveProvider(): ProviderName {
-  const raw = (Deno.env.get('AI_PROVIDER') ?? '').trim().toLowerCase();
-  if (raw === 'anthropic') return 'anthropic';
-  if (raw !== '' && raw !== 'openai') {
-    console.warn(`[ai-chat] Unknown AI_PROVIDER value "${raw}" — falling back to openai`);
-  }
-  return 'openai';
-}
-
-async function callProvider(
-  provider: ProviderName,
-  systemPrompt: string,
-  history: HistoryMessage[],
-  userMessage: string,
-  signal: AbortSignal,
-): Promise<ProviderResult> {
-  if (provider === 'anthropic') {
-    return callAnthropic(systemPrompt, history, userMessage, signal);
-  }
-  return callOpenAI(systemPrompt, history, userMessage, signal);
-}
-
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const TIMEOUT_MS      = 25_000;
@@ -189,10 +173,8 @@ const MAX_IMG_TOKENS  = 1024;
 
 const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
-const OPENAI_MODEL        = 'gpt-4o-mini';
 const OPENAI_VISION_MODEL = 'gpt-4o';
 const OPENAI_AUDIO_MODEL  = 'whisper-1';
-const ANTHROPIC_MODEL     = 'claude-haiku-4-5-20251001';
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin':  '*',
@@ -219,14 +201,16 @@ function buildSystemPrompt(ctx: ChatContext, memoryContext = '', personalization
   const dow     = today.getDay();
   const dayName = DAY_NAMES[dow];
 
-  const trackLines = ctx.tracks.length
-    ? [...ctx.tracks]
+  const tracks = ctx.tracks ?? [];
+  const trackLines = tracks.length
+    ? [...tracks]
         .sort((a, b) => a.priority - b.priority)
         .map((g, i) => `${i + 1}. ${g.title} (${g.category}, ${g.weeklyHoursTarget}h/week, priority ${g.priority})`)
         .join('\n')
     : 'None set yet.';
 
-  const todayEvents = ctx.schedule
+  const schedule = ctx.schedule ?? [];
+  const todayEvents = schedule
     .filter((e) => e.daysOfWeek.includes(dow))
     .sort((a, b) => a.start.localeCompare(b.start));
   const scheduleLines = todayEvents.length
@@ -264,14 +248,16 @@ function buildSystemPrompt(ctx: ChatContext, memoryContext = '', personalization
   }
   const freeSection = freeLines.length ? freeLines.join('\n') : '• No free time in window — fully blocked.';
 
-  const frictionLines = ctx.frictions.length
-    ? ctx.frictions.filter((f) => f.loggedToday > 0).map((f) => `• ${f.label}: ${f.loggedToday} log${f.loggedToday !== 1 ? 's' : ''} today`).join('\n') || '• No distractions logged today.'
+  const frictions = ctx.frictions ?? [];
+  const frictionLines = frictions.length
+    ? frictions.filter((f) => f.loggedToday > 0).map((f) => `• ${f.label}: ${f.loggedToday} log${f.loggedToday !== 1 ? 's' : ''} today`).join('\n') || '• No distractions logged today.'
     : '• No distraction tracking configured.';
 
-  const totalH = Math.round(ctx.focusSummary.totalWeeklyMins / 6) / 10;
-  const focusLines = Object.keys(ctx.focusSummary.weeklyMinsByGoal).length
-    ? Object.entries(ctx.focusSummary.weeklyMinsByGoal).map(([id, mins]) => {
-        const track = ctx.tracks.find((g) => g.title === id) ?? { title: id, weeklyHoursTarget: 0 };
+  const focusSummary = ctx.focusSummary ?? { weeklyMinsByGoal: {}, totalWeeklyMins: 0 };
+  const totalH = Math.round(focusSummary.totalWeeklyMins / 6) / 10;
+  const focusLines = Object.keys(focusSummary.weeklyMinsByGoal).length
+    ? Object.entries(focusSummary.weeklyMinsByGoal).map(([id, mins]) => {
+        const track = tracks.find((g) => g.title === id) ?? { title: id, weeklyHoursTarget: 0 };
         const target = track.weeklyHoursTarget * 60;
         const pct = target > 0 ? Math.round((mins / target) * 100) : 0;
         return `• ${track.title}: ${Math.round(mins)} min logged (${pct}% of weekly target)`;
@@ -282,10 +268,24 @@ function buildSystemPrompt(ctx: ChatContext, memoryContext = '', personalization
     ? ctx.todayPlan.items.filter((i) => i.type !== 'break').map((i) => `• ${i.startTime}–${i.endTime}  ${i.title}${i.completed ? ' ✓' : ''}`).join('\n') || "• No work items in today's plan."
     : '• No plan generated yet for today.';
 
+  // Batch 14: inject style hint if present
+  const styleSection = ctx.responseStyleHint
+    ? `\n═══ RESPONSE STYLE ═══\n${ctx.responseStyleHint}\n`
+    : '';
+
+  // Batch 14: inject behavioral pattern if present (focused/rich depth)
+  const patternSection = ctx.recentPattern
+    ? `\n═══ RECENT BEHAVIORAL PATTERN ═══\n• ${ctx.recentPattern}\n`
+    : '';
+
+  const adaptHintSection = ctx.adaptationHint
+    ? `\n═══ ADAPTATION CONTEXT ═══\n• ${ctx.adaptationHint}\n`
+    : '';
+
   return `You are the planning engine of LifeOS — an AI-powered personal operating system.
 Your role is personal strategist and coach, not a simple scheduler.
 Think about energy, priorities, human limits, and long-term consistency.
-${personalizationLayer ? '\n' + personalizationLayer + '\n' : ''}
+${personalizationLayer ? '\n' + personalizationLayer + '\n' : ''}${styleSection}
 TODAY: ${dayName}, ${ctx.todayDate}
 PLANNING WINDOW: ${windowStart}–${windowEnd}
 MAIN FOCUS: ${ctx.mainFocus ?? 'Not specified'}
@@ -313,7 +313,7 @@ ${focusLines}
 Total: ~${totalH}h logged this week
 
 ═══ TODAY'S CURRENT PLAN ═══
-${planSection}${memoryContext ? '\n\n' + memoryContext : ''}
+${planSection}${patternSection}${adaptHintSection}${memoryContext ? '\n\n' + memoryContext : ''}
 
 ═══ COACHING RULES ═══
 1. Never stack deep work back-to-back — suggest 10–15 min breaks between blocks.
@@ -352,56 +352,14 @@ function successResponse(content: string, creditsRemaining?: number, usage?: Tok
   });
 }
 
-// ─── Provider: OpenAI (text) ──────────────────────────────────────────────────
-
-async function callOpenAI(
-  systemPrompt: string,
-  history: HistoryMessage[],
-  userMessage: string,
-  signal: AbortSignal,
-): Promise<ProviderResult> {
-  const apiKey = Deno.env.get('OPENAI_API_KEY');
-  if (!apiKey) throw new Error('OPENAI_API_KEY secret is not configured');
-
-  const messages = [
-    { role: 'system', content: systemPrompt },
-    ...history.map((m) => ({ role: m.role, content: m.content })),
-    { role: 'user', content: userMessage },
-  ];
-
-  const res = await fetch('https://api.openai.com/v1/chat/completions', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
-    body:   JSON.stringify({ model: OPENAI_MODEL, max_tokens: MAX_TOKENS, messages }),
-    signal,
-  });
-
-  if (!res.ok) {
-    const text = await res.text().catch(() => '');
-    if (res.status === 401) throw new Error('OpenAI: invalid API key');
-    if (res.status === 429) throw new Error('OpenAI: rate limit reached');
-    throw new Error(`OpenAI error ${res.status}: ${text.slice(0, 120)}`);
-  }
-
-  const data    = await res.json();
-  const content = (data?.choices?.[0]?.message?.content as string) ?? '';
-  const usage: TokenUsage = {
-    promptTokens:     data?.usage?.prompt_tokens     ?? 0,
-    completionTokens: data?.usage?.completion_tokens ?? 0,
-    totalTokens:      data?.usage?.total_tokens      ?? 0,
-    provider:         'openai',
-  };
-  return { content, usage };
-}
-
-// ─── Provider: OpenAI Vision (image analysis) ────────────────────────────────
+// ─── Provider: OpenAI Vision (image analysis) — stays on OpenAI ──────────────
 
 async function callOpenAIVision(
   systemPrompt: string,
   userMessage: string,
   imageBase64: string,
   signal: AbortSignal,
-): Promise<ProviderResult> {
+): Promise<{ content: string; usage: TokenUsage }> {
   const apiKey = Deno.env.get('OPENAI_API_KEY');
   if (!apiKey) throw new Error('OPENAI_API_KEY secret is not configured');
 
@@ -435,16 +393,18 @@ async function callOpenAIVision(
 
   const data    = await res.json();
   const content = (data?.choices?.[0]?.message?.content as string) ?? '';
-  const usage: TokenUsage = {
-    promptTokens:     data?.usage?.prompt_tokens     ?? 0,
-    completionTokens: data?.usage?.completion_tokens ?? 0,
-    totalTokens:      data?.usage?.total_tokens      ?? 0,
-    provider:         'openai',
+  return {
+    content,
+    usage: {
+      promptTokens:     data?.usage?.prompt_tokens     ?? 0,
+      completionTokens: data?.usage?.completion_tokens ?? 0,
+      totalTokens:      data?.usage?.total_tokens      ?? 0,
+      provider:         'openai',
+    },
   };
-  return { content, usage };
 }
 
-// ─── Provider: OpenAI Whisper (voice transcription) ──────────────────────────
+// ─── Provider: OpenAI Whisper (voice transcription) — stays on OpenAI ─────────
 
 async function transcribeAudio(
   audioBase64: string,
@@ -454,12 +414,11 @@ async function transcribeAudio(
   const apiKey = Deno.env.get('OPENAI_API_KEY');
   if (!apiKey) throw new Error('OPENAI_API_KEY secret is not configured');
 
-  // Decode base64 to binary
-  const binary   = atob(audioBase64);
-  const bytes    = new Uint8Array(binary.length);
+  const binary = atob(audioBase64);
+  const bytes  = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
 
-  const ext      = mimeType.includes('mp4') || mimeType.includes('m4a') ? 'm4a'
+  const ext = mimeType.includes('mp4') || mimeType.includes('m4a') ? 'm4a'
     : mimeType.includes('webm') ? 'webm'
     : mimeType.includes('mp3')  ? 'mp3'
     : 'mp3';
@@ -485,60 +444,10 @@ async function transcribeAudio(
   return (data?.text as string) ?? '';
 }
 
-// ─── Provider: Anthropic ──────────────────────────────────────────────────────
-
-async function callAnthropic(
-  systemPrompt: string,
-  history: HistoryMessage[],
-  userMessage: string,
-  signal: AbortSignal,
-): Promise<ProviderResult> {
-  const apiKey = Deno.env.get('ANTHROPIC_API_KEY');
-  if (!apiKey) throw new Error('ANTHROPIC_API_KEY secret is not configured');
-
-  const messages = [
-    ...history.map((m) => ({ role: m.role, content: m.content })),
-    { role: 'user', content: userMessage },
-  ];
-
-  const res = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'Content-Type':      'application/json',
-      'x-api-key':         apiKey,
-      'anthropic-version': '2023-06-01',
-    },
-    body: JSON.stringify({ model: ANTHROPIC_MODEL, max_tokens: MAX_TOKENS, system: systemPrompt, messages }),
-    signal,
-  });
-
-  if (!res.ok) {
-    const text = await res.text().catch(() => '');
-    if (res.status === 401) throw new Error('Anthropic: invalid API key');
-    if (res.status === 429) throw new Error('Anthropic: rate limit reached');
-    throw new Error(`Anthropic error ${res.status}: ${text.slice(0, 120)}`);
-  }
-
-  const data             = await res.json();
-  const content          = (data?.content?.[0]?.text as string) ?? '';
-  const promptTokens     = data?.usage?.input_tokens  ?? 0;
-  const completionTokens = data?.usage?.output_tokens ?? 0;
-  const usage: TokenUsage = {
-    promptTokens,
-    completionTokens,
-    totalTokens: promptTokens + completionTokens,
-    provider:    'anthropic',
-  };
-  return { content, usage };
-}
-
 // ─── Tier resolution ──────────────────────────────────────────────────────────
 
-async function getUserTierId(
-  // deno-lint-ignore no-explicit-any
-  adminClient: any | null,
-  userId: string,
-): Promise<string> {
+// deno-lint-ignore no-explicit-any
+async function getUserTierId(adminClient: any | null, userId: string): Promise<string> {
   if (!adminClient) return 'free';
   try {
     const { data, error } = await adminClient
@@ -546,13 +455,9 @@ async function getUserTierId(
       .select('tier_id')
       .eq('user_id', userId)
       .single();
-
     if (error) {
-      if (error.code !== 'PGRST116') {
-        console.error('[ai-chat] getUserTierId failed:', error.message);
-      } else {
-        console.warn('[ai-chat] no tier row for user', userId, '— defaulting to free');
-      }
+      if (error.code !== 'PGRST116') console.error('[ai-chat] getUserTierId failed:', error.message);
+      else console.warn('[ai-chat] no tier row for user', userId, '— defaulting to free');
       return 'free';
     }
     return (data as { tier_id: string })?.tier_id ?? 'free';
@@ -562,7 +467,7 @@ async function getUserTierId(
   }
 }
 
-// ─── Credit consumption (replaces token-based quota) ─────────────────────────
+// ─── Credit accounting ────────────────────────────────────────────────────────
 
 interface ConsumeResult {
   success: boolean;
@@ -570,17 +475,8 @@ interface ConsumeResult {
   errorCode: string | null;
 }
 
-/**
- * Calls consume_ai_credits PG function via service-role client.
- * Fail-open: any DB error returns success=true so infra failures never block users.
- */
-async function consumeAICredits(
-  // deno-lint-ignore no-explicit-any
-  adminClient: any | null,
-  userId: string,
-  cost: number,
-  tierAllowance: number,
-): Promise<ConsumeResult> {
+// deno-lint-ignore no-explicit-any
+async function consumeAICredits(adminClient: any | null, userId: string, cost: number, tierAllowance: number): Promise<ConsumeResult> {
   if (!adminClient) {
     console.warn('[ai-chat] no adminClient — skipping credit check (fail-open)');
     return { success: true, balanceAfter: tierAllowance, errorCode: null };
@@ -591,13 +487,10 @@ async function consumeAICredits(
       p_cost:           cost,
       p_tier_allowance: tierAllowance,
     });
-
     if (error) {
       console.error('[ai-chat] consume_ai_credits RPC error:', error.message);
-      return { success: true, balanceAfter: 0, errorCode: null }; // fail-open
+      return { success: true, balanceAfter: 0, errorCode: null };
     }
-
-    // RPC returns a SETOF with one row
     const row = Array.isArray(data) ? data[0] : data;
     return {
       success:      row?.success      ?? true,
@@ -606,20 +499,12 @@ async function consumeAICredits(
     };
   } catch (err: unknown) {
     console.error('[ai-chat] consumeAICredits threw:', err instanceof Error ? err.message : String(err));
-    return { success: true, balanceAfter: 0, errorCode: null }; // fail-open
+    return { success: true, balanceAfter: 0, errorCode: null };
   }
 }
 
-/**
- * Refunds credits on provider failure.
- * Fire-and-forget — errors are logged but not surfaced.
- */
-async function refundAICredits(
-  // deno-lint-ignore no-explicit-any
-  adminClient: any | null,
-  userId: string,
-  amount: number,
-): Promise<void> {
+// deno-lint-ignore no-explicit-any
+async function refundAICredits(adminClient: any | null, userId: string, amount: number): Promise<void> {
   if (!adminClient || amount <= 0) return;
   try {
     const { error } = await adminClient.rpc('refund_ai_credits', {
@@ -632,7 +517,7 @@ async function refundAICredits(
   }
 }
 
-// ─── Pro-only actions ─────────────────────────────────────────────────────────
+// ─── Entitlement & action classification ─────────────────────────────────────
 
 const PRO_ONLY_ACTIONS = new Set(['monthly_review', 'weekly_plan', 'weekly_review']);
 
@@ -641,15 +526,40 @@ function validateEntitlement(tierId: string, action: string): boolean {
   return true;
 }
 
-// ─── Action classifier ────────────────────────────────────────────────────────
-
-function classifyAction(msg: string): 'chat' | 'build_day' | 'recover_day' | 'monthly_review' | 'weekly_plan' | 'weekly_review' | 'voice_request' | 'image_request' {
+function classifyAction(msg: string): string {
   if (/\b(weekly review|review my week|review this week|week.{0,5}review)\b/i.test(msg)) return 'weekly_review';
   if (/\b(weekly plan|rebuild.*(week|weekly)|plan.*(week|weekly)|week.*plan)\b/i.test(msg)) return 'weekly_plan';
   if (/\b(daily plan|plan (for )?today|today.s plan|plan my day|build my day|generate.*day)\b/i.test(msg)) return 'build_day';
   if (/\b(recover|missed.*tasks?|reschedule|get back on track)\b/i.test(msg)) return 'recover_day';
   if (/\b(monthly review|end of month|month review)\b/i.test(msg)) return 'monthly_review';
   return 'chat';
+}
+
+// ─── Usage logging ────────────────────────────────────────────────────────────
+
+interface UsageLogEntry {
+  user_id:           string;
+  provider:          string;
+  provider_selected: string;
+  provider_used:     string;
+  fallback_occurred: boolean;
+  model:             string;
+  prompt_tokens:     number;
+  completion_tokens: number;
+  total_tokens:      number;
+  action:            string;
+  request_mode:      string;
+  credits_used:      number;
+  latency_ms:        number;
+  ai_mode:           string | null;
+}
+
+// deno-lint-ignore no-explicit-any
+function logUsage(adminClient: any | null, entry: UsageLogEntry): void {
+  if (!adminClient) return;
+  adminClient.from('ai_usage_log').insert(entry).then(({ error }: { error: { message: string } | null }) => {
+    if (error) console.error('[ai-chat] usage log insert failed:', error.message);
+  });
 }
 
 // ─── Main handler ─────────────────────────────────────────────────────────────
@@ -697,7 +607,7 @@ Deno.serve(async (req: Request) => {
     ? 'voice'
     : (body.request_mode ?? 'text');
 
-  // ── Validate required fields by mode ──────────────────────────────────────
+  // ── Validate required fields ──────────────────────────────────────────────
   if (requestMode === 'image' && !body.image_data) {
     return errorResponse('image_data is required for image mode', 'invalid_request', 400);
   }
@@ -722,38 +632,65 @@ Deno.serve(async (req: Request) => {
   const adminClient    = serviceRoleKey ? createClient(supabaseUrl, serviceRoleKey) : null;
 
   // ── Resolve tier ──────────────────────────────────────────────────────────
-  const tierId      = await getUserTierId(adminClient, user.id);
-  const allowance   = TIER_ALLOWANCE[tierId] ?? 20;
-  const creditCost  = CREDIT_COSTS[requestMode];
+  const tierId     = await getUserTierId(adminClient, user.id);
+  const allowance  = TIER_ALLOWANCE[tierId] ?? 20;
+  const creditCost = CREDIT_COSTS[requestMode];
 
-  // ── Credit check (atomic — consumes if sufficient) ────────────────────────
+  // ── Credit check (atomic) ─────────────────────────────────────────────────
   const creditResult = await consumeAICredits(adminClient, user.id, creditCost, allowance);
   if (!creditResult.success && creditResult.errorCode === 'insufficient_credits') {
     return errorResponse('Insufficient AI credits', 'insufficient_credits', 402);
   }
 
-  // ── Route to provider ─────────────────────────────────────────────────────
-  const provider     = resolveProvider();
+  // ── AbortController for timeout ───────────────────────────────────────────
   const controller   = new AbortController();
   const timer        = setTimeout(() => controller.abort(), TIMEOUT_MS);
   const requestStart = Date.now();
 
+  // Extract aiMode from context (Batch 14)
+  const aiMode = body.context?.aiMode ?? null;
+
   let textContent = '';
   let tokenUsage: TokenUsage | undefined;
+  let routeResult: RouteExecutionResult | null = null;
 
   try {
     if (requestMode === 'image') {
-      // ── Image analysis path ─────────────────────────────────────────────
-      const context   = body.context;
-      const sysPr     = context ? buildSystemPrompt(context) : 'You are a helpful planning assistant.';
-      const userMsg   = (body.message ?? '').trim() || 'Analyze this image and help me with my planning.';
+      // ── Image analysis — stays on OpenAI Vision ──────────────────────────
+      const context = body.context;
+      const sysPr   = context ? buildSystemPrompt(context) : 'You are a helpful planning assistant.';
+      const userMsg = (body.message ?? '').trim() || 'Analyze this image and help me with my planning.';
       const { content, usage } = await callOpenAIVision(sysPr, userMsg, body.image_data!, controller.signal);
       clearTimeout(timer);
       textContent = content;
       tokenUsage  = usage;
 
+      if (!textContent.trim()) {
+        await refundAICredits(adminClient, user.id, creditCost);
+        return errorResponse('Empty response from AI provider', 'provider_error', 502);
+      }
+
+      logUsage(adminClient, {
+        user_id:           user.id,
+        provider:          'openai',
+        provider_selected: 'openai',
+        provider_used:     'openai',
+        fallback_occurred: false,
+        model:             OPENAI_VISION_MODEL,
+        prompt_tokens:     tokenUsage?.promptTokens     ?? 0,
+        completion_tokens: tokenUsage?.completionTokens ?? 0,
+        total_tokens:      tokenUsage?.totalTokens      ?? 0,
+        action:            'image_request',
+        request_mode:      requestMode,
+        credits_used:      creditCost,
+        latency_ms:        Date.now() - requestStart,
+        ai_mode:           aiMode,
+      });
+
+      return successResponse(textContent, creditResult.balanceAfter, tokenUsage);
+
     } else if (requestMode === 'voice') {
-      // ── Voice path: transcribe → text chat ──────────────────────────────
+      // ── Voice — Whisper transcription + routed text completion ───────────
       const transcript = await transcribeAudio(
         body.voice_data!,
         body.voice_mime ?? 'audio/mp3',
@@ -765,22 +702,45 @@ Deno.serve(async (req: Request) => {
         return errorResponse('Could not transcribe audio', 'provider_error', 502);
       }
 
-      const context      = body.context;
-      const history      = body.history ?? [];
-      const [memRecs, _tierId2] = await Promise.all([
-        fetchUserMemory(adminClient, user.id),
-        Promise.resolve(tierId),
-      ]);
-      const memCtx  = buildMemoryContext(memRecs);
-      const persTxt = buildPersonalizationInstructions(memRecs);
-      const sysPr   = context ? buildSystemPrompt(context, memCtx, persTxt) : 'You are a helpful planning assistant.';
-      const { content, usage } = await callProvider(provider, sysPr, history, transcript, controller.signal);
+      const context  = body.context;
+      const history  = body.history ?? [];
+      const [memRecs] = await Promise.all([fetchUserMemory(adminClient, user.id)]);
+      const memCtx   = buildMemoryContext(memRecs);
+      const persTxt  = buildPersonalizationInstructions(memRecs);
+      const sysPr    = context ? buildSystemPrompt(context, memCtx, persTxt) : 'You are a helpful planning assistant.';
+
+      // Voice text completion goes through the router (voice aiMode treated as focused_answer)
+      routeResult = await routeTextRequest(sysPr, history, transcript, controller.signal, aiMode ?? 'focused_answer');
       clearTimeout(timer);
-      textContent = `_Transcribed: "${transcript}"_\n\n${content}`;
-      tokenUsage  = usage;
+      textContent = `_Transcribed: "${transcript}"_\n\n${routeResult.result.content}`;
+      tokenUsage  = { ...routeResult.result.usage, provider: routeResult.providerUsed };
+
+      if (!textContent.trim()) {
+        await refundAICredits(adminClient, user.id, creditCost);
+        return errorResponse('Empty response from AI provider', 'provider_error', 502);
+      }
+
+      logUsage(adminClient, {
+        user_id:           user.id,
+        provider:          routeResult.providerUsed,
+        provider_selected: routeResult.providerSelected,
+        provider_used:     routeResult.providerUsed,
+        fallback_occurred: routeResult.fallbackOccurred,
+        model:             OPENAI_AUDIO_MODEL + '+' + modelNameForLogging(routeResult.providerUsed),
+        prompt_tokens:     routeResult.result.usage.promptTokens,
+        completion_tokens: routeResult.result.usage.completionTokens,
+        total_tokens:      routeResult.result.usage.totalTokens,
+        action:            'voice_request',
+        request_mode:      requestMode,
+        credits_used:      creditCost,
+        latency_ms:        routeResult.latencyMs,
+        ai_mode:           aiMode,
+      });
+
+      return successResponse(textContent, creditResult.balanceAfter, tokenUsage);
 
     } else {
-      // ── Text path (default) ──────────────────────────────────────────────
+      // ── Text path — routed through providerRouter ─────────────────────────
       const { message, history = [], context } = body as {
         message: string;
         history: HistoryMessage[];
@@ -789,7 +749,7 @@ Deno.serve(async (req: Request) => {
 
       const action = classifyAction(message);
 
-      // Entitlement check (Pro-only actions)
+      // Entitlement check
       if (!validateEntitlement(tierId, action)) {
         clearTimeout(timer);
         await refundAICredits(adminClient, user.id, creditCost);
@@ -803,78 +763,54 @@ Deno.serve(async (req: Request) => {
       let systemPrompt: string;
       if (action === 'weekly_review') {
         const weeklyData = await gatherWeeklyData(adminClient, user.id, context.todayDate);
-        systemPrompt = buildWeeklyReviewSystemPrompt(context, weeklyData, memCtx, persTxt);
+        systemPrompt = buildWeeklyReviewSystemPrompt(context as any, weeklyData, memCtx, persTxt);
       } else if (action === 'recover_day') {
         const recoveryData = await gatherRecoveryData(adminClient, user.id, context.todayDate);
-        systemPrompt = buildRecoverySystemPrompt(context, recoveryData, memCtx, persTxt);
+        systemPrompt = buildRecoverySystemPrompt(context as any, recoveryData, memCtx, persTxt);
       } else {
         systemPrompt = buildSystemPrompt(context, memCtx, persTxt);
       }
 
-      const { content, usage } = await callProvider(provider, systemPrompt, history, message, controller.signal);
+      // ── Multi-provider routing (credit-safe) ──────────────────────────────
+      routeResult = await routeTextRequest(
+        systemPrompt,
+        history,
+        message,
+        controller.signal,
+        aiMode ?? undefined,
+      );
       clearTimeout(timer);
-      textContent = content;
-      tokenUsage  = usage;
-
-      // Log action-specific usage
-      if (adminClient) {
-        const modelName = provider === 'anthropic' ? ANTHROPIC_MODEL : OPENAI_MODEL;
-        adminClient.from('ai_usage_log').insert({
-          user_id:           user.id,
-          provider,
-          model:             modelName,
-          prompt_tokens:     tokenUsage?.promptTokens     ?? 0,
-          completion_tokens: tokenUsage?.completionTokens ?? 0,
-          total_tokens:      tokenUsage?.totalTokens      ?? 0,
-          action,
-          request_mode:      requestMode,
-          credits_used:      creditCost,
-          latency_ms:        Date.now() - requestStart,
-        }).then(({ error }: { error: { message: string } | null }) => {
-          if (error) console.error('[ai-chat] usage log insert failed:', error.message);
-        });
-      }
+      textContent = routeResult.result.content;
+      tokenUsage  = { ...routeResult.result.usage, provider: routeResult.providerUsed };
 
       if (!textContent.trim()) {
         await refundAICredits(adminClient, user.id, creditCost);
         return errorResponse('Empty response from AI provider', 'provider_error', 502);
       }
 
+      logUsage(adminClient, {
+        user_id:           user.id,
+        provider:          routeResult.providerUsed,
+        provider_selected: routeResult.providerSelected,
+        provider_used:     routeResult.providerUsed,
+        fallback_occurred: routeResult.fallbackOccurred,
+        model:             modelNameForLogging(routeResult.providerUsed),
+        prompt_tokens:     routeResult.result.usage.promptTokens,
+        completion_tokens: routeResult.result.usage.completionTokens,
+        total_tokens:      routeResult.result.usage.totalTokens,
+        action,
+        request_mode:      requestMode,
+        credits_used:      creditCost,
+        latency_ms:        routeResult.latencyMs,
+        ai_mode:           aiMode,
+      });
+
       return successResponse(textContent, creditResult.balanceAfter, tokenUsage);
     }
 
-    // ── Log usage for voice/image paths ──────────────────────────────────
-    if (!textContent.trim()) {
-      await refundAICredits(adminClient, user.id, creditCost);
-      return errorResponse('Empty response from AI provider', 'provider_error', 502);
-    }
-
-    if (adminClient) {
-      const modelName = requestMode === 'image' ? OPENAI_VISION_MODEL
-        : requestMode === 'voice'  ? OPENAI_AUDIO_MODEL
-        : provider === 'anthropic' ? ANTHROPIC_MODEL : OPENAI_MODEL;
-
-      adminClient.from('ai_usage_log').insert({
-        user_id:           user.id,
-        provider:          'openai',
-        model:             modelName,
-        prompt_tokens:     tokenUsage?.promptTokens     ?? 0,
-        completion_tokens: tokenUsage?.completionTokens ?? 0,
-        total_tokens:      tokenUsage?.totalTokens      ?? 0,
-        action:            requestMode === 'voice' ? 'voice_request' : 'image_request',
-        request_mode:      requestMode,
-        credits_used:      creditCost,
-        latency_ms:        Date.now() - requestStart,
-      }).then(({ error }: { error: { message: string } | null }) => {
-        if (error) console.error('[ai-chat] usage log insert failed:', error.message);
-      });
-    }
-
-    return successResponse(textContent, creditResult.balanceAfter, tokenUsage);
-
   } catch (err: unknown) {
     clearTimeout(timer);
-    // Refund credits — provider failed after deduction
+    // Refund credits — provider(s) failed after deduction
     await refundAICredits(adminClient, user.id, creditCost);
 
     const name = err instanceof Error ? err.name : '';
@@ -883,7 +819,9 @@ Deno.serve(async (req: Request) => {
     if (name === 'AbortError' || msg.includes('AbortError') || msg.toLowerCase().includes('aborted')) {
       return errorResponse('AI provider timed out', 'timeout', 504);
     }
-    console.error(`[ai-chat] provider=${provider} mode=${requestMode} error:`, msg);
+
+    const modeLabel = aiMode ?? 'unknown';
+    console.error(`[ai-chat] mode=${modeLabel} requestMode=${requestMode} error:`, msg);
     return errorResponse(`Provider error: ${msg}`, 'provider_error', 502);
   }
 });
