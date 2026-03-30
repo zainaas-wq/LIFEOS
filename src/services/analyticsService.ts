@@ -66,7 +66,11 @@ export type AnalyticsEventName =
   | 'ai_insufficient_credits'// user tried AI with 0 balance
   | 'ai_voice_used'          // voice request sent to gateway
   | 'ai_image_used'          // image request sent to gateway
-  | 'ai_credits_refreshed';  // balance fetched / refill detected
+  | 'ai_credits_refreshed'   // balance fetched / refill detected
+  // ── Voice recording events (Batch 11.1) ──────────────────────────────────
+  | 'voice_record_started'   // mic recording began
+  | 'voice_record_cancelled' // user cancelled before submitting
+  | 'voice_record_submitted'; // audio sent to gateway
 
 // ─── Event properties ─────────────────────────────────────────────────────────
 

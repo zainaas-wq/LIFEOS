@@ -47,6 +47,9 @@ import { track } from '../../src/services/analyticsService';
 import type { AnalyticsEventName } from '../../src/services/analyticsService';
 import { UpgradeModal } from '../../src/components/upgrade/UpgradeModal';
 import { CreditsCard } from '../../src/components/ui/CreditsCard';
+import { VoiceRecordingModal } from '../../src/components/VoiceRecordingModal';
+import type { VoiceResult } from '../../src/components/VoiceRecordingModal';
+import { buildVoicePayload } from '../../src/ai/voiceHelpers';
 
 // ─── Quick action prompts (English — sent to AI) ──────────────────────────────
 
@@ -332,9 +335,10 @@ export default function CoachScreen() {
   const aiCredits      = useAIBalance();
   const refreshBalance = useAppStore((s) => s.refreshAIBalance);
 
-  const [input, setInput]     = useState('');
-  const [loading, setLoading] = useState(false);
+  const [input, setInput]           = useState('');
+  const [loading, setLoading]       = useState(false);
   const [upgradeFeat, setUpgradeFeat] = useState<string | null>(null);
+  const [voiceVisible, setVoiceVisible] = useState(false);
   const scrollRef = useRef<ScrollView>(null);
 
   // Mode: landing when no history, chat otherwise
@@ -407,21 +411,97 @@ export default function CoachScreen() {
     send(qa.prompt, qa.event);
   };
 
-  const handleVoice = () => {
+  const handleVoice = useCallback(() => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     if (!entitlements.isPro) {
       setUpgradeFeat('Voice Input');
       return;
     }
-    // Voice recording requires expo-av (not yet installed).
-    // Gateway is ready — wire when expo-av is added.
+    if (!session || isGuestMode) {
+      Alert.alert('Sign in required', 'Voice AI requires an active session.');
+      return;
+    }
+    track('voice_record_started');
+    setVoiceVisible(true);
+  }, [entitlements.isPro, session, isGuestMode]);
+
+  const handleVoiceSubmit = useCallback(async (result: VoiceResult) => {
+    setVoiceVisible(false);
+    track('voice_record_submitted');
+    track('ai_voice_used');
     track('ai_request_started', { mode: 'voice' } as any);
-    Alert.alert(
-      'Voice Input',
-      'Voice recording is coming soon. Install expo-av to enable microphone access.',
-      [{ text: 'Got it', style: 'default' }],
-    );
-  };
+
+    // Build wire-safe history (slim to role + content)
+    const wireHistory = chatHistory.map((m) => ({ role: m.role, content: m.content }));
+    const payload     = buildVoicePayload(result.base64, result.uri, wireHistory, {
+      todayDate: getTodayDate(),
+      tracks: [],
+      schedule: [],
+      frictions: [],
+      focusSummary: { weeklyMinsByGoal: {}, totalWeeklyMins: 0 },
+    });
+
+    const userMsg: ChatMessage = makeUserMsg('[Voice message — processing…]');
+    addChatMessage(userMsg);
+    setLoading(true);
+    setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 50);
+
+    try {
+      const endpoint = `${process.env.EXPO_PUBLIC_SUPABASE_URL ?? ''}/functions/v1/ai-chat`;
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization:  `Bearer ${session!.access_token}`,
+        },
+        body: JSON.stringify(payload),
+      });
+
+      const data = await res.json().catch(() => null);
+
+      if (!res.ok || data?.error) {
+        if (data?.code === 'insufficient_credits') {
+          track('ai_insufficient_credits');
+          addChatMessage({
+            id: generateId(), role: 'assistant',
+            content: '_Your AI credits are exhausted. They refill automatically on a 30-day cycle._',
+            createdAt: new Date().toISOString(),
+          });
+        } else {
+          track('ai_request_failed', { mode: 'voice' } as any);
+          addChatMessage({
+            id: generateId(), role: 'assistant',
+            content: `_Voice processing failed: ${data?.error ?? 'Unknown error'}_`,
+            createdAt: new Date().toISOString(),
+          });
+        }
+      } else {
+        track('ai_request_succeeded', { mode: 'voice' } as any);
+        addChatMessage({
+          id: generateId(), role: 'assistant',
+          content: data.content,
+          createdAt: data.createdAt ?? new Date().toISOString(),
+        });
+      }
+    } catch (err: any) {
+      track('ai_request_failed', { mode: 'voice' } as any);
+      addChatMessage({
+        id: generateId(), role: 'assistant',
+        content: `_Voice error: ${err?.message ?? 'Something went wrong'}_`,
+        createdAt: new Date().toISOString(),
+      });
+    } finally {
+      setLoading(false);
+      refreshUsage();
+      refreshBalance();
+      setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 100);
+    }
+  }, [chatHistory, session, addChatMessage, refreshUsage, refreshBalance]);
+
+  const handleVoiceCancel = useCallback(() => {
+    track('voice_record_cancelled');
+    setVoiceVisible(false);
+  }, []);
 
   const handleImageImport = useCallback(async () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -610,7 +690,7 @@ export default function CoachScreen() {
                   <Ionicons name="mic-outline" size={20} color={Colors.gold} />
                 </View>
                 <Text style={s.affordanceBtnLabel}>{t('coach.tap_to_speak')}</Text>
-                <Text style={s.affordanceBtnSub}>Voice · 2 credits{!entitlements.isPro ? ' · Pro' : ''}</Text>
+                <Text style={s.affordanceBtnSub}>2 credits{!entitlements.isPro ? ' · Pro' : ''}</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={[s.affordanceBtn, !entitlements.isPro && s.affordanceBtnLocked]}
@@ -720,6 +800,12 @@ export default function CoachScreen() {
         visible={upgradeFeat !== null}
         featureName={upgradeFeat ?? undefined}
         onDismiss={() => setUpgradeFeat(null)}
+      />
+
+      <VoiceRecordingModal
+        visible={voiceVisible}
+        onSubmit={handleVoiceSubmit}
+        onCancel={handleVoiceCancel}
       />
     </SafeAreaView>
   );
