@@ -9,11 +9,19 @@
  *
  * The component is self-contained — all Expo Audio interaction lives here.
  * The parent (coach.tsx) only receives the final audio blob payload.
+ *
+ * Hardening (Batch 11.2):
+ *   - Web safety: early return with informative message on Platform.OS === 'web'
+ *   - AppState listener: stops + cleans up on app background
+ *   - File size guard: rejects recordings > 10 MB before base64 encoding
+ *   - Cleanup safety: temp audio file deleted on ALL paths (success, cancel, error, bg interrupt)
  */
 
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import {
   Animated,
+  AppState,
+  AppStateStatus,
   Modal,
   Platform,
   StyleSheet,
@@ -29,8 +37,11 @@ import {
   nextPhase,
   durationLabel,
   isUsableRecording,
+  isAcceptableFileSize,
   permissionDeniedMessage,
   tooShortMessage,
+  fileTooLargeMessage,
+  webNotSupportedMessage,
   MAX_RECORDING_MS,
   resolveAudioMime,
 } from '../ai/voiceHelpers';
@@ -86,10 +97,12 @@ export function VoiceRecordingModal({ visible, onSubmit, onCancel }: VoiceRecord
   const [durationMs, setDurationMs] = useState(0);
   const [errorMsg,   setErrorMsg]   = useState<string | null>(null);
 
-  const recordingRef = useRef<Audio.Recording | null>(null);
-  const timerRef     = useRef<ReturnType<typeof setInterval> | null>(null);
-  const startTimeRef = useRef<number>(0);
-  const pulseAnim    = useRef(new Animated.Value(1)).current;
+  const recordingRef  = useRef<Audio.Recording | null>(null);
+  const timerRef      = useRef<ReturnType<typeof setInterval> | null>(null);
+  const startTimeRef  = useRef<number>(0);
+  const pulseAnim     = useRef(new Animated.Value(1)).current;
+  // Track the URI of the most recent recording so we can delete it on all exit paths
+  const pendingUriRef = useRef<string | null>(null);
 
   // ── Pulse animation when recording ────────────────────────────────────────
   useEffect(() => {
@@ -137,13 +150,44 @@ export function VoiceRecordingModal({ visible, onSubmit, onCancel }: VoiceRecord
       setPhase('idle');
       setDurationMs(0);
       setErrorMsg(null);
-      // Start recording immediately when modal opens
+      // Web: show informative message, don't attempt recording
+      if (Platform.OS === 'web') {
+        setPhase('error');
+        setErrorMsg(webNotSupportedMessage());
+        return;
+      }
       startRecording();
     } else {
       // Cleanup on close
       cleanup();
     }
   }, [visible]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── AppState — stop recording safely on app background ────────────────────
+  useEffect(() => {
+    if (!visible) return;
+
+    const handleAppStateChange = (nextState: AppStateStatus) => {
+      if (nextState === 'background' || nextState === 'inactive') {
+        // Background interrupt: stop recording and discard (cannot submit incomplete audio)
+        cleanup().then(() => {
+          setPhase('idle');
+          setErrorMsg(null);
+          setDurationMs(0);
+          onCancel();
+        });
+      }
+    };
+
+    const subscription = AppState.addEventListener('change', handleAppStateChange);
+    return () => subscription.remove();
+  }, [visible]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Delete a temp file safely (all paths) ─────────────────────────────────
+  const deleteTempFile = useCallback((uri: string | null) => {
+    if (!uri) return;
+    FileSystem.deleteAsync(uri, { idempotent: true }).catch(() => {});
+  }, []);
 
   // ── Cleanup ────────────────────────────────────────────────────────────────
   const cleanup = useCallback(async () => {
@@ -154,11 +198,16 @@ export function VoiceRecordingModal({ visible, onSubmit, onCancel }: VoiceRecord
     if (recordingRef.current) {
       try {
         const status = await recordingRef.current.getStatusAsync();
+        // Capture URI before unloading — the ref is cleared after stopAndUnload
+        const uri = recordingRef.current.getURI() ?? null;
         if (status.isRecording) {
           await recordingRef.current.stopAndUnloadAsync();
         }
+        // Delete temp file (cancel / error / interrupt paths)
+        deleteTempFile(uri ?? pendingUriRef.current);
+        pendingUriRef.current = null;
       } catch {
-        // Ignore errors during cleanup
+        // Ignore errors during cleanup; still clear the ref
       }
       recordingRef.current = null;
     }
@@ -168,7 +217,7 @@ export function VoiceRecordingModal({ visible, onSubmit, onCancel }: VoiceRecord
     } catch {
       // Ignore
     }
-  }, []);
+  }, [deleteTempFile]);
 
   // ── Start recording ────────────────────────────────────────────────────────
   const startRecording = useCallback(async () => {
@@ -190,7 +239,6 @@ export function VoiceRecordingModal({ visible, onSubmit, onCancel }: VoiceRecord
       await Audio.setAudioModeAsync({
         allowsRecordingIOS:  true,
         playsInSilentModeIOS: true,
-        // Android defaults are fine
       });
 
       // 3. Create and start recording
@@ -216,10 +264,12 @@ export function VoiceRecordingModal({ visible, onSubmit, onCancel }: VoiceRecord
         throw new Error('No active recording');
       }
 
+      // Capture URI before unloading
+      const uri = recordingRef.current.getURI();
+      pendingUriRef.current = uri ?? null;
+
       await recordingRef.current.stopAndUnloadAsync();
       await Audio.setAudioModeAsync({ allowsRecordingIOS: false });
-
-      const uri = recordingRef.current.getURI();
       recordingRef.current = null;
 
       if (!uri) throw new Error('Recording URI is null');
@@ -228,6 +278,19 @@ export function VoiceRecordingModal({ visible, onSubmit, onCancel }: VoiceRecord
       if (!isUsableRecording(elapsed)) {
         setPhase(nextPhase('stopping', 'error'));
         setErrorMsg(tooShortMessage());
+        deleteTempFile(uri);
+        pendingUriRef.current = null;
+        return;
+      }
+
+      // File size guard — prevents OOM on large files
+      const info = await FileSystem.getInfoAsync(uri);
+      const fileBytes = info.exists ? (info as any).size ?? 0 : 0;
+      if (!isAcceptableFileSize(fileBytes)) {
+        setPhase(nextPhase('stopping', 'error'));
+        setErrorMsg(fileTooLargeMessage());
+        deleteTempFile(uri);
+        pendingUriRef.current = null;
         return;
       }
 
@@ -240,8 +303,9 @@ export function VoiceRecordingModal({ visible, onSubmit, onCancel }: VoiceRecord
         throw new Error('Audio file is empty or unreadable');
       }
 
-      // Clean up temp file after encoding
-      FileSystem.deleteAsync(uri, { idempotent: true }).catch(() => {});
+      // Delete temp file after successful encoding (success path)
+      deleteTempFile(uri);
+      pendingUriRef.current = null;
 
       onSubmit({
         base64,
@@ -256,9 +320,12 @@ export function VoiceRecordingModal({ visible, onSubmit, onCancel }: VoiceRecord
     } catch (err: any) {
       setPhase(nextPhase('stopping', 'error'));
       setErrorMsg(err?.message ?? 'Failed to process recording');
+      // Delete any captured URI on error path
+      deleteTempFile(pendingUriRef.current);
+      pendingUriRef.current = null;
       recordingRef.current = null;
     }
-  }, [phase, onSubmit]);
+  }, [phase, onSubmit, deleteTempFile]);
 
   // ── Cancel ─────────────────────────────────────────────────────────────────
   const handleCancel = useCallback(async () => {
@@ -338,7 +405,7 @@ export function VoiceRecordingModal({ visible, onSubmit, onCancel }: VoiceRecord
               </TouchableOpacity>
             )}
 
-            {hasError && phase !== 'permission_denied' && (
+            {hasError && phase !== 'permission_denied' && Platform.OS !== 'web' && (
               <TouchableOpacity style={s.retryBtn} onPress={handleRetry} activeOpacity={0.8}>
                 <Text style={s.retryBtnText}>Try Again</Text>
               </TouchableOpacity>

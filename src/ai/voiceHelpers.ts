@@ -143,3 +143,32 @@ export function permissionDeniedMessage(): string {
 export function tooShortMessage(): string {
   return 'Recording was too short. Tap the mic and speak clearly, then tap stop.';
 }
+
+/**
+ * Maximum audio file size accepted for base64 upload — 10 MB.
+ * Prevents OOM on low-memory devices when encoding large files.
+ * Whisper's hard limit is 25 MB; we add a conservative client-side guard.
+ */
+export const MAX_FILE_BYTES = 10 * 1024 * 1024; // 10 MB
+
+/**
+ * True when an audio file is within the acceptable upload size.
+ * Pass the value returned by FileSystem.getInfoAsync(uri).size.
+ */
+export function isAcceptableFileSize(bytes: number): boolean {
+  return bytes > 0 && bytes <= MAX_FILE_BYTES;
+}
+
+/**
+ * User-facing error message for oversized recordings.
+ */
+export function fileTooLargeMessage(): string {
+  return 'Recording is too large to upload. Please keep voice messages under 90 seconds.';
+}
+
+/**
+ * Voice is not available on web — expo-av recording requires a native device.
+ */
+export function webNotSupportedMessage(): string {
+  return 'Voice recording is not available on web. Use the mobile app to send voice messages.';
+}
