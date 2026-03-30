@@ -36,6 +36,15 @@ export function getTodayDate(): string {
 }
 
 /**
+ * Returns yesterday's date as YYYY-MM-DD (local timezone).
+ */
+export function getYesterday(): string {
+  const d = new Date();
+  d.setDate(d.getDate() - 1);
+  return getLocalDateStr(d);
+}
+
+/**
  * Formats a date string (YYYY-MM-DD) as a human-readable string
  */
 export function formatDate(dateStr: string): string {

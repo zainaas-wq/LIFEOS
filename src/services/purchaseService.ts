@@ -28,7 +28,7 @@ try {
 
 const IS_MOCK =
   !RCPurchases ||
-  process.env.EXPO_PUBLIC_RC_MOCK_MODE === 'true';
+  (__DEV__ && process.env.EXPO_PUBLIC_RC_MOCK_MODE === 'true');
 
 // ── Config ────────────────────────────────────────────────────────────────────
 

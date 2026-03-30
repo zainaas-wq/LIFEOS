@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { Session } from '@supabase/supabase-js';
-import { setAppLanguage } from '../i18n';
+import i18n, { setAppLanguage } from '../i18n';
 import type {
   UserProfile,
   Task,
@@ -14,6 +14,14 @@ import type {
   ScheduleEvent,
   Goal,
   SkillPlan,
+  HabitItem,
+  RecurringTask,
+  RecurringTaskCategory,
+  IdentityGoal,
+  IdentityGoalType,
+  DailyScheduleEntry,
+  BehaviorState,
+  DayState,
   FocusSession,
   ActiveFocusSession,
   PlanBlock,
@@ -25,7 +33,16 @@ import type {
   AlignmentResult,
   MissedTask,
   DailyDecision,
+  DayMode,
+  DriftEvent,
+  DriftRecord,
+  RecoveryMode,
+  DailyReview,
 } from '../types';
+import { computeDayMode, computeDriftEvent, isDriftStale } from '../ai/driftEngine';
+import { computeDailyReview } from '../ai/reviewEngine';
+import * as reviewService from '../services/reviewService';
+import { applyRecoveryMode } from '../ai/recoveryActions';
 import {
   computeDailyDecision,
   extractMissedTasksFromPlan,
@@ -47,9 +64,18 @@ import { computeProgressScore } from '../ai/progressEngine';
 import { hydrateFromCloud as cloudHydrate } from '../services/syncService';
 import { upsertLocalProfile } from '../services/profileService';
 import { generateControlPlan, computeNextBestAction, buildNudgeSchedule } from '../control/controlEngine';
+import { computeAdaptationHints } from '../ai/adaptationEngine';
+import { computeRecoveryStats } from '../ai/metricsEngine';
+import { predictDrift, rankRecoveryModes } from '../ai/predictiveEngine';
+import { explainPlanIntensity, buildPredictionContext } from '../ai/decisionExplanationEngine';
+import { computeStreakData } from '../ai/retentionEngine';
+import { track } from '../services/analyticsService';
+import { computePressure } from '../ai/executionEngine';
+import { getTodayConstraints } from '../services/scheduleInputService';
+import { timeToMins } from '../ai/planGenerator';
 import { parseFixedWindow } from '../ai/planningEngine';
 import { rescheduleRemaining } from '../ai/adaptiveRescheduler';
-import { generateId, getTodayDate, getLocalDateStr } from '../lib/utils';
+import { generateId, getTodayDate, getLocalDateStr, getYesterday } from '../lib/utils';
 import { generateDailyPlan } from '../lib/planGenerator';
 import { FREE_PLAN_RULE_LIMIT } from '../lib/rulesEngine';
 import { generateWeeklyPlan } from '../lib/weeklyPlanner';
@@ -80,6 +106,21 @@ interface AppStore {
   // ── Goals + Skill plans ───────────────────────────────────────────────────
   goals: Goal[];
   skillPlans: SkillPlan[];
+
+  // ── Habits (legacy — kept for backward compat + migration source) ────────
+  habits: HabitItem[];
+
+  // ── Recurring Tasks (v3 — replaces habits) ────────────────────────────────
+  recurringTasks: RecurringTask[];
+
+  // ── Identity Goals (what user wants to become) ────────────────────────────
+  identityGoals: IdentityGoal[];
+
+  // ── Daily schedule entry (for daily_input / weekly_known schedule types) ──
+  todayScheduleEntry: DailyScheduleEntry | null;
+
+  // ── Behavior state machine (ephemeral — NOT persisted) ────────────────────
+  behaviorState: BehaviorState;
 
   // ── Rules ─────────────────────────────────────────────────────────────────
   rules: Rule[];
@@ -122,11 +163,70 @@ interface AppStore {
   dismissedReplanForItemIds: string[];     // item IDs whose replan was dismissed
   enforcementFiredIds: string[];           // nudge IDs fired today (prevents re-firing)
 
+  // ── Execution engine counters ──────────────────────────────────────────────
+  taskSkipCount: number;
+  taskStreakCount: number;
+  skippedPlanItemIds: string[];  // IDs of items the user explicitly skipped this day
+
   // ── Seed loaded flag ──────────────────────────────────────────────────────
   seedLoaded: boolean;
 
-  // ── Paywall ───────────────────────────────────────────────────────────────
-  paywallSeen: boolean;   // true after user dismisses paywall (not necessarily subscribed)
+  // ── Trial / subscription ──────────────────────────────────────────────────
+  trialStartDate: string | null;  // ISO timestamp set once on onboarding completion
+
+  // ── Language ──────────────────────────────────────────────────────────────
+  appLanguage: string;       // persisted independently of profile
+  languageSelected: boolean; // true once user has explicitly chosen a language
+
+  // ── Streak + retention ────────────────────────────────────────────────────
+  dayStreak: number;              // consecutive days with ≥1 completed task
+  lastCompletionDate: string | null; // YYYY-MM-DD of last task completion
+  totalCompletedTasks: number;    // lifetime completed task count (display only)
+
+  // ── Execution system — day mode + drift ───────────────────────────────────
+  /**
+   * Visible operational mode for Home screen status strip.
+   * Recomputed by tickBehavior on every heartbeat.
+   */
+  dayMode: DayMode;
+  /**
+   * The currently active drift event (if any).
+   * null when user is on track or after dismissal.
+   */
+  activeDrift: DriftEvent | null;
+
+  /**
+   * The recovery mode currently in effect (set by applyRecoveryAction).
+   * Persisted — cleared on plan regen and day boundary.
+   */
+  activeRecoveryMode: RecoveryMode | null;
+
+  /**
+   * ISO timestamp of the last recovery application.
+   * Persisted — used as a 3-second dedup guard across foreground/background cycles.
+   */
+  lastRecoveryAppliedAt: string | null;
+
+  /**
+   * Per-day audit log of drift events where recovery was applied.
+   * Ephemeral — NOT persisted. Cleared on plan regen and day boundary.
+   */
+  driftHistory: DriftRecord[];
+
+  // ── Review ────────────────────────────────────────────────────────────────
+
+  /**
+   * Local history of saved daily reviews.
+   * Persisted — bounded to last 30 days. Never grows unbounded.
+   */
+  dailyReviews: DailyReview[];
+
+  /**
+   * Today's pre-built review snapshot (stats only — no user text yet).
+   * Ephemeral — NOT persisted. Built by buildTodayReview().
+   * Cleared after saveDailyReviewAction() or on hard reset.
+   */
+  pendingReview: DailyReview | null;
 
   // ── Actions ───────────────────────────────────────────────────────────────
 
@@ -152,6 +252,11 @@ interface AppStore {
   addGoal: (g: Omit<Goal, 'id' | 'createdAt'>) => void;
   updateGoal: (id: string, patch: Partial<Goal>) => void;
   deleteGoal: (id: string) => void;
+
+  // Habits
+  addHabit: (h: Omit<HabitItem, 'id' | 'createdAt' | 'completedDates'>) => void;
+  removeHabit: (id: string) => void;
+  completeHabitToday: (habitId: string, date: string) => void;
 
   // Skill plans
   addSkillPlan: (sp: Omit<SkillPlan, 'id' | 'createdAt'>) => void;
@@ -224,12 +329,83 @@ interface AppStore {
   dismissReplanSuggestion: () => void;
   archiveEnforcementDay: () => void;  // call on new day to reset fired IDs
 
+  // Execution engine
+  skipNowAction: () => void;
+  skipItem: (itemId: string) => void;
+  autoGeneratePlanIfNeeded: (date: string) => void;
+  resetStreakCounters: () => void;
+  restartDay: () => void;
+  loadStarterDay: (date: string) => void;
+
   // Cloud sync
   hydrateFromCloud: (userId: string) => Promise<void>;
   saveProgressSnapshot: (result: AlignmentResult, date: string) => Promise<void>;
 
-  // Paywall
-  setPaywallSeen: () => void;
+  // Trial
+  setTrialStartDate: (date: string) => void;
+
+  // Language
+  setLanguageSelected: () => void;
+
+  // Recurring Tasks (v3)
+  addRecurringTask: (task: Omit<RecurringTask, 'id' | 'createdAt' | 'completedDates'>) => void;
+  removeRecurringTask: (id: string) => void;
+  updateRecurringTask: (id: string, patch: Partial<RecurringTask>) => void;
+  completeRecurringTaskToday: (id: string, date: string) => void;
+  migrateHabitsToRecurringTasks: () => void;
+
+  // Identity Goals
+  addIdentityGoal: (type: IdentityGoalType, customLabel?: string) => void;
+  removeIdentityGoal: (id: string) => void;
+  setIdentityGoals: (goals: IdentityGoal[]) => void;
+
+  // Daily schedule entry (variable schedule support)
+  setTodayScheduleEntry: (entry: DailyScheduleEntry) => void;
+  clearTodayScheduleEntry: () => void;
+
+  // Day mode + drift
+  /** Dismiss the current drift intervention card (user acknowledged). */
+  dismissActiveDrift: () => void;
+  /**
+   * Apply a recovery action to today's control plan.
+   * Modifies plan items, recomputes nextBestAction, and sets dayMode to RECOVERY.
+   */
+  applyRecoveryAction: (mode: RecoveryMode, nowMins: number) => void;
+
+  // Behavior state machine
+  /**
+   * Higher-level state machine heartbeat.
+   * Called every 60s and on app foreground.
+   * Computes DayState transitions, updates behaviorState,
+   * then delegates to checkEnforcementTick (transition phase).
+   */
+  tickBehavior: (nowISO: string) => void;
+  /** Reset drift clock — call on every user interaction. */
+  recordInteraction: () => void;
+  /**
+   * User tapped "I'm ready" during a recovery block.
+   * Marks the recovery plan item as completed (silent — no task counters)
+   * and resets behaviorState to in_task.
+   * Must NOT use skipItem/skippedPlanItemIds — recovery is not a skipped task.
+   */
+  endRecoveryEarly: (itemId: string) => void;
+  /** @deprecated Use endRecoveryEarly — kept only for behavior state reset in tickBehavior. */
+  acknowledgeRecovery: () => void;
+
+  // Review
+  /**
+   * Builds today's DailyReview from current store state and sets pendingReview.
+   * Called automatically by archiveEnforcementDay (before drift/recovery reset).
+   * Also callable from the review screen to ensure pendingReview is populated.
+   */
+  buildTodayReview: () => void;
+  /**
+   * Saves a DailyReview (with user text merged in) to local store and Supabase.
+   * Clears pendingReview. Bounded to last 30 days in local store.
+   */
+  saveDailyReviewAction: (review: DailyReview) => Promise<void>;
+  /** Clears pendingReview without saving (e.g. user dismissed the review screen). */
+  clearPendingReview: () => void;
 
   // Reset
   resetAllData: () => void;
@@ -246,6 +422,19 @@ export const useAppStore = create<AppStore>()(
       scheduleEvents: [],
       goals: [],
       skillPlans: [],
+      habits: [],
+      recurringTasks: [],
+      identityGoals: [],
+      todayScheduleEntry: null,
+      behaviorState: {
+        dayState: 'idle' as DayState,
+        driftLevel: 0,
+        lastInteractionTime: null,
+        currentConstraintId: null,
+        recoveryStartedAt: null,
+        recoveryDurationMins: 0,
+        lateStartDetectedAt: null,
+      },
       rules: [],
       focusSessions: [],
       activeFocus: null,
@@ -269,8 +458,23 @@ export const useAppStore = create<AppStore>()(
       lastReplanItemId: null,
       dismissedReplanForItemIds: [],
       enforcementFiredIds: [],
+      taskSkipCount: 0,
+      taskStreakCount: 0,
+      skippedPlanItemIds: [],
       seedLoaded: false,
-      paywallSeen: false,
+      trialStartDate: null,
+      appLanguage: 'en',
+      languageSelected: false,
+      dayStreak: 0,
+      lastCompletionDate: null,
+      totalCompletedTasks: 0,
+      dayMode: 'ON_TRACK' as DayMode,
+      activeDrift: null,
+      activeRecoveryMode: null,
+      lastRecoveryAppliedAt: null,
+      driftHistory: [],
+      dailyReviews: [],
+      pendingReview: null,
 
       // ── Auth ────────────────────────────────────────────────────────────────
 
@@ -312,6 +516,7 @@ export const useAppStore = create<AppStore>()(
         // Persist to profile so the choice survives app restarts
         set((s) => ({
           profile: s.profile ? { ...s.profile, language: lang } : s.profile,
+          appLanguage: lang,
         }));
         // Apply i18next language switch + RTL direction
         setAppLanguage(lang as any).catch(console.warn);
@@ -394,6 +599,28 @@ export const useAppStore = create<AppStore>()(
           goalsService.deleteGoal(session.user.id, id).catch(console.warn);
         }
       },
+
+      // ── Habits (local-only) ───────────────────────────────────────────────
+
+      addHabit: (h) => {
+        const newHabit: HabitItem = {
+          ...h,
+          id: generateId(),
+          completedDates: [],
+          createdAt: new Date().toISOString(),
+        };
+        set((s) => ({ habits: [...s.habits, newHabit] }));
+      },
+
+      removeHabit: (id) => set((s) => ({ habits: s.habits.filter((h) => h.id !== id) })),
+
+      completeHabitToday: (habitId, date) => set((s) => ({
+        habits: s.habits.map((h) =>
+          h.id === habitId && !h.completedDates.includes(date)
+            ? { ...h, completedDates: [...h.completedDates, date] }
+            : h,
+        ),
+      })),
 
       // ── Skill plans ──────────────────────────────────────────────────────────
 
@@ -689,19 +916,77 @@ export const useAppStore = create<AppStore>()(
       // ── Control Engine ───────────────────────────────────────────────────────
 
       generateControlPlanAction: (date) => {
-        const { goals, scheduleEvents, skillPlans, rules, profile, session, isGuestMode } = get();
+        const { goals, scheduleEvents, skillPlans, rules, recurringTasks, profile, todayScheduleEntry, session, isGuestMode } = get();
+
+        // For daily_input users who haven't entered today's schedule yet:
+        // block plan generation. The home screen will show a schedule prompt.
+        // Plan generates only after the user submits their hours.
+        if (
+          profile?.scheduleType === 'daily_input' &&
+          !todayScheduleEntry &&
+          profile?.userType !== 'flexible'
+        ) {
+          return;
+        }
 
         // Archive missed tasks from the PREVIOUS plan before overwriting it.
         // This must happen before set({ controlPlan }) so we read the old plan.
         get().archiveMissedTasksFromPlan(date);
 
+        // Compute today's locked constraint blocks (work/class + recovery) via
+        // the schedule input service. This is the authoritative source for locked time.
+        const constraints = getTodayConstraints(
+          profile,
+          scheduleEvents,
+          recurringTasks,
+          todayScheduleEntry,
+          date,
+        );
+
         const { fixedStart, fixedEnd } = parseFixedWindow(
           profile?.fixedScheduleStart,
           profile?.fixedScheduleEnd,
         );
-        const plan = generateControlPlan(goals, scheduleEvents, skillPlans, rules, date, undefined, fixedStart, fixedEnd);
-        // Clear replan dismissals — new plan = fresh state.
-        set({ controlPlan: plan, replanSuggested: false, dismissedReplanForItemIds: [], lastReplanItemId: null });
+
+        // Compute adaptation hints from saved review history.
+        // These bias the planner toward smaller load / different task order
+        // when recurring execution problems are detected.
+        const adaptationHints = computeAdaptationHints(get().dailyReviews);
+
+        // Pass constraintBlocks + recurringTasks directly to the engine.
+        // The engine will:
+        //  - pre-place constraint PlanItems in the output
+        //  - subtract their time windows from free slots
+        //  - inject activeRecurringTasks as routines (bypasses legacy habits)
+        const plan = generateControlPlan(
+          goals,
+          scheduleEvents,
+          skillPlans,
+          rules,
+          date,
+          undefined,
+          fixedStart,
+          fixedEnd,
+          profile?.energyStyle,
+          constraints.allBlocks.length ? constraints.allBlocks : undefined,
+          constraints.activeRecurringTasks.length ? constraints.activeRecurringTasks : undefined,
+          adaptationHints,
+        );
+        // Clear replan dismissals + drift — new plan = fresh state.
+        set({
+          controlPlan: plan,
+          replanSuggested: false, dismissedReplanForItemIds: [], lastReplanItemId: null, skippedPlanItemIds: [],
+          activeDrift: null,           // stale drift from old plan must not persist
+          activeRecoveryMode: null,    // recovery context tied to old plan — reset
+          driftHistory: [],            // ephemeral audit log — reset with plan
+        });
+        track('plan_generated', {
+          date,
+          item_count:      plan.plan.items.length,
+          goal_count:      goals.length,
+          has_adaptation:  adaptationHints.reviewCount > 0 ? 1 : 0,
+          cap_multiplier:  adaptationHints.capMultiplier,
+        });
         if (session && !isGuestMode) {
           planService.upsertDailyPlan(session.user.id, plan).catch(console.warn);
         }
@@ -713,16 +998,37 @@ export const useAppStore = create<AppStore>()(
       toggleControlPlanItem: (itemId) => {
         const s = get();
         if (!s.controlPlan) return;
+        const wasCompleted = s.controlPlan.plan.items.find(i => i.id === itemId)?.completed ?? false;
+        const isNowCompleted = !wasCompleted;
         const updatedItems = s.controlPlan.plan.items.map((i) =>
           i.id === itemId ? { ...i, completed: !i.completed } : i,
         );
-        const nextBestAction = computeNextBestAction(updatedItems);
+        // Exclude skipped items from NBA so they don't resurface after toggle
+        const skipped = new Set(s.skippedPlanItemIds ?? []);
+        const nextBestAction = computeNextBestAction(updatedItems.filter(i => !skipped.has(i.id)));
         const updatedPlan: ControlDailyPlan = {
           ...s.controlPlan,
           plan: { ...s.controlPlan.plan, items: updatedItems },
           nextBestAction,
         };
-        set({ controlPlan: updatedPlan });
+        set({
+          controlPlan: updatedPlan,
+          ...(isNowCompleted ? {
+            taskStreakCount: s.taskStreakCount + 1,
+            taskSkipCount: 0,
+            lastCompletionDate: getTodayDate(),
+            totalCompletedTasks: s.totalCompletedTasks + 1,
+          } : {}),
+        });
+        if (isNowCompleted) {
+          const completedItem = updatedItems.find((i) => i.id === itemId);
+          track('task_completed', {
+            date:        getTodayDate(),
+            item_type:   completedItem?.type ?? 'goal',
+            is_critical: completedItem?.isCritical ? 1 : 0,
+            streak:      s.taskStreakCount + 1,
+          });
+        }
         if (s.session && !s.isGuestMode) {
           // Update single item — cheaper than re-saving the whole plan
           const item = updatedItems.find((i) => i.id === itemId);
@@ -883,6 +1189,21 @@ export const useAppStore = create<AppStore>()(
           firedSet.add(nudge.id);
           set({ activeNudge: nudge, enforcementFiredIds: Array.from(firedSet) });
         }
+
+        // ── 4. Skip pressure nudge — fires once when ≥2 skips, no completions ─
+        const { taskSkipCount } = get();
+        const skipNudgeId = 'skip-pressure-today';
+        if (taskSkipCount >= 2 && !firedSet.has(skipNudgeId) && !get().activeNudge) {
+          const skipNudge: NudgeItem = {
+            id:          skipNudgeId,
+            itemId:      'skip',
+            itemTitle:   "What's actually blocking you? Your coach can help.",
+            triggerTime: nowStr,
+            type:        'checkin',
+          };
+          firedSet.add(skipNudgeId);
+          set({ activeNudge: skipNudge, enforcementFiredIds: Array.from(firedSet) });
+        }
       },
 
       // P0 fix: records which item triggered this dismissal — won't resurface
@@ -899,10 +1220,559 @@ export const useAppStore = create<AppStore>()(
       },
 
       // Called when a new day begins (from tabs layout on mount with date mismatch).
-      archiveEnforcementDay: () =>
-        set({ enforcementFiredIds: [], dismissedReplanForItemIds: [], lastReplanItemId: null, replanSuggested: false }),
+      archiveEnforcementDay: () => {
+        // Build today's review BEFORE clearing drift/recovery state so the
+        // review captures the day's actual audit data, not the cleared state.
+        get().buildTodayReview();
 
-      setPaywallSeen: () => set({ paywallSeen: true }),
+        const { lastCompletionDate, dayStreak } = get();
+        const yesterday = getYesterday();
+        const newStreak = lastCompletionDate === yesterday ? dayStreak + 1 : 0;
+        set({
+          enforcementFiredIds: [], dismissedReplanForItemIds: [], lastReplanItemId: null,
+          replanSuggested: false, taskSkipCount: 0, taskStreakCount: 0, skippedPlanItemIds: [],
+          dayStreak: newStreak,
+          activeDrift: null,           // clear yesterday's drift on day boundary
+          activeRecoveryMode: null,    // recovery context is per-day — reset
+          lastRecoveryAppliedAt: null, // dedup guard — reset for new day
+          driftHistory: [],            // ephemeral audit log — reset for new day
+          dayMode: 'ON_TRACK' as DayMode, // reset mode; tickBehavior will recompute
+        });
+        track('day_archived', {
+          date:   yesterday,
+          streak: newStreak,
+        });
+      },
+
+      // Skip a specific item by ID — adds to skippedPlanItemIds and recomputes NBA
+      skipItem: (itemId) => {
+        const { controlPlan } = get();
+        if (!controlPlan) return;
+        const skippedItem = controlPlan.plan.items.find((i) => i.id === itemId);
+        const newSkipped = [...(get().skippedPlanItemIds ?? []), itemId];
+        const remaining = controlPlan.plan.items.filter(i => !newSkipped.includes(i.id));
+        const nextBestAction = computeNextBestAction(remaining);
+        set(s => ({
+          controlPlan: { ...controlPlan, nextBestAction },
+          taskSkipCount: s.taskSkipCount + 1,
+          taskStreakCount: 0,
+          skippedPlanItemIds: newSkipped,
+        }));
+        track('task_skipped', {
+          date:       getTodayDate(),
+          item_type:  skippedItem?.type ?? 'goal',
+          skip_count: (get().taskSkipCount), // already incremented by set above
+        });
+      },
+
+      skipNowAction: () => {
+        const { controlPlan } = get();
+        if (!controlPlan?.nextBestAction) return;
+        get().skipItem(controlPlan.nextBestAction.id);
+      },
+
+      autoGeneratePlanIfNeeded: (date) => {
+        const { controlPlan } = get();
+        if (!controlPlan || controlPlan.date !== date) get().generateControlPlanAction(date);
+      },
+
+      resetStreakCounters: () => set({ taskSkipCount: 0, taskStreakCount: 0 }),
+
+      // Restore all skipped items and recompute NBA from the full item list
+      restartDay: () => {
+        const { controlPlan } = get();
+        if (!controlPlan) return;
+        const nextBestAction = computeNextBestAction(controlPlan.plan.items);
+        set({ skippedPlanItemIds: [], taskSkipCount: 0, taskStreakCount: 0,
+              controlPlan: { ...controlPlan, nextBestAction } });
+      },
+
+      // First-time experience: if no goals and no routines exist, seed a minimal
+      // starter day so the user sees an actionable plan immediately.
+      loadStarterDay: (date) => {
+        const { goals, habits, recurringTasks } = get();
+        if (goals.length > 0 || habits.length > 0 || recurringTasks.length > 0) return;
+        const now = new Date().toISOString();
+        const t = i18n.t.bind(i18n);
+        const starterGoals: Goal[] = [
+          { id: generateId(), title: t('starter.goal_morning'),  category: 'health',  priority: 1, weeklyHoursTarget: 3.5, createdAt: now },
+          { id: generateId(), title: t('starter.goal_deepwork'), category: 'career',  priority: 1, weeklyHoursTarget: 10,  createdAt: now },
+          { id: generateId(), title: t('starter.goal_learning'), category: 'skill',   priority: 2, weeklyHoursTarget: 5,   createdAt: now },
+        ];
+        // Seed as RecurringTask (v3) — compatible with controlEngine via cast
+        const starterTask: RecurringTask = {
+          id: generateId(),
+          title: t('starter.habit_stretch'),
+          durationMinutes: 10,
+          category: 'body' as RecurringTaskCategory,
+          daysOfWeek: [0, 1, 2, 3, 4, 5, 6],
+          skipOnOffDays: false,
+          preferredTime: '07:00',
+          completedDates: [],
+          createdAt: now,
+        };
+        set({ goals: starterGoals, recurringTasks: [starterTask] });
+        get().generateControlPlanAction(date);
+      },
+
+      // ── Trial & Language ─────────────────────────────────────────────────────
+
+      setTrialStartDate: (date) => set({ trialStartDate: date }),
+
+      setLanguageSelected: () => set({ languageSelected: true }),
+
+      // ── Day Mode + Drift ─────────────────────────────────────────────────────
+
+      dismissActiveDrift: () =>
+        set((s) =>
+          s.activeDrift
+            ? { activeDrift: { ...s.activeDrift, dismissed: true } }
+            : s,
+        ),
+
+      applyRecoveryAction: (mode, nowMins) => {
+        const s = get();
+        if (!s.controlPlan) return;
+
+        // 3-second dedup guard — prevents double-fire on fast double-tap or
+        // rapid foreground/background cycles within the same recovery session.
+        if (s.lastRecoveryAppliedAt) {
+          const msSince = Date.now() - new Date(s.lastRecoveryAppliedAt).getTime();
+          if (msSince < 3000) return;
+        }
+
+        const nowISO = new Date().toISOString();
+        const today = nowISO.slice(0, 10);
+
+        const newItems = applyRecoveryMode(
+          mode,
+          s.controlPlan.plan.items,
+          s.dailyDecision,
+          nowMins,
+        );
+        const skipped = new Set(s.skippedPlanItemIds ?? []);
+        const nextBestAction = computeNextBestAction(
+          newItems.filter((i) => !skipped.has(i.id)),
+        );
+
+        // Append to audit log if there was an active drift event
+        const newHistoryEntry: DriftRecord | null = s.activeDrift
+          ? {
+              type: s.activeDrift.type,
+              severity: s.activeDrift.severity,
+              detectedAt: s.activeDrift.detectedAt,
+              date: today,
+              recoveryApplied: mode,
+            }
+          : null;
+
+        // Keep decision layer in sync — marks isInRecoveryMode: true
+        const updatedDecision = s.dailyDecision
+          ? { ...s.dailyDecision, isInRecoveryMode: true }
+          : null;
+
+        set({
+          controlPlan: {
+            ...s.controlPlan,
+            plan: { ...s.controlPlan.plan, items: newItems },
+            nextBestAction,
+          },
+          dayMode: 'RECOVERY' as DayMode,
+          activeDrift: null,
+          activeRecoveryMode: mode,
+          lastRecoveryAppliedAt: nowISO,
+          driftHistory: newHistoryEntry
+            ? [...s.driftHistory, newHistoryEntry]
+            : s.driftHistory,
+          ...(updatedDecision ? { dailyDecision: updatedDecision } : {}),
+        });
+        track('recovery_applied', {
+          date:       today,
+          mode,
+          drift_type: s.activeDrift?.type ?? null,
+          severity:   s.activeDrift?.severity ?? null,
+        });
+      },
+
+      // ── Recurring Tasks (v3) ─────────────────────────────────────────────────
+
+      addRecurringTask: (task) => {
+        const newTask: RecurringTask = {
+          ...task,
+          id: generateId(),
+          completedDates: [],
+          createdAt: new Date().toISOString(),
+        };
+        set((s) => ({ recurringTasks: [...s.recurringTasks, newTask] }));
+      },
+
+      removeRecurringTask: (id) =>
+        set((s) => ({ recurringTasks: s.recurringTasks.filter((t) => t.id !== id) })),
+
+      updateRecurringTask: (id, patch) =>
+        set((s) => ({
+          recurringTasks: s.recurringTasks.map((t) =>
+            t.id === id ? { ...t, ...patch, updatedAt: new Date().toISOString() } : t,
+          ),
+        })),
+
+      completeRecurringTaskToday: (id, date) =>
+        set((s) => ({
+          recurringTasks: s.recurringTasks.map((t) =>
+            t.id === id && !t.completedDates.includes(date)
+              ? { ...t, completedDates: [...t.completedDates, date] }
+              : t,
+          ),
+        })),
+
+      /**
+       * One-time migration: copy legacy HabitItem[] → RecurringTask[].
+       * Safe to call multiple times — no-op if recurringTasks already populated.
+       * Called from _layout.tsx on first boot after upgrade.
+       */
+      migrateHabitsToRecurringTasks: () => {
+        const { habits, recurringTasks } = get();
+        if (recurringTasks.length > 0 || habits.length === 0) return;
+        const migrated: RecurringTask[] = habits.map((h) => ({
+          id: h.id,
+          title: h.title,
+          durationMinutes: h.durationMinutes,
+          category: 'body' as RecurringTaskCategory,
+          daysOfWeek: [0, 1, 2, 3, 4, 5, 6],
+          skipOnOffDays: false,
+          preferredTime: h.preferredTime,
+          completedDates: h.completedDates,
+          createdAt: h.createdAt,
+          updatedAt: h.updatedAt,
+        }));
+        set({ recurringTasks: migrated });
+      },
+
+      // ── Identity Goals ────────────────────────────────────────────────────────
+
+      addIdentityGoal: (type, customLabel) => {
+        const newGoal: IdentityGoal = {
+          id: generateId(),
+          type,
+          customLabel,
+          createdAt: new Date().toISOString(),
+        };
+        set((s) => ({ identityGoals: [...s.identityGoals, newGoal] }));
+      },
+
+      removeIdentityGoal: (id) =>
+        set((s) => ({ identityGoals: s.identityGoals.filter((g) => g.id !== id) })),
+
+      setIdentityGoals: (goals) => set({ identityGoals: goals }),
+
+      // ── Daily schedule entry ──────────────────────────────────────────────────
+
+      setTodayScheduleEntry: (entry) => set({ todayScheduleEntry: entry }),
+
+      clearTodayScheduleEntry: () => set({ todayScheduleEntry: null }),
+
+      // ── Behavior State Machine ────────────────────────────────────────────────
+
+      /**
+       * Higher-level state machine heartbeat.
+       * Computes dayState from the current plan + time, updates behaviorState,
+       * then delegates to checkEnforcementTick (existing enforcement logic
+       * preserved during transition phase — DO NOT remove until parity confirmed).
+       */
+      tickBehavior: (nowISO) => {
+        const { controlPlan, behaviorState } = get();
+        const now = new Date(nowISO);
+        const nowMins = now.getHours() * 60 + now.getMinutes();
+
+        if (!controlPlan) {
+          // No plan — keep idle, still run enforcement tick
+          get().checkEnforcementTick(nowMins);
+          return;
+        }
+
+        const items = controlPlan.plan.items;
+        const skipped = new Set(get().skippedPlanItemIds);
+
+        // Find the plan item whose time window contains nowMins
+        const currentItem = items.find((item) => {
+          const start = timeToMins(item.startTime);
+          const end   = timeToMins(item.endTime);
+          return nowMins >= start && nowMins < end;
+        });
+
+        const isConstraint = currentItem?.blockKind === 'constraint';
+        const isRecovery   = currentItem?.blockKind === 'recovery';
+        const isTask       = !!currentItem && !isConstraint && !isRecovery && !currentItem.completed;
+
+        // Drift: only accumulates when in a task window, not in constraint/recovery
+        const lastInteraction = behaviorState.lastInteractionTime;
+        const inactiveMins = lastInteraction
+          ? (now.getTime() - new Date(lastInteraction).getTime()) / 60_000
+          : Infinity;
+
+        let newDriftLevel: BehaviorState['driftLevel'] = 0;
+        if (isTask && !skipped.has(currentItem.id)) {
+          if      (inactiveMins > 90) newDriftLevel = 4;
+          else if (inactiveMins > 60) newDriftLevel = 3;
+          else if (inactiveMins > 40) newDriftLevel = 2;
+          else if (inactiveMins > 20) newDriftLevel = 1;
+        }
+
+        // Compute day state
+        let newDayState: DayState = 'idle';
+
+        if (isConstraint) {
+          newDayState = 'in_constraint';
+        } else if (isRecovery) {
+          newDayState = 'in_recovery';
+        } else if (isTask) {
+          newDayState = newDriftLevel > 0 ? 'drifting' : 'in_task';
+        } else if (items.filter((i) => !skipped.has(i.id)).every((i) => i.completed)) {
+          newDayState = 'blocked';
+        } else {
+          // Late-start detection: first item should have started > 90 min ago
+          const firstItem = items[0];
+          if (
+            firstItem &&
+            nowMins > timeToMins(firstItem.startTime) + 90 &&
+            behaviorState.dayState === 'idle' &&
+            !behaviorState.lateStartDetectedAt
+          ) {
+            newDayState = 'late_start';
+          }
+        }
+
+        // Recovery window tracking
+        const enteringRecovery = isRecovery && behaviorState.dayState !== 'in_recovery';
+        const recoveryStartedAt = enteringRecovery
+          ? nowISO
+          : (isRecovery ? behaviorState.recoveryStartedAt : null);
+        const recoveryDurationMins = isRecovery && currentItem
+          ? timeToMins(currentItem.endTime) - timeToMins(currentItem.startTime)
+          : 0;
+
+        const newBehaviorState: BehaviorState = {
+          ...behaviorState,
+          dayState: newDayState,
+          driftLevel: newDriftLevel,
+          currentConstraintId: isConstraint ? (currentItem?.id ?? null) : null,
+          recoveryStartedAt,
+          recoveryDurationMins,
+          lateStartDetectedAt:
+            newDayState === 'late_start' && !behaviorState.lateStartDetectedAt
+              ? nowISO
+              : behaviorState.lateStartDetectedAt,
+        };
+
+        // ── Compute DayMode and DriftEvent from fresh state ───────────────────
+        const { taskSkipCount, dailyDecision, distractionLogs, profile } = get();
+        const fixedEndMins = timeToMins(profile?.fixedScheduleEnd ?? '22:00');
+        const pressureInfo = computePressure(taskSkipCount, nowMins, items, fixedEndMins);
+
+        const newDayMode: DayMode = computeDayMode(
+          pressureInfo,
+          newBehaviorState,
+          dailyDecision,
+          taskSkipCount,
+        );
+
+        const today = nowISO.slice(0, 10);
+
+        // Clear stale drift from a previous calendar day before any further checks
+        const currentActiveDrift = (() => {
+          const d = get().activeDrift;
+          if (d && isDriftStale(d, today)) { set({ activeDrift: null }); return null; }
+          return d;
+        })();
+
+        // Suppress new drift events for 10 minutes after recovery was applied —
+        // gives the re-planned schedule time to settle before re-triggering.
+        const { activeRecoveryMode: arm, lastRecoveryAppliedAt: lraa } = get();
+        const suppressDrift =
+          arm !== null &&
+          lraa !== null &&
+          Date.now() - new Date(lraa).getTime() < 10 * 60 * 1000;
+
+        // Only recompute drift if: not suppressed AND no active/undismissed drift
+        const shouldRecomputeDrift =
+          !suppressDrift && (!currentActiveDrift || currentActiveDrift.dismissed);
+
+        const rawDrift = shouldRecomputeDrift
+          ? computeDriftEvent({
+              pressure: pressureInfo,
+              behaviorState: newBehaviorState,
+              planItems: items,
+              dailyDecision,
+              distractionLogs,
+              taskSkipCount,
+              nowMins,
+              today,
+            })
+          : currentActiveDrift;
+
+        // Adaptation: rank recovery options by past effectiveness + predicted drift type.
+        // Uses predictiveEngine.rankRecoveryModes for personalised, explainable ordering.
+        const newDrift = (() => {
+          if (!rawDrift || rawDrift.recoveryOptions.length === 0) return rawDrift;
+          const reviews            = get().dailyReviews;
+          const recoveryStats      = computeRecoveryStats(reviews);
+          const hintsForRanking    = computeAdaptationHints(reviews);
+          const cpForRanking       = get().controlPlan;
+          const nowMinsForRanking  = (() => {
+            const d = new Date();
+            return d.getHours() * 60 + d.getMinutes();
+          })();
+          const topPrediction = cpForRanking
+            ? (predictDrift(cpForRanking, reviews, hintsForRanking, nowMinsForRanking)[0] ?? null)
+            : null;
+          const ranked = rankRecoveryModes(rawDrift.recoveryOptions, recoveryStats, topPrediction);
+          return { ...rawDrift, recoveryOptions: ranked };
+        })();
+
+        set((s) => ({
+          behaviorState: newBehaviorState,
+          dayMode: newDayMode,
+          activeDrift: newDrift,
+        }));
+
+        // Track new drift events (not re-fire of the same ongoing drift)
+        if (newDrift && newDrift.id !== currentActiveDrift?.id) {
+          track('drift_detected', {
+            date:       today,
+            drift_type: newDrift.type,
+            severity:   newDrift.severity,
+          });
+        }
+
+        // Delegate to existing enforcement tick (transition phase — keep until parity confirmed)
+        get().checkEnforcementTick(nowMins);
+      },
+
+      recordInteraction: () =>
+        set((s) => ({
+          behaviorState: {
+            ...s.behaviorState,
+            lastInteractionTime: new Date().toISOString(),
+            driftLevel: 0,
+          },
+          // Clear dismissed drift so next tick can detect fresh patterns
+          activeDrift: s.activeDrift?.dismissed ? null : s.activeDrift,
+        })),
+
+      acknowledgeRecovery: () =>
+        set((s) => ({
+          behaviorState: {
+            ...s.behaviorState,
+            dayState: 'in_task',
+            recoveryStartedAt: null,
+            recoveryDurationMins: 0,
+          },
+        })),
+
+      endRecoveryEarly: (itemId) => {
+        const s = get();
+        if (!s.controlPlan) return;
+        // Mark recovery item as completed — silent path:
+        //   - does NOT increment taskStreakCount or totalCompletedTasks
+        //   - does NOT add to skippedPlanItemIds
+        //   - does NOT touch taskSkipCount or pressure
+        const updatedItems = s.controlPlan.plan.items.map((i) =>
+          i.id === itemId ? { ...i, completed: true } : i,
+        );
+        const skipped = new Set(s.skippedPlanItemIds ?? []);
+        const nextBestAction = computeNextBestAction(
+          updatedItems.filter(i => !skipped.has(i.id)),
+        );
+        set({
+          controlPlan: {
+            ...s.controlPlan,
+            plan: { ...s.controlPlan.plan, items: updatedItems },
+            nextBestAction,
+          },
+          // Atomically reset behavior state — recovery is done
+          behaviorState: {
+            ...s.behaviorState,
+            dayState: 'in_task' as DayState,
+            recoveryStartedAt: null,
+            recoveryDurationMins: 0,
+          },
+        });
+      },
+
+      // ── Review ───────────────────────────────────────────────────────────────
+
+      buildTodayReview: () => {
+        const s = get();
+        const today = getTodayDate();
+        const planItems = s.controlPlan?.plan.items ?? [];
+        const criticalDone = planItems.some((i) => !!i.isCritical && i.completed);
+        const distractionCount = s.distractionLogs.filter(
+          (d) => d.timestamp.startsWith(today),
+        ).length;
+        // Compute alignment score so it is included in the review snapshot.
+        const alignmentResult = computeProgressScore({
+          planItems: planItems.filter((i) => i.type !== 'break' && i.type !== 'event'),
+          rules: s.rules,
+          criticalActionCompleted: criticalDone,
+          hasReflection: false,
+          distractionCount,
+          seriousnessScore: s.profile?.seriousnessScore ?? 7,
+        });
+        const review = computeDailyReview({
+          date: today,
+          planItems,
+          distractionLogs: s.distractionLogs,
+          driftHistory: s.driftHistory,
+          activeRecoveryMode: s.activeRecoveryMode,
+          taskSkipCount: s.taskSkipCount,
+          alignmentScore: alignmentResult.score,
+        });
+        set({ pendingReview: review });
+      },
+
+      saveDailyReviewAction: async (review) => {
+        const { session, isGuestMode, dailyReviews } = get();
+        // Merge into local store — replace existing entry for this date, keep last 30.
+        const updated = [
+          ...dailyReviews.filter((r) => r.date !== review.date),
+          review,
+        ]
+          .sort((a, b) => a.date.localeCompare(b.date))
+          .slice(-30);
+        set({ dailyReviews: updated, pendingReview: null });
+        track('review_saved', {
+          date:             review.date,
+          completion_rate:  review.totalCount > 0
+            ? Math.round((review.completedCount / review.totalCount) * 100) / 100
+            : 1,
+          focus_minutes:    review.focusMinutes,
+          alignment_score:  review.alignmentScore ?? null,
+          had_reflection:   review.reflectionText ? 1 : 0,
+          system_takeaway:  review.systemTakeaway ?? null,
+          drift_count:      review.driftTypes.length,
+          recovery_used:    review.recoveryUsed ? 1 : 0,
+        });
+        // ── Retention analytics: streak events ──────────────────────────────
+        if (review.completedCount > 0) {
+          const streakData = computeStreakData(updated, review.date);
+          if (streakData.recoveryBoostApplied) {
+            track('streak_recovered', {
+              streak: streakData.currentStreak,
+              missed_days: streakData.missedDays,
+            });
+          } else if (streakData.currentStreak > 1) {
+            track('streak_continued', {
+              streak: streakData.currentStreak,
+            });
+          }
+        }
+        // Sync to Supabase — fire and forget.
+        if (session && !isGuestMode) {
+          reviewService.saveDailyReview(session.user.id, review).catch(console.warn);
+        }
+      },
+
+      clearPendingReview: () => set({ pendingReview: null }),
 
       // ── Cloud sync ───────────────────────────────────────────────────────────
 
@@ -920,6 +1790,9 @@ export const useAppStore = create<AppStore>()(
             reflections: data.reflections,
           };
           if (data.profile) patch.profile = data.profile;
+          // Prefer server-authoritative trial start date over local AsyncStorage value.
+          // Guards against reinstall / resetAllData giving a second free trial.
+          if (data.trialStartDate) patch.trialStartDate = data.trialStartDate;
           if (data.controlPlan) {
             // getDailyPlan returns nextBestAction:null and nudgeSchedule:[].
             // Recompute both from the restored items so the Planner and Home
@@ -982,17 +1855,57 @@ export const useAppStore = create<AppStore>()(
           lastReplanItemId: null,
           dismissedReplanForItemIds: [],
           enforcementFiredIds: [],
+          taskSkipCount: 0,
+          taskStreakCount: 0,
+          skippedPlanItemIds: [],
           seedLoaded: false,
-          paywallSeen: false,
+          trialStartDate: null,
+          dayStreak: 0,
+          lastCompletionDate: null,
+          totalCompletedTasks: 0,
+          // v3 behavior OS — reset identity + schedule entry; keep recurringTasks
+          // (user-defined routines survive a soft reset, matching habits behavior)
+          identityGoals: [],
+          todayScheduleEntry: null,
+          behaviorState: {
+            dayState: 'idle' as DayState,
+            driftLevel: 0,
+            lastInteractionTime: null,
+            currentConstraintId: null,
+            recoveryStartedAt: null,
+            recoveryDurationMins: 0,
+            lateStartDetectedAt: null,
+          },
           // aiApiKey intentionally preserved
+          dayMode: 'ON_TRACK' as DayMode,
+          activeDrift: null,
+          activeRecoveryMode: null,
+          lastRecoveryAppliedAt: null,
+          driftHistory: [],
+          dailyReviews: [],
+          pendingReview: null,
         }),
     }),
     {
       name: 'lifeos-store-v3',
       // session is ephemeral — Supabase manages its own token storage.
       // We restore it from Supabase on every app start via getSession().
+      // taskSkipCount / taskStreakCount are intra-day ephemeral — not persisted.
       partialize: (state) => {
-        const { session, ...rest } = state as AppStore;
+        // session       — ephemeral; Supabase manages token storage
+        // taskSkip*     — intra-day ephemeral counters
+        // behaviorState — recomputed by tickBehavior on every session start
+        // driftHistory  — per-day ephemeral audit log; not needed across restarts
+        const {
+          session,
+          taskSkipCount,
+          taskStreakCount,
+          skippedPlanItemIds,
+          behaviorState,
+          driftHistory,
+          pendingReview,    // ephemeral — built fresh each session
+          ...rest
+        } = state as AppStore;
         return rest as AppStore;
       },
       storage: createJSONStorage(() => ({
@@ -1034,20 +1947,72 @@ export const useTodayReflection = () => {
 };
 
 export const useAIContext = () =>
-  useAppStore((s) => ({
-    goals: s.goals,
-    skillPlans: s.skillPlans,
-    rules: s.rules,
-    scheduleEvents: s.scheduleEvents,
-    mainFocus: s.profile?.mainFocus,
-    biggestDistraction: s.profile?.biggestDistraction,
-    fixedScheduleStart: s.profile?.fixedScheduleStart,
-    fixedScheduleEnd: s.profile?.fixedScheduleEnd,
-    focusSessions: s.focusSessions,
-    currentPlan: s.controlPlan?.plan,
-    todayDate: getTodayDate(),
-    // Behavioral signals for coach context
-    missedTasksCount: s.missedTasks.filter((t) => t.status === 'pending').length,
-    driftScore: s.dailyDecision?.driftScore ?? 0,
-    isInRecoveryMode: s.dailyDecision?.isInRecoveryMode ?? false,
-  }));
+  useAppStore((s) => {
+    // Derive review-based coaching signals for the last 3 days.
+    const recentReviews = [...s.dailyReviews]
+      .sort((a, b) => b.date.localeCompare(a.date))
+      .slice(0, 3);
+    const lastTakeaways = recentReviews
+      .map((r) => r.systemTakeaway)
+      .filter((t): t is string => !!t);
+    const hints = computeAdaptationHints(s.dailyReviews);
+
+    // Predictive signals — top 2 risks for today
+    const nowMinsCtx = (() => {
+      const d = new Date();
+      return d.getHours() * 60 + d.getMinutes();
+    })();
+    const predictions = s.controlPlan
+      ? predictDrift(s.controlPlan, s.dailyReviews, hints, nowMinsCtx).slice(0, 2)
+      : [];
+
+    // Plan intensity explanation
+    const actionableCount = s.controlPlan?.plan.items.filter(
+      (i) => i.type === 'goal' || i.type === 'skill',
+    ).length ?? 0;
+    const planExpl = explainPlanIntensity(hints, actionableCount);
+
+    return {
+      goals: s.goals,
+      skillPlans: s.skillPlans,
+      rules: s.rules,
+      scheduleEvents: s.scheduleEvents,
+      mainFocus: s.profile?.mainFocus,
+      biggestDistraction: s.profile?.biggestDistraction,
+      fixedScheduleStart: s.profile?.fixedScheduleStart,
+      fixedScheduleEnd: s.profile?.fixedScheduleEnd,
+      focusSessions: s.focusSessions,
+      currentPlan: s.controlPlan?.plan,
+      todayDate: getTodayDate(),
+      // Behavioral signals for coach context
+      missedTasksCount: s.missedTasks.filter((t) => t.status === 'pending').length,
+      driftScore: s.dailyDecision?.driftScore ?? 0,
+      isInRecoveryMode: s.dailyDecision?.isInRecoveryMode ?? false,
+      // Review-derived coaching signals — injected into coach system context
+      reviewSignals: {
+        recentPatterns:           lastTakeaways,
+        adaptationRationale:      hints.rationale,
+        preferredRecoveryModes:   hints.preferredRecoveryModes,
+        reviewCount:              s.dailyReviews.length,
+      },
+      // Predictive + explanation signals — Batch 8 additions
+      predictionSignals: {
+        /** Top 2 predicted risks for today (riskType, confidence, headline, rationale). */
+        topRisks: predictions.map((p) => ({
+          riskType:   p.riskType,
+          confidence: p.confidence,
+          headline:   p.headline,
+          rationale:  p.rationale,
+        })),
+        /** Plain-text summary of predictions for coach system prompt injection. */
+        predictionContext: buildPredictionContext(predictions),
+        /** Why today's plan is lighter/heavier — structured explanation. */
+        planExplanation: {
+          decision:   planExpl.decision,
+          reason:     planExpl.reason,
+          signal:     planExpl.signal,
+          confidence: planExpl.confidence,
+        },
+      },
+    };
+  });

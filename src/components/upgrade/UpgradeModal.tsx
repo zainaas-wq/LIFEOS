@@ -100,7 +100,7 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.surfaceElevated,
     borderRadius: Radius.xl,
     borderWidth: 1,
-    borderColor: Colors.goldDim,
+    borderColor: 'rgba(255,255,255,0.05)',
     padding: Spacing.xl,
     paddingTop: Spacing.xxl,
     alignItems: 'center',

@@ -1,749 +1,908 @@
-import React, { useState, useRef } from 'react';
+/**
+ * app/onboarding/index.tsx — Behavior OS onboarding (5 screens)
+ *
+ * Screen 0: Welcome + name
+ * Screen 1: User type (worker / student / worker_student / flexible)
+ * Screen 2: Schedule details (conditional on user type)
+ *           — flexible: wake + wind-down times
+ *           — worker:   scheduleType + if fixed: work start/end
+ *           — student:  scheduleType + if fixed: study start/end
+ *           — worker+student: scheduleType + if fixed: both sets
+ * Screen 3: Off days + skip-routines toggle
+ * Screen 4: Identity goals (what user wants to become)
+ *
+ * On completion:
+ *   - completeOnboarding() with full profile including userType/scheduleType/offDays
+ *   - setIdentityGoals() for each selection
+ *   - addScheduleEvent() to create recurring work/class events (fixed schedule only)
+ *   - setTrialStartDate() starts the 3-day trial clock
+ *   - generateControlPlanAction() generates today's plan
+ */
+
+import React, { useEffect, useRef, useState, useMemo } from 'react';
 import {
   View,
   Text,
-  ScrollView,
   StyleSheet,
   TouchableOpacity,
   TextInput,
   KeyboardAvoidingView,
   Platform,
+  ScrollView,
+  Switch,
   Animated,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import { useTranslation } from 'react-i18next';
 import { useAppStore } from '../../src/store/useAppStore';
-import { track } from '../../src/services/analyticsService';
-import { Colors, FontSize, FontWeight, Spacing, Radius } from '../../src/constants/theme';
-import type { LifeRole, EnergyStyle, WorkStyle } from '../../src/types';
+import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '../../src/constants/theme';
+import { getTodayDate } from '../../src/lib/utils';
+import type { UserType, ScheduleType, IdentityGoalType } from '../../src/types';
 
-// ─── Options data ─────────────────────────────────────────────────────────────
+const TOTAL_STEPS = 5;
 
-const LIFE_ROLES: Array<{ value: LifeRole; label: string; description: string }> = [
-  { value: 'student',      label: 'Student',      description: 'Full-time learner or academic' },
-  { value: 'employee',     label: 'Employee',      description: 'Working professional' },
-  { value: 'freelancer',   label: 'Freelancer',    description: 'Self-employed or independent' },
-  { value: 'shift-worker', label: 'Shift Worker',  description: 'Variable or rotating schedule' },
-  { value: 'creator',      label: 'Creator',       description: 'Artist, builder, or maker' },
-  { value: 'other',        label: 'Other',         description: 'My situation is different' },
+// ─── Day-of-week grid ─────────────────────────────────────────────────────────
+
+const DOW_KEYS = ['day_sun', 'day_mon', 'day_tue', 'day_wed', 'day_thu', 'day_fri', 'day_sat'] as const;
+
+// ─── Identity goal options ────────────────────────────────────────────────────
+
+const IDENTITY_TYPES: IdentityGoalType[] = [
+  'disciplined', 'fit', 'career', 'studying',
+  'less_distraction', 'creative', 'spiritual', 'financial', 'social',
 ];
 
-const ENERGY_STYLES: Array<{
-  value: EnergyStyle; label: string; description: string; tag: string;
-}> = [
-  { value: 'morning',   label: 'Morning person', description: 'Best deep work before noon.',         tag: '06:00 – 12:00' },
-  { value: 'afternoon', label: 'Afternoon',       description: 'Peak momentum in the middle of the day.', tag: '12:00 – 17:00' },
-  { value: 'evening',   label: 'Evening',         description: 'Flow state starts after 6 PM.',      tag: '17:00 – 21:00' },
-  { value: 'night',     label: 'Night owl',       description: 'Most alive when the world sleeps.',  tag: '21:00+' },
-  { value: 'flexible',  label: 'Flexible',        description: 'No consistent pattern — day by day.', tag: 'Varies' },
-];
-
-const WORK_STYLES: Array<{
-  value: WorkStyle; label: string; description: string; sessions: string;
-}> = [
-  { value: 'deep',         label: 'Deep focus',   description: 'Long uninterrupted sessions.',       sessions: '60 – 90 min' },
-  { value: 'balanced',     label: 'Balanced',     description: 'Focused work with regular breaks.',  sessions: '45 min' },
-  { value: 'short-bursts', label: 'Short bursts', description: 'Quick high-intensity sessions.',     sessions: '20 – 25 min' },
-];
-
-const LIFE_TRACKS: Array<{ value: string; label: string }> = [
-  { value: 'coding',        label: 'Coding' },
-  { value: 'fitness',       label: 'Fitness' },
-  { value: 'music',         label: 'Music' },
-  { value: 'language',      label: 'Language' },
-  { value: 'reading',       label: 'Reading' },
-  { value: 'writing',       label: 'Writing' },
-  { value: 'career',        label: 'Career' },
-  { value: 'business',      label: 'Business' },
-  { value: 'health',        label: 'Health' },
-  { value: 'creative',      label: 'Creativity' },
-  { value: 'relationships', label: 'Relationships' },
-  { value: 'mindfulness',   label: 'Mindfulness' },
-];
-
-const FRICTIONS: Array<{ value: string; label: string }> = [
-  { value: 'phone',           label: 'Phone & notifications' },
-  { value: 'social_media',    label: 'Social media' },
-  { value: 'procrastination', label: 'Procrastination' },
-  { value: 'noise',           label: 'Noise & environment' },
-  { value: 'fatigue',         label: 'Fatigue & low energy' },
-  { value: 'lack_of_clarity', label: 'Lack of clarity' },
-  { value: 'people',          label: 'People & interruptions' },
-  { value: 'overthinking',    label: 'Overthinking' },
-];
-
-const DIRECTION_CHIPS = [
-  'More focused',
-  'Healthier',
-  'Smarter',
-  'Financially stronger',
-  'More creative',
-  'More balanced',
-];
-
-// ─── State shape ──────────────────────────────────────────────────────────────
-
-interface OnboardingState {
-  lifeRole: LifeRole | null;
-  energyStyle: EnergyStyle | null;
-  workStyle: WorkStyle | null;
-  selectedTrackTypes: string[];
-  mainFrictions: string[];
-  transformationDirection: string;
-  directionChips: string[];
-}
-
-const INITIAL_STATE: OnboardingState = {
-  lifeRole: null,
-  energyStyle: null,
-  workStyle: null,
-  selectedTrackTypes: [],
-  mainFrictions: [],
-  transformationDirection: '',
-  directionChips: [],
+const IDENTITY_ICONS: Record<IdentityGoalType, keyof typeof Ionicons.glyphMap> = {
+  disciplined:       'shield-checkmark-outline',
+  fit:               'barbell-outline',
+  career:            'trending-up-outline',
+  studying:          'book-outline',
+  less_distraction:  'eye-off-outline',
+  creative:          'color-palette-outline',
+  spiritual:         'leaf-outline',
+  financial:         'cash-outline',
+  social:            'people-outline',
 };
 
-// ─── Step metadata ────────────────────────────────────────────────────────────
+// ─── Step Dots ────────────────────────────────────────────────────────────────
 
-// Step 0 = welcome (no progress bar). Steps 1–6 = substantive steps.
-const TOTAL_CONTENT_STEPS = 6;
+function StepDots({ current, total }: { current: number; total: number }) {
+  return (
+    <View style={s.stepDots}>
+      {Array.from({ length: total }).map((_, i) => (
+        <View key={i} style={[s.stepDot, i === current && s.stepDotActive]} />
+      ))}
+    </View>
+  );
+}
 
-const STEP_META = [
-  { title: '', subtitle: '' }, // 0: welcome
-  { title: "What's your\nlife role?", subtitle: 'This shapes how your plan is built.' },
-  { title: 'When are you\nmost alive?', subtitle: 'We schedule deep work for your peak hours.' },
-  { title: 'How do you\nwork best?', subtitle: 'Be honest — your plan will reflect this.' },
-  { title: 'What are you\nbuilding?', subtitle: 'Choose up to 5 life tracks.' },
-  { title: 'What holds\nyou back?', subtitle: 'Choose up to 3. Naming it weakens it.' },
-  { title: 'Where are\nyou going?', subtitle: 'In 12 months, I want to be...' },
-];
+// ─── Progress bar ─────────────────────────────────────────────────────────────
+
+function ProgressBar({ step, total }: { step: number; total: number }) {
+  return (
+    <View style={s.progressTrack}>
+      <View style={[s.progressFill, { width: `${((step + 1) / total) * 100}%` as any }]} />
+    </View>
+  );
+}
+
+// ─── Time Input ───────────────────────────────────────────────────────────────
+
+function TimeInput({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  return (
+    <View style={s.timeField}>
+      <Text style={s.timeLabel}>{label}</Text>
+      <TextInput
+        style={s.timeInput}
+        value={value}
+        onChangeText={onChange}
+        placeholder="HH:MM"
+        placeholderTextColor={Colors.textMuted}
+        keyboardType="numbers-and-punctuation"
+        maxLength={5}
+      />
+    </View>
+  );
+}
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export default function OnboardingScreen() {
-  const completeOnboarding = useAppStore((s) => s.completeOnboarding);
+  const { t } = useTranslation();
 
-  const [step, setStep]   = useState(0);
-  const [data, setData]   = useState<OnboardingState>(INITIAL_STATE);
-  const [error, setError] = useState('');
+  const completeOnboarding        = useAppStore((s) => s.completeOnboarding);
+  const setIdentityGoals          = useAppStore((s) => s.setIdentityGoals);
+  const addScheduleEvent          = useAppStore((s) => s.addScheduleEvent);
+  const generateControlPlanAction = useAppStore((s) => s.generateControlPlanAction);
+  const setTrialStartDate         = useAppStore((s) => s.setTrialStartDate);
+  const appLanguage               = useAppStore((s) => s.appLanguage);
 
-  const progressAnim = useRef(new Animated.Value(0)).current;
+  // ── Screen state ────────────────────────────────────────────────────────────
+  const [step, setStep] = useState(0);
 
-  const animateProgress = (toStep: number) => {
-    Animated.timing(progressAnim, {
-      toValue: toStep / TOTAL_CONTENT_STEPS,
-      duration: 280,
-      useNativeDriver: false,
-    }).start();
-  };
+  // Screen 0
+  const [name, setName] = useState('');
 
-  const canProceed = (): boolean => {
-    switch (step) {
-      case 1: return data.lifeRole !== null;
-      case 2: return data.energyStyle !== null;
-      case 3: return data.workStyle !== null;
-      case 4: return data.selectedTrackTypes.length > 0;
-      default: return true;
-    }
-  };
+  // Screen 1
+  const [userType, setUserType] = useState<UserType | null>(null);
+
+  // Screen 2
+  const [scheduleType, setSchedType] = useState<ScheduleType>('fixed');
+  const [workStart,    setWorkStart] = useState('09:00');
+  const [workEnd,      setWorkEnd]   = useState('17:00');
+  const [studyStart,   setStudyStart] = useState('09:00');
+  const [studyEnd,     setStudyEnd]   = useState('14:00');
+  const [wakeTime,     setWakeTime]   = useState('07:00');
+  const [windDown,     setWindDown]   = useState('22:00');
+  const [timeError,    setTimeError]  = useState('');
+
+  // Screen 3
+  const [offDays, setOffDays]             = useState<number[]>([]);
+  const [skipOnOffDays, setSkipOnOffDays] = useState(true);
+
+  // Screen 4
+  const [identityGoals, setLocalIdentity] = useState<IdentityGoalType[]>([]);
+
+  // Welcome entrance animation
+  const fadeAnim  = useRef(new Animated.Value(0)).current;
+  const slideAnim = useRef(new Animated.Value(24)).current;
+
+  useEffect(() => {
+    Animated.parallel([
+      Animated.timing(fadeAnim,  { toValue: 1, duration: 700, useNativeDriver: true }),
+      Animated.timing(slideAnim, { toValue: 0, duration: 600, useNativeDriver: true, delay: 80 }),
+    ]).start();
+  }, []);
+
+  // ── Helpers ─────────────────────────────────────────────────────────────────
+
+  const isValidTime = (v: string) => /^\d{2}:\d{2}$/.test(v) && v < '24:00';
+
+  const toggleOffDay = (day: number) =>
+    setOffDays((prev) =>
+      prev.includes(day) ? prev.filter((d) => d !== day) : [...prev, day],
+    );
+
+  const toggleIdentity = (type: IdentityGoalType) =>
+    setLocalIdentity((prev) =>
+      prev.includes(type) ? prev.filter((t) => t !== type) : [...prev, type],
+    );
+
+  // ── Navigation ───────────────────────────────────────────────────────────────
+
+  const handleBack = () => setStep((s) => Math.max(0, s - 1));
 
   const handleNext = () => {
-    if (!canProceed()) {
-      setError('Please make a selection to continue.');
-      return;
+    setTimeError('');
+
+    if (step === 1 && !userType) return; // type must be selected
+
+    if (step === 2) {
+      const needsWorkTime  = userType === 'worker' || userType === 'worker_student';
+      const needsStudyTime = userType === 'student' || userType === 'worker_student';
+      const isFixed        = scheduleType === 'fixed';
+
+      if (userType === 'flexible') {
+        if (!isValidTime(wakeTime) || !isValidTime(windDown) || wakeTime >= windDown) {
+          setTimeError(t('onboarding.time_error'));
+          return;
+        }
+      } else if (isFixed) {
+        if (needsWorkTime && (!isValidTime(workStart) || !isValidTime(workEnd) || workStart >= workEnd)) {
+          setTimeError(t('onboarding.time_error'));
+          return;
+        }
+        if (needsStudyTime && (!isValidTime(studyStart) || !isValidTime(studyEnd) || studyStart >= studyEnd)) {
+          setTimeError(t('onboarding.time_error'));
+          return;
+        }
+      }
     }
-    setError('');
-    if (step < TOTAL_CONTENT_STEPS) {
-      const next = step + 1;
-      setStep(next);
-      animateProgress(next);
-    } else {
-      handleFinish();
-    }
+
+    setStep((s) => s + 1);
   };
 
-  const handleBack = () => {
-    if (step > 0) {
-      const prev = step - 1;
-      setStep(prev);
-      animateProgress(prev);
-      setError('');
-    }
-  };
+  // ── Complete ─────────────────────────────────────────────────────────────────
 
-  const handleFinish = () => {
-    // Build legacy-compatible fields from new identity data
-    const firstTrack = data.selectedTrackTypes[0] ?? '';
-    const firstFriction = data.mainFrictions[0]?.replace(/_/g, ' ') ?? '';
-    const directionText = [
-      ...data.directionChips,
-      data.transformationDirection.trim(),
-    ]
-      .filter(Boolean)
-      .join(', ');
+  const handleComplete = () => {
+    const today = getTodayDate();
+    const isFixed  = scheduleType === 'fixed';
+    const isWorker = userType === 'worker' || userType === 'worker_student';
+    const isStud   = userType === 'student' || userType === 'worker_student';
+
+    // Determine wake/wind-down for the profile window
+    const profileStart = userType === 'flexible' ? wakeTime   : (isWorker ? workStart : studyStart);
+    const profileEnd   = userType === 'flexible' ? windDown   : (isWorker ? workEnd   : studyEnd);
 
     completeOnboarding({
-      // ── Legacy fields — required by existing engines, not shown to user ──
-      mainFocus: firstTrack || 'Personal growth',
-      biggestDistraction: firstFriction,
-      habitToRemove: firstFriction,
-      habitToBuild: firstTrack ? `Consistent ${firstTrack} practice` : 'Build a consistent practice',
-      seriousnessScore: 7, // internal default; not exposed as product concept
-
-      // ── New identity fields ──────────────────────────────────────────────
-      lifeRole: data.lifeRole ?? undefined,
-      energyStyle: data.energyStyle ?? undefined,
-      workStyle: data.workStyle ?? undefined,
-      selectedTrackTypes: data.selectedTrackTypes,
-      mainFrictions: data.mainFrictions,
-      transformationDirection: directionText,
-      language: 'en',
+      name:                 name.trim() || undefined,
+      userType:             userType ?? 'flexible',
+      scheduleType,
+      offDays,
+      skipTasksOnOffDays:   skipOnOffDays,
+      fixedScheduleStart:   profileStart,
+      fixedScheduleEnd:     profileEnd,
+      mainFocus:            identityGoals[0] ?? 'growth',
+      biggestDistraction:   '',
+      habitToRemove:        '',
+      habitToBuild:         '',
+      seriousnessScore:     8,
+      language:             appLanguage,
     });
 
-    track('onboarding_completed');
-    router.replace('/');
-  };
-
-  const progressWidth = progressAnim.interpolate({
-    inputRange: [0, 1],
-    outputRange: ['0%', '100%'],
-  });
-
-  // ── Toggle helpers ─────────────────────────────────────────────────────────
-
-  const toggleTrack = (value: string) => {
-    setData((d) => {
-      const has = d.selectedTrackTypes.includes(value);
-      if (has) return { ...d, selectedTrackTypes: d.selectedTrackTypes.filter((v) => v !== value) };
-      if (d.selectedTrackTypes.length >= 5) return d; // cap at 5
-      return { ...d, selectedTrackTypes: [...d.selectedTrackTypes, value] };
-    });
-  };
-
-  const toggleFriction = (value: string) => {
-    setData((d) => {
-      const has = d.mainFrictions.includes(value);
-      if (has) return { ...d, mainFrictions: d.mainFrictions.filter((v) => v !== value) };
-      if (d.mainFrictions.length >= 3) return d; // cap at 3
-      return { ...d, mainFrictions: [...d.mainFrictions, value] };
-    });
-  };
-
-  const toggleDirectionChip = (value: string) => {
-    setData((d) => {
-      const has = d.directionChips.includes(value);
-      return {
-        ...d,
-        directionChips: has
-          ? d.directionChips.filter((v) => v !== value)
-          : [...d.directionChips, value],
-      };
-    });
-  };
-
-  // ─── Step renders ──────────────────────────────────────────────────────────
-
-  const renderStepContent = () => {
-    switch (step) {
-
-      // ── Step 0: Welcome ───────────────────────────────────────────────────
-      case 0:
-        return (
-          <View style={styles.welcomeContent}>
-            <View style={styles.brand}>
-              <Text style={styles.brandText}>
-                LIFE<Text style={styles.brandAccent}>OS</Text>
-              </Text>
-            </View>
-            <Text style={styles.welcomeTitle}>Your AI{'\n'}Life Coach</Text>
-            <Text style={styles.welcomeSubtitle}>
-              Build an identity-aware system{'\n'}that actually executes your life.
-            </Text>
-            <TouchableOpacity style={styles.startBtn} onPress={handleNext} activeOpacity={0.85}>
-              <Text style={styles.startBtnText}>Get Started</Text>
-              <Ionicons name="arrow-forward" size={18} color={Colors.textInverse} />
-            </TouchableOpacity>
-          </View>
-        );
-
-      // ── Step 1: Life Role ─────────────────────────────────────────────────
-      case 1:
-        return (
-          <View style={styles.optionList}>
-            {LIFE_ROLES.map((role) => {
-              const active = data.lifeRole === role.value;
-              return (
-                <TouchableOpacity
-                  key={role.value}
-                  style={[styles.optionCard, active && styles.optionCardActive]}
-                  onPress={() => { setData((d) => ({ ...d, lifeRole: role.value })); setError(''); }}
-                  activeOpacity={0.75}
-                >
-                  <View style={styles.optionCardInner}>
-                    <View style={styles.optionText}>
-                      <Text style={[styles.optionLabel, active && styles.optionLabelActive]}>
-                        {role.label}
-                      </Text>
-                      <Text style={styles.optionDesc}>{role.description}</Text>
-                    </View>
-                    {active && (
-                      <Ionicons name="checkmark-circle" size={20} color={Colors.gold} />
-                    )}
-                  </View>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
-        );
-
-      // ── Step 2: Energy Style ──────────────────────────────────────────────
-      case 2:
-        return (
-          <View style={styles.optionList}>
-            {ENERGY_STYLES.map((e) => {
-              const active = data.energyStyle === e.value;
-              return (
-                <TouchableOpacity
-                  key={e.value}
-                  style={[styles.optionCard, active && styles.optionCardActive]}
-                  onPress={() => { setData((d) => ({ ...d, energyStyle: e.value })); setError(''); }}
-                  activeOpacity={0.75}
-                >
-                  <View style={styles.optionCardInner}>
-                    <View style={styles.optionText}>
-                      <Text style={[styles.optionLabel, active && styles.optionLabelActive]}>
-                        {e.label}
-                      </Text>
-                      <Text style={styles.optionDesc}>{e.description}</Text>
-                    </View>
-                    <Text style={[styles.optionTag, active && styles.optionTagActive]}>
-                      {e.tag}
-                    </Text>
-                  </View>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
-        );
-
-      // ── Step 3: Work Style ────────────────────────────────────────────────
-      case 3:
-        return (
-          <View style={styles.optionList}>
-            {WORK_STYLES.map((w) => {
-              const active = data.workStyle === w.value;
-              return (
-                <TouchableOpacity
-                  key={w.value}
-                  style={[styles.optionCard, active && styles.optionCardActive]}
-                  onPress={() => { setData((d) => ({ ...d, workStyle: w.value })); setError(''); }}
-                  activeOpacity={0.75}
-                >
-                  <View style={styles.optionCardInner}>
-                    <View style={styles.optionText}>
-                      <Text style={[styles.optionLabel, active && styles.optionLabelActive]}>
-                        {w.label}
-                      </Text>
-                      <Text style={styles.optionDesc}>{w.description}</Text>
-                    </View>
-                    <Text style={[styles.optionTag, active && styles.optionTagActive]}>
-                      {w.sessions}
-                    </Text>
-                  </View>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
-        );
-
-      // ── Step 4: Life Tracks ───────────────────────────────────────────────
-      case 4:
-        return (
-          <View style={styles.chipSection}>
-            <Text style={styles.chipHint}>
-              {data.selectedTrackTypes.length} / 5 selected
-            </Text>
-            <View style={styles.chipGrid}>
-              {LIFE_TRACKS.map((t) => {
-                const active = data.selectedTrackTypes.includes(t.value);
-                const capped = !active && data.selectedTrackTypes.length >= 5;
-                return (
-                  <TouchableOpacity
-                    key={t.value}
-                    style={[styles.chip, active && styles.chipActive, capped && styles.chipCapped]}
-                    onPress={() => toggleTrack(t.value)}
-                    activeOpacity={0.75}
-                    disabled={capped}
-                  >
-                    <Text style={[styles.chipText, active && styles.chipTextActive, capped && styles.chipTextCapped]}>
-                      {t.label}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
-          </View>
-        );
-
-      // ── Step 5: Main Frictions ────────────────────────────────────────────
-      case 5:
-        return (
-          <View style={styles.chipSection}>
-            <Text style={styles.chipHint}>
-              {data.mainFrictions.length} / 3 selected · optional
-            </Text>
-            <View style={styles.chipGrid}>
-              {FRICTIONS.map((f) => {
-                const active = data.mainFrictions.includes(f.value);
-                const capped = !active && data.mainFrictions.length >= 3;
-                return (
-                  <TouchableOpacity
-                    key={f.value}
-                    style={[styles.chip, active && styles.chipActive, capped && styles.chipCapped]}
-                    onPress={() => toggleFriction(f.value)}
-                    activeOpacity={0.75}
-                    disabled={capped}
-                  >
-                    <Text style={[styles.chipText, active && styles.chipTextActive, capped && styles.chipTextCapped]}>
-                      {f.label}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
-          </View>
-        );
-
-      // ── Step 6: Transformation Direction ─────────────────────────────────
-      case 6:
-        return (
-          <View style={styles.directionSection}>
-            <TextInput
-              style={styles.directionInput}
-              placeholder="Describe your direction... (optional)"
-              placeholderTextColor={Colors.textMuted}
-              value={data.transformationDirection}
-              onChangeText={(t) => setData((d) => ({ ...d, transformationDirection: t }))}
-              multiline
-              numberOfLines={3}
-              textAlignVertical="top"
-            />
-            <Text style={styles.chipHint}>Or pick what resonates</Text>
-            <View style={styles.chipGrid}>
-              {DIRECTION_CHIPS.map((chip) => {
-                const active = data.directionChips.includes(chip);
-                return (
-                  <TouchableOpacity
-                    key={chip}
-                    style={[styles.chip, active && styles.chipActive]}
-                    onPress={() => toggleDirectionChip(chip)}
-                    activeOpacity={0.75}
-                  >
-                    <Text style={[styles.chipText, active && styles.chipTextActive]}>
-                      {chip}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
-          </View>
-        );
-
-      default:
-        return null;
+    // Identity goals
+    const now = new Date().toISOString();
+    if (identityGoals.length > 0) {
+      setIdentityGoals(
+        identityGoals.map((type) => ({ id: `ig-${type}`, type, createdAt: now })),
+      );
     }
+
+    // Create recurring ScheduleEvents for fixed schedules (work + study)
+    // These populate the Priority B source in scheduleInputService.
+    if (isFixed) {
+      const activeDays = [0, 1, 2, 3, 4, 5, 6].filter((d) => !offDays.includes(d));
+      if (isWorker && isValidTime(workStart) && isValidTime(workEnd)) {
+        addScheduleEvent({
+          title: 'Work',
+          start: workStart,
+          end:   workEnd,
+          category: 'work',
+          recurring: true,
+          daysOfWeek: activeDays,
+        });
+      }
+      if (isStud && isValidTime(studyStart) && isValidTime(studyEnd)) {
+        addScheduleEvent({
+          title: 'Study / Class',
+          start: studyStart,
+          end:   studyEnd,
+          category: 'class',
+          recurring: true,
+          daysOfWeek: activeDays,
+        });
+      }
+    }
+
+    setTrialStartDate(now);
+    generateControlPlanAction(today);
+    router.replace('/(tabs)/home');
   };
 
-  // ─── Root render ───────────────────────────────────────────────────────────
+  // ── Screen 0: Welcome ────────────────────────────────────────────────────────
 
-  // Welcome step has its own full-screen layout
   if (step === 0) {
     return (
-      <View style={styles.welcomeRoot}>
-        {renderStepContent()}
-      </View>
+      <SafeAreaView style={s.safe} edges={['top', 'bottom']}>
+        <KeyboardAvoidingView style={s.flex} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+          <Animated.View
+            style={[s.welcomeRoot, { opacity: fadeAnim, transform: [{ translateY: slideAnim }] }]}
+          >
+            <View style={s.brand}>
+              <View style={s.logoMark}>
+                <Ionicons name="layers-outline" size={18} color={Colors.gold} />
+              </View>
+              <Text style={s.logoText}>LifeOS</Text>
+            </View>
+
+            <StepDots current={0} total={TOTAL_STEPS} />
+
+            <View style={s.welcomeCopy}>
+              <Text style={s.welcomeTitle}>{t('onboarding.welcome_title')}</Text>
+              <Text style={s.welcomeSub}>{t('onboarding.welcome_sub')}</Text>
+            </View>
+
+            <TextInput
+              style={s.nameInput}
+              placeholder={t('onboarding.welcome_name')}
+              placeholderTextColor={Colors.textMuted}
+              value={name}
+              onChangeText={setName}
+              returnKeyType="done"
+              onSubmitEditing={handleNext}
+            />
+
+            <TouchableOpacity style={s.cta} onPress={handleNext} activeOpacity={0.85}>
+              <Text style={s.ctaText}>{t('onboarding.get_started')}</Text>
+              <Ionicons name="arrow-forward" size={16} color={Colors.textInverse} />
+            </TouchableOpacity>
+          </Animated.View>
+        </KeyboardAvoidingView>
+      </SafeAreaView>
     );
   }
 
+  // ── Screen 1: User Type ───────────────────────────────────────────────────────
+
+  if (step === 1) {
+    const types: { key: UserType; icon: keyof typeof Ionicons.glyphMap }[] = [
+      { key: 'worker',         icon: 'briefcase-outline' },
+      { key: 'student',        icon: 'school-outline' },
+      { key: 'worker_student', icon: 'layers-outline' },
+      { key: 'flexible',       icon: 'color-wand-outline' },
+    ];
+
+    return (
+      <SafeAreaView style={s.safe} edges={['top', 'bottom']}>
+        <View style={s.screenRoot}>
+          <ProgressBar step={1} total={TOTAL_STEPS} />
+          <ScrollView contentContainerStyle={s.content}>
+            <StepDots current={1} total={TOTAL_STEPS} />
+            <View style={s.sectionHeader}>
+              <Text style={s.sectionTitle}>{t('onboarding.user_type_title')}</Text>
+              <Text style={s.sectionSub}>{t('onboarding.user_type_sub')}</Text>
+            </View>
+
+            <View style={s.typeGrid}>
+              {types.map(({ key, icon }) => {
+                const active = userType === key;
+                return (
+                  <TouchableOpacity
+                    key={key}
+                    style={[s.typeCard, active && s.typeCardActive]}
+                    onPress={() => setUserType(key)}
+                    activeOpacity={0.75}
+                  >
+                    <View style={[s.typeIconBox, active && s.typeIconBoxActive]}>
+                      <Ionicons name={icon} size={20} color={active ? Colors.gold : Colors.textMuted} />
+                    </View>
+                    <Text style={[s.typeLabel, active && s.typeLabelActive]}>
+                      {t(`onboarding.type_${key}` as any)}
+                    </Text>
+                    <Text style={[s.typeDesc, active && s.typeDescActive]} numberOfLines={2}>
+                      {t(`onboarding.type_${key}_desc` as any)}
+                    </Text>
+                    {active && (
+                      <View style={s.typeCheck}>
+                        <Ionicons name="checkmark" size={10} color={Colors.gold} />
+                      </View>
+                    )}
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          </ScrollView>
+
+          <View style={s.nav}>
+            <TouchableOpacity onPress={handleBack} style={s.navBack} activeOpacity={0.7}>
+              <Ionicons name="chevron-back" size={18} color={Colors.textSecondary} />
+              <Text style={s.navBackText}>{t('onboarding.back')}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={handleNext}
+              style={[s.navNext, !userType && s.navNextDisabled]}
+              disabled={!userType}
+              activeOpacity={0.85}
+            >
+              <Text style={s.navNextText}>{t('onboarding.continue')}</Text>
+              <Ionicons name="chevron-forward" size={16} color={Colors.textInverse} />
+            </TouchableOpacity>
+          </View>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  // ── Screen 2: Schedule Details ────────────────────────────────────────────────
+
+  if (step === 2) {
+    const isFlexible    = userType === 'flexible';
+    const isWorkerType  = userType === 'worker' || userType === 'worker_student';
+    const isStudentType = userType === 'student' || userType === 'worker_student';
+    const isFixed       = scheduleType === 'fixed';
+
+    const schedTypeTitle = isFlexible
+      ? t('onboarding.schedule_details_title_flex')
+      : isWorkerType && !isStudentType
+        ? t('onboarding.schedule_details_title_work')
+        : t('onboarding.schedule_details_title_study');
+
+    const schedOptions: { key: ScheduleType; icon: keyof typeof Ionicons.glyphMap }[] = [
+      { key: 'fixed',        icon: 'calendar-outline' },
+      { key: 'weekly_known', icon: 'refresh-outline' },
+      { key: 'daily_input',  icon: 'pencil-outline' },
+    ];
+
+    return (
+      <SafeAreaView style={s.safe} edges={['top', 'bottom']}>
+        <KeyboardAvoidingView style={s.flex} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+          <View style={s.screenRoot}>
+            <ProgressBar step={2} total={TOTAL_STEPS} />
+            <ScrollView contentContainerStyle={s.content} keyboardShouldPersistTaps="handled">
+              <StepDots current={2} total={TOTAL_STEPS} />
+              <View style={s.sectionHeader}>
+                <Text style={s.sectionTitle}>{schedTypeTitle}</Text>
+              </View>
+
+              {/* Flexible: just wake / wind-down */}
+              {isFlexible ? (
+                <View style={s.timeRow}>
+                  <TimeInput
+                    label={t('onboarding.wake_label')}
+                    value={wakeTime}
+                    onChange={(v) => { setWakeTime(v); setTimeError(''); }}
+                  />
+                  <View style={s.timeSep}><Text style={s.timeSepText}>→</Text></View>
+                  <TimeInput
+                    label={t('onboarding.wind_down_label')}
+                    value={windDown}
+                    onChange={(v) => { setWindDown(v); setTimeError(''); }}
+                  />
+                </View>
+              ) : (
+                <>
+                  {/* Schedule type picker */}
+                  <View style={s.schedOptions}>
+                    {schedOptions.map(({ key, icon }) => {
+                      const active = scheduleType === key;
+                      return (
+                        <TouchableOpacity
+                          key={key}
+                          style={[s.schedOption, active && s.schedOptionActive]}
+                          onPress={() => { setSchedType(key); setTimeError(''); }}
+                          activeOpacity={0.75}
+                        >
+                          <Ionicons name={icon} size={16} color={active ? Colors.gold : Colors.textMuted} />
+                          <View style={s.schedOptionText}>
+                            <Text style={[s.schedOptionLabel, active && s.schedOptionLabelActive]}>
+                              {t(`onboarding.sched_${key === 'weekly_known' ? 'weekly' : key === 'daily_input' ? 'daily' : 'fixed'}` as any)}
+                            </Text>
+                            <Text style={s.schedOptionDesc} numberOfLines={1}>
+                              {t(`onboarding.sched_${key === 'weekly_known' ? 'weekly' : key === 'daily_input' ? 'daily' : 'fixed'}_desc` as any)}
+                            </Text>
+                          </View>
+                          {active && <Ionicons name="checkmark-circle" size={16} color={Colors.gold} />}
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+
+                  {/* Time inputs — only shown for fixed schedule */}
+                  {isFixed && (
+                    <View style={s.timeSection}>
+                      {isWorkerType && (
+                        <>
+                          <Text style={s.timeSectionLabel}>
+                            {userType === 'worker_student'
+                              ? `🏢 ${t('onboarding.schedule_details_title_work')}`
+                              : t('onboarding.schedule_details_title_work')}
+                          </Text>
+                          <View style={s.timeRow}>
+                            <TimeInput
+                              label={t('onboarding.work_start_label')}
+                              value={workStart}
+                              onChange={(v) => { setWorkStart(v); setTimeError(''); }}
+                            />
+                            <View style={s.timeSep}><Text style={s.timeSepText}>→</Text></View>
+                            <TimeInput
+                              label={t('onboarding.work_end_label')}
+                              value={workEnd}
+                              onChange={(v) => { setWorkEnd(v); setTimeError(''); }}
+                            />
+                          </View>
+                        </>
+                      )}
+
+                      {isStudentType && (
+                        <>
+                          <Text style={[s.timeSectionLabel, isWorkerType && { marginTop: Spacing.md }]}>
+                            {userType === 'worker_student'
+                              ? `📚 ${t('onboarding.schedule_details_title_study')}`
+                              : t('onboarding.schedule_details_title_study')}
+                          </Text>
+                          <View style={s.timeRow}>
+                            <TimeInput
+                              label={t('onboarding.study_start_label')}
+                              value={studyStart}
+                              onChange={(v) => { setStudyStart(v); setTimeError(''); }}
+                            />
+                            <View style={s.timeSep}><Text style={s.timeSepText}>→</Text></View>
+                            <TimeInput
+                              label={t('onboarding.study_end_label')}
+                              value={studyEnd}
+                              onChange={(v) => { setStudyEnd(v); setTimeError(''); }}
+                            />
+                          </View>
+                        </>
+                      )}
+                    </View>
+                  )}
+
+                  {/* Hint for non-fixed schedule types */}
+                  {!isFixed && (
+                    <View style={s.schedHint}>
+                      <Ionicons name="information-circle-outline" size={14} color={Colors.textMuted} />
+                      <Text style={s.schedHintText}>
+                        {scheduleType === 'daily_input'
+                          ? t('onboarding.sched_daily_desc')
+                          : t('onboarding.sched_weekly_desc')}
+                      </Text>
+                    </View>
+                  )}
+                </>
+              )}
+
+              {!!timeError && <Text style={s.errorText}>{timeError}</Text>}
+            </ScrollView>
+
+            <View style={s.nav}>
+              <TouchableOpacity onPress={handleBack} style={s.navBack} activeOpacity={0.7}>
+                <Ionicons name="chevron-back" size={18} color={Colors.textSecondary} />
+                <Text style={s.navBackText}>{t('onboarding.back')}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={handleNext} style={s.navNext} activeOpacity={0.85}>
+                <Text style={s.navNextText}>{t('onboarding.continue')}</Text>
+                <Ionicons name="chevron-forward" size={16} color={Colors.textInverse} />
+              </TouchableOpacity>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </SafeAreaView>
+    );
+  }
+
+  // ── Screen 3: Off Days ────────────────────────────────────────────────────────
+
+  if (step === 3) {
+    return (
+      <SafeAreaView style={s.safe} edges={['top', 'bottom']}>
+        <View style={s.screenRoot}>
+          <ProgressBar step={3} total={TOTAL_STEPS} />
+          <ScrollView contentContainerStyle={s.content}>
+            <StepDots current={3} total={TOTAL_STEPS} />
+            <View style={s.sectionHeader}>
+              <Text style={s.sectionTitle}>{t('onboarding.off_days_title')}</Text>
+              <Text style={s.sectionSub}>{t('onboarding.off_days_sub')}</Text>
+            </View>
+
+            {/* Day grid */}
+            <View style={s.dayGrid}>
+              {DOW_KEYS.map((key, i) => {
+                const active = offDays.includes(i);
+                return (
+                  <TouchableOpacity
+                    key={i}
+                    style={[s.dayChip, active && s.dayChipActive]}
+                    onPress={() => toggleOffDay(i)}
+                    activeOpacity={0.75}
+                  >
+                    <Text style={[s.dayChipText, active && s.dayChipTextActive]}>
+                      {t(`onboarding.${key}` as any)}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+
+            {offDays.length === 0 && (
+              <Text style={s.offDaysNoneHint}>{t('onboarding.off_days_none')}</Text>
+            )}
+
+            {/* Skip routines toggle */}
+            <View style={s.toggleRow}>
+              <View style={s.toggleText}>
+                <Text style={s.toggleLabel}>{t('onboarding.skip_routines_label')}</Text>
+              </View>
+              <Switch
+                value={skipOnOffDays}
+                onValueChange={setSkipOnOffDays}
+                trackColor={{ false: Colors.surfaceHigh, true: Colors.goldMuted }}
+                thumbColor={skipOnOffDays ? Colors.gold : Colors.textMuted}
+              />
+            </View>
+          </ScrollView>
+
+          <View style={s.nav}>
+            <TouchableOpacity onPress={handleBack} style={s.navBack} activeOpacity={0.7}>
+              <Ionicons name="chevron-back" size={18} color={Colors.textSecondary} />
+              <Text style={s.navBackText}>{t('onboarding.back')}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={handleNext} style={s.navNext} activeOpacity={0.85}>
+              <Text style={s.navNextText}>{t('onboarding.continue')}</Text>
+              <Ionicons name="chevron-forward" size={16} color={Colors.textInverse} />
+            </TouchableOpacity>
+          </View>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  // ── Screen 4: Identity Goals ──────────────────────────────────────────────────
+
   return (
-    <KeyboardAvoidingView
-      style={styles.flex}
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-    >
-      <View style={styles.container}>
-        {/* Progress bar */}
-        <View style={styles.progressTrack}>
-          <Animated.View style={[styles.progressFill, { width: progressWidth }]} />
-        </View>
-
-        {/* Step counter */}
-        <View style={styles.stepCounter}>
-          <Text style={styles.stepCountText}>
-            {step} <Text style={styles.stepCountDivider}>/ {TOTAL_CONTENT_STEPS}</Text>
-          </Text>
-        </View>
-
-        <ScrollView
-          contentContainerStyle={styles.content}
-          keyboardShouldPersistTaps="handled"
-          showsVerticalScrollIndicator={false}
-        >
-          {/* Step title */}
-          <View style={styles.stepHeader}>
-            <Text style={styles.stepTitle}>{STEP_META[step].title}</Text>
-            <Text style={styles.stepSubtitle}>{STEP_META[step].subtitle}</Text>
+    <SafeAreaView style={s.safe} edges={['top', 'bottom']}>
+      <View style={s.screenRoot}>
+        <ProgressBar step={4} total={TOTAL_STEPS} />
+        <ScrollView contentContainerStyle={s.content}>
+          <StepDots current={4} total={TOTAL_STEPS} />
+          <View style={s.sectionHeader}>
+            <Text style={s.sectionTitle}>{t('onboarding.identity_title')}</Text>
+            <Text style={s.sectionSub}>{t('onboarding.identity_sub')}</Text>
           </View>
 
-          {/* Error message */}
-          {!!error && (
-            <Text style={styles.errorText}>{error}</Text>
-          )}
-
-          {/* Step content */}
-          {renderStepContent()}
+          <View style={s.identityGrid}>
+            {IDENTITY_TYPES.map((type) => {
+              const active = identityGoals.includes(type);
+              return (
+                <TouchableOpacity
+                  key={type}
+                  style={[s.identityCard, active && s.identityCardActive]}
+                  onPress={() => toggleIdentity(type)}
+                  activeOpacity={0.75}
+                >
+                  <View style={[s.identityIconBox, active && s.identityIconBoxActive]}>
+                    <Ionicons
+                      name={IDENTITY_ICONS[type]}
+                      size={16}
+                      color={active ? Colors.gold : Colors.textMuted}
+                    />
+                  </View>
+                  <Text style={[s.identityLabel, active && s.identityLabelActive]} numberOfLines={2}>
+                    {t(`onboarding.identity_${type}` as any)}
+                  </Text>
+                  {active && (
+                    <View style={s.identityCheck}>
+                      <Ionicons name="checkmark" size={10} color={Colors.gold} />
+                    </View>
+                  )}
+                </TouchableOpacity>
+              );
+            })}
+          </View>
         </ScrollView>
 
-        {/* Navigation */}
-        <View style={styles.nav}>
-          <TouchableOpacity onPress={handleBack} style={styles.backBtn} activeOpacity={0.7}>
-            <Ionicons name="arrow-back" size={18} color={Colors.textSecondary} />
-            <Text style={styles.backText}>Back</Text>
+        <View style={s.nav}>
+          <TouchableOpacity onPress={handleBack} style={s.navBack} activeOpacity={0.7}>
+            <Ionicons name="chevron-back" size={18} color={Colors.textSecondary} />
+            <Text style={s.navBackText}>{t('onboarding.back')}</Text>
           </TouchableOpacity>
-
-          <TouchableOpacity
-            onPress={handleNext}
-            style={[styles.nextBtn, !canProceed() && styles.nextBtnDisabled]}
-            activeOpacity={0.85}
-          >
-            <Text style={styles.nextBtnText}>
-              {step === TOTAL_CONTENT_STEPS ? 'Start my LifeOS' : 'Continue'}
-            </Text>
-            {step < TOTAL_CONTENT_STEPS && (
-              <Ionicons name="arrow-forward" size={16} color={Colors.textInverse} />
+          <View style={s.navRight}>
+            {identityGoals.length === 0 && (
+              <TouchableOpacity onPress={handleComplete} style={s.navSkip} activeOpacity={0.7}>
+                <Text style={s.navSkipText}>{t('onboarding.identity_skip')}</Text>
+              </TouchableOpacity>
             )}
-          </TouchableOpacity>
+            <TouchableOpacity
+              onPress={handleComplete}
+              style={[s.navNext, identityGoals.length === 0 && s.navNextMuted]}
+              activeOpacity={0.85}
+            >
+              <Text style={s.navNextText}>{t('onboarding.identity_cta')}</Text>
+            </TouchableOpacity>
+          </View>
         </View>
       </View>
-    </KeyboardAvoidingView>
+    </SafeAreaView>
   );
 }
 
 // ─── Styles ───────────────────────────────────────────────────────────────────
 
-const styles = StyleSheet.create({
-  flex: { flex: 1 },
+const s = StyleSheet.create({
+  safe:       { flex: 1, backgroundColor: Colors.background },
+  flex:       { flex: 1 },
+  screenRoot: { flex: 1, backgroundColor: Colors.background },
 
-  // ── Welcome ──────────────────────────────────────────────────────────────
-  welcomeRoot: {
-    flex: 1,
-    backgroundColor: Colors.background,
-    justifyContent: 'center',
-    paddingHorizontal: Spacing.lg,
-  },
-  welcomeContent: {
-    gap: Spacing.xl,
-  },
-  brand: {
-    marginBottom: Spacing.sm,
-  },
-  brandText: {
+  // Progress bar
+  progressTrack: { height: 3, backgroundColor: Colors.surfaceHigh },
+  progressFill:  { height: '100%', backgroundColor: Colors.gold },
+
+  // Step dots
+  stepDots: { flexDirection: 'row', gap: 6, alignItems: 'center' },
+  stepDot:  { width: 6, height: 6, borderRadius: 3, backgroundColor: Colors.surfaceHigh },
+  stepDotActive: { width: 18, backgroundColor: Colors.gold },
+
+  // Content
+  content: { padding: Spacing.lg, paddingBottom: Spacing.xxl, gap: Spacing.lg },
+
+  // Section header
+  sectionHeader: { gap: Spacing.xs },
+  sectionTitle: {
     fontSize: FontSize.xl,
     fontWeight: FontWeight.bold,
-    color: Colors.textSecondary,
-    letterSpacing: 4,
-  },
-  brandAccent: {
-    color: Colors.gold,
-  },
-  welcomeTitle: {
-    fontSize: FontSize.display - 2,
-    fontWeight: FontWeight.bold,
     color: Colors.textPrimary,
-    lineHeight: 48,
-    letterSpacing: -1,
+    letterSpacing: -0.3,
   },
-  welcomeSubtitle: {
-    fontSize: FontSize.md,
+  sectionSub: {
+    fontSize: FontSize.sm,
     color: Colors.textSecondary,
-    lineHeight: 24,
-  },
-  startBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: Colors.gold,
-    borderRadius: Radius.md,
-    paddingVertical: Spacing.md,
-    gap: Spacing.sm,
-    marginTop: Spacing.md,
-  },
-  startBtnText: {
-    fontSize: FontSize.lg,
-    fontWeight: FontWeight.bold,
-    color: Colors.textInverse,
+    lineHeight: 20,
   },
 
-  // ── Content step shell ───────────────────────────────────────────────────
-  container: {
+  // Welcome screen
+  welcomeRoot: {
     flex: 1,
-    backgroundColor: Colors.background,
-  },
-  progressTrack: {
-    height: 2,
-    backgroundColor: Colors.surfaceHigh,
-  },
-  progressFill: {
-    height: '100%',
-    backgroundColor: Colors.gold,
-  },
-  stepCounter: {
-    paddingHorizontal: Spacing.lg,
-    paddingTop: Spacing.md,
-    alignItems: 'flex-end',
-  },
-  stepCountText: {
-    fontSize: FontSize.sm,
-    fontWeight: FontWeight.bold,
-    color: Colors.gold,
-  },
-  stepCountDivider: {
-    color: Colors.textMuted,
-    fontWeight: FontWeight.regular,
-  },
-  content: {
-    paddingHorizontal: Spacing.lg,
-    paddingTop: Spacing.lg,
-    paddingBottom: Spacing.xxl,
+    paddingHorizontal: Spacing.xl,
+    paddingTop: Spacing.xl,
+    paddingBottom: Spacing.lg,
     gap: Spacing.lg,
+    justifyContent: 'center',
   },
-  stepHeader: {
-    gap: Spacing.sm,
-    marginBottom: Spacing.xs,
+  brand: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm, marginBottom: Spacing.xs },
+  logoMark: {
+    width: 34, height: 34, borderRadius: Radius.md,
+    backgroundColor: Colors.goldMuted,
+    borderWidth: 1, borderColor: Colors.goldDim,
+    alignItems: 'center', justifyContent: 'center',
   },
-  stepTitle: {
-    fontSize: FontSize.display - 8,
+  logoText: { fontSize: FontSize.md, fontWeight: FontWeight.bold, color: Colors.textPrimary, letterSpacing: 1 },
+  welcomeCopy: { gap: Spacing.sm },
+  welcomeTitle: {
+    fontSize: FontSize.xxxl,
     fontWeight: FontWeight.bold,
     color: Colors.textPrimary,
     lineHeight: 42,
     letterSpacing: -0.5,
   },
-  stepSubtitle: {
-    fontSize: FontSize.md,
-    color: Colors.textSecondary,
-    lineHeight: 22,
-  },
-  errorText: {
-    fontSize: FontSize.sm,
-    color: Colors.error,
-    marginTop: -Spacing.sm,
-  },
-
-  // ── Option cards (single-select) ─────────────────────────────────────────
-  optionList: {
-    gap: Spacing.sm,
-  },
-  optionCard: {
+  welcomeSub: { fontSize: FontSize.md, color: Colors.textSecondary, lineHeight: 24 },
+  nameInput: {
+    backgroundColor: Colors.surfaceElevated,
+    borderRadius: Radius.lg,
     borderWidth: 1,
     borderColor: Colors.border,
-    borderRadius: Radius.md,
-    backgroundColor: Colors.surface,
     paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.sm + 4,
+    paddingVertical: Spacing.md,
+    color: Colors.textPrimary,
+    fontSize: FontSize.md,
   },
-  optionCardActive: {
-    borderColor: Colors.gold,
-    backgroundColor: Colors.goldMuted,
+  cta: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    gap: Spacing.sm,
+    backgroundColor: Colors.gold,
+    borderRadius: Radius.lg,
+    paddingVertical: 18,
+    ...Shadow.gold,
   },
-  optionCardInner: {
+  ctaText: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.textInverse },
+
+  // User type grid — 2×2
+  typeGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm },
+  typeCard: {
+    width: '47%',
+    padding: Spacing.md,
+    borderRadius: Radius.lg,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    backgroundColor: Colors.surface,
+    gap: Spacing.xs,
+    position: 'relative',
+  },
+  typeCardActive: { borderColor: Colors.gold, backgroundColor: Colors.goldMuted },
+  typeIconBox: {
+    width: 36, height: 36, borderRadius: Radius.md,
+    backgroundColor: Colors.surfaceElevated,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  typeIconBoxActive: { backgroundColor: Colors.goldMuted },
+  typeLabel: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.textPrimary, marginTop: 2 },
+  typeLabelActive: { color: Colors.gold },
+  typeDesc: { fontSize: FontSize.xs, color: Colors.textMuted, lineHeight: 16 },
+  typeDescActive: { color: Colors.goldDim },
+  typeCheck: {
+    position: 'absolute', top: 8, right: 8,
+    width: 16, height: 16, borderRadius: 8,
+    backgroundColor: Colors.gold,
+    alignItems: 'center', justifyContent: 'center',
+  },
+
+  // Schedule type options
+  schedOptions: { gap: Spacing.sm },
+  schedOption: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: Spacing.sm,
-  },
-  optionText: {
-    flex: 1,
-    gap: 2,
-  },
-  optionLabel: {
-    fontSize: FontSize.md,
-    fontWeight: FontWeight.semibold,
-    color: Colors.textPrimary,
-  },
-  optionLabelActive: {
-    color: Colors.gold,
-  },
-  optionDesc: {
-    fontSize: FontSize.sm,
-    color: Colors.textSecondary,
-    lineHeight: 18,
-  },
-  optionTag: {
-    fontSize: FontSize.xs,
-    color: Colors.textMuted,
-    fontWeight: FontWeight.medium,
-    textAlign: 'right',
-  },
-  optionTagActive: {
-    color: Colors.goldDim,
-  },
-
-  // ── Chips (multi-select) ─────────────────────────────────────────────────
-  chipSection: {
     gap: Spacing.md,
-  },
-  chipHint: {
-    fontSize: FontSize.sm,
-    color: Colors.textMuted,
-  },
-  chipGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: Spacing.sm,
-  },
-  chip: {
-    paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.xs + 4,
-    borderRadius: Radius.full,
+    padding: Spacing.md,
+    borderRadius: Radius.md,
     borderWidth: 1,
     borderColor: Colors.border,
     backgroundColor: Colors.surface,
   },
-  chipActive: {
-    borderColor: Colors.gold,
-    backgroundColor: Colors.goldMuted,
+  schedOptionActive: { borderColor: Colors.gold, backgroundColor: Colors.goldMuted },
+  schedOptionText: { flex: 1, gap: 2 },
+  schedOptionLabel: { fontSize: FontSize.sm, fontWeight: FontWeight.medium, color: Colors.textPrimary },
+  schedOptionLabelActive: { color: Colors.gold },
+  schedOptionDesc: { fontSize: FontSize.xs, color: Colors.textMuted },
+  schedHint: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: Spacing.xs,
+    padding: Spacing.md,
+    backgroundColor: Colors.surfaceElevated,
+    borderRadius: Radius.md,
   },
-  chipCapped: {
-    opacity: 0.35,
-  },
-  chipText: {
-    fontSize: FontSize.sm,
-    fontWeight: FontWeight.medium,
-    color: Colors.textSecondary,
-  },
-  chipTextActive: {
-    color: Colors.gold,
-  },
-  chipTextCapped: {
-    color: Colors.textMuted,
-  },
+  schedHintText: { flex: 1, fontSize: FontSize.xs, color: Colors.textMuted, lineHeight: 18 },
 
-  // ── Direction step ───────────────────────────────────────────────────────
-  directionSection: {
-    gap: Spacing.md,
-  },
-  directionInput: {
+  // Time inputs
+  timeSection: { gap: Spacing.sm },
+  timeSectionLabel: { fontSize: FontSize.xs, fontWeight: FontWeight.semibold, color: Colors.textSecondary, letterSpacing: 0.4 },
+  timeRow: { flexDirection: 'row', alignItems: 'flex-end', gap: Spacing.xs },
+  timeField: { flex: 1, gap: Spacing.xs },
+  timeLabel: { fontSize: FontSize.xs, color: Colors.textMuted, fontWeight: FontWeight.medium, letterSpacing: 0.5 },
+  timeInput: {
     backgroundColor: Colors.surfaceElevated,
     borderRadius: Radius.md,
     borderWidth: 1,
     borderColor: Colors.border,
-    padding: Spacing.md,
+    paddingVertical: Spacing.md,
+    paddingHorizontal: Spacing.md,
     color: Colors.textPrimary,
-    fontSize: FontSize.md,
-    minHeight: 90,
-    lineHeight: 22,
+    fontSize: FontSize.xl,
+    fontWeight: FontWeight.semibold,
+    textAlign: 'center',
+  },
+  timeSep: { paddingBottom: Spacing.md, paddingHorizontal: 2 },
+  timeSepText: { fontSize: FontSize.lg, color: Colors.textMuted },
+
+  // Off days
+  dayGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm },
+  dayChip: {
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.sm + 2,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    backgroundColor: Colors.surface,
+  },
+  dayChipActive: { borderColor: Colors.gold, backgroundColor: Colors.goldMuted },
+  dayChipText: { fontSize: FontSize.sm, fontWeight: FontWeight.medium, color: Colors.textSecondary },
+  dayChipTextActive: { color: Colors.gold },
+  offDaysNoneHint: { fontSize: FontSize.xs, color: Colors.textMuted, textAlign: 'center' },
+  toggleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: Spacing.md,
+    paddingHorizontal: Spacing.md,
+    backgroundColor: Colors.surfaceElevated,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  toggleText: { flex: 1 },
+  toggleLabel: { fontSize: FontSize.sm, fontWeight: FontWeight.medium, color: Colors.textPrimary },
+
+  // Identity goals
+  identityGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm },
+  identityCard: {
+    width: '47%',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
+    padding: Spacing.sm + 2,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    backgroundColor: Colors.surface,
+    position: 'relative',
+  },
+  identityCardActive: { borderColor: Colors.gold, backgroundColor: Colors.goldMuted },
+  identityIconBox: {
+    width: 28, height: 28, borderRadius: Radius.sm,
+    backgroundColor: Colors.surfaceElevated,
+    alignItems: 'center', justifyContent: 'center',
+    flexShrink: 0,
+  },
+  identityIconBoxActive: { backgroundColor: Colors.goldMuted },
+  identityLabel: { flex: 1, fontSize: FontSize.xs, fontWeight: FontWeight.medium, color: Colors.textSecondary, lineHeight: 16 },
+  identityLabelActive: { color: Colors.gold },
+  identityCheck: {
+    position: 'absolute', top: 6, right: 6,
+    width: 16, height: 16, borderRadius: 8,
+    backgroundColor: Colors.gold,
+    alignItems: 'center', justifyContent: 'center',
   },
 
-  // ── Navigation ───────────────────────────────────────────────────────────
+  // Navigation
   nav: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -755,17 +914,12 @@ const styles = StyleSheet.create({
     borderTopColor: Colors.border,
     backgroundColor: Colors.background,
   },
-  backBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.xs,
-    padding: Spacing.sm,
-  },
-  backText: {
-    fontSize: FontSize.md,
-    color: Colors.textSecondary,
-  },
-  nextBtn: {
+  navBack: { flexDirection: 'row', alignItems: 'center', gap: Spacing.xs, padding: Spacing.sm },
+  navBackText: { fontSize: FontSize.md, color: Colors.textSecondary },
+  navRight: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
+  navSkip: { padding: Spacing.sm },
+  navSkipText: { fontSize: FontSize.sm, color: Colors.textMuted },
+  navNext: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: Spacing.sm,
@@ -773,13 +927,11 @@ const styles = StyleSheet.create({
     borderRadius: Radius.md,
     paddingVertical: Spacing.sm + 4,
     paddingHorizontal: Spacing.lg,
+    ...Shadow.gold,
   },
-  nextBtnDisabled: {
-    opacity: 0.4,
-  },
-  nextBtnText: {
-    fontSize: FontSize.md,
-    fontWeight: FontWeight.bold,
-    color: Colors.textInverse,
-  },
+  navNextDisabled: { opacity: 0.35 },
+  navNextMuted:    { opacity: 0.6 },
+  navNextText: { fontSize: FontSize.md, fontWeight: FontWeight.bold, color: Colors.textInverse },
+
+  errorText: { fontSize: FontSize.sm, color: Colors.error },
 });

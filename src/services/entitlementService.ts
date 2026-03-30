@@ -8,8 +8,12 @@ export type PlanFeature =
   | 'ai_chat'
   | 'ai_build_day'
   | 'ai_recover_day'
-  | 'ai_monthly_review'   // Pro only
-  | 'ai_weekly_plan';     // Pro only — covers both weekly planning and weekly review
+  | 'ai_monthly_review'      // Pro only
+  | 'ai_weekly_plan'         // Pro only — covers both weekly planning and weekly review
+  | 'predictive_insights'    // Pro only — predictive action hints + explanation layer
+  | 'advanced_recovery'      // Pro only — recovery ranked by effectiveness + risk profile
+  | 'weekly_insights_depth'  // Pro only — 30-day outcome window
+  | 'outcome_dashboard';     // Free + Pro — basic 7-day outcome dashboard
 
 // ─── Tier → feature map ───────────────────────────────────────────────────────
 //
@@ -20,9 +24,22 @@ export type PlanFeature =
 // ever assigned, without requiring an app update.
 
 export const PLAN_ENTITLEMENTS: Record<string, ReadonlySet<PlanFeature>> = {
-  free: new Set(['ai_chat', 'ai_build_day', 'ai_recover_day']),
-  pro:  new Set(['ai_chat', 'ai_build_day', 'ai_recover_day', 'ai_monthly_review', 'ai_weekly_plan']),
-  max:  new Set(['ai_chat', 'ai_build_day', 'ai_recover_day', 'ai_monthly_review', 'ai_weekly_plan']),
+  free: new Set<PlanFeature>([
+    'ai_chat', 'ai_build_day', 'ai_recover_day',
+    'outcome_dashboard',
+  ]),
+  pro: new Set<PlanFeature>([
+    'ai_chat', 'ai_build_day', 'ai_recover_day',
+    'ai_monthly_review', 'ai_weekly_plan',
+    'predictive_insights', 'advanced_recovery',
+    'weekly_insights_depth', 'outcome_dashboard',
+  ]),
+  max: new Set<PlanFeature>([
+    'ai_chat', 'ai_build_day', 'ai_recover_day',
+    'ai_monthly_review', 'ai_weekly_plan',
+    'predictive_insights', 'advanced_recovery',
+    'weekly_insights_depth', 'outcome_dashboard',
+  ]),
 };
 
 const FREE_ENTITLEMENTS: ReadonlySet<PlanFeature> = PLAN_ENTITLEMENTS['free']!;

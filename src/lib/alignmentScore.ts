@@ -23,14 +23,18 @@ export function computeAlignmentScore(input: AlignmentInput): AlignmentResult {
   } = input;
 
   // ── Task Score (40 pts) ───────────────────────────────────────────────────
-  const todayTasks = tasks.filter((t) => !t.scheduledStart || true);
-  const completedTasks = todayTasks.filter((t) => t.completed).length;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const todayTasks = tasks.filter((t: any) => !t.scheduledStart || true);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const completedTasks = todayTasks.filter((t: any) => t.completed).length;
   const taskRatio = todayTasks.length > 0 ? completedTasks / todayTasks.length : 0;
   const taskScore = Math.round(taskRatio * 40);
 
   // ── Rule Score (30 pts) ───────────────────────────────────────────────────
-  const activeRules = rules.filter((r) => r.enabled);
-  const followedRules = activeRules.filter((r) => r.followedToday).length;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const activeRules = rules.filter((r: any) => r.enabled);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const followedRules = activeRules.filter((r: any) => r.followedToday).length;
   const ruleRatio = activeRules.length > 0 ? followedRules / activeRules.length : 0;
   const ruleScore = Math.round(ruleRatio * 30);
 

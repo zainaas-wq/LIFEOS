@@ -3,7 +3,7 @@ export const Colors = {
   surface: '#111111',
   surfaceElevated: '#1A1A1A',
   surfaceHigh: '#222222',
-  border: '#2A2A2A',
+  border: 'rgba(255,255,255,0.05)',
   borderLight: '#333333',
 
   gold: '#C9A84C',
@@ -25,6 +25,27 @@ export const Colors = {
   error: '#F87171',
   errorMuted: 'rgba(248, 113, 113, 0.12)',
   warning: '#FBBF24',
+
+  // ── Recovery palette — calm, non-stressful ────────────────────────────────
+  // Used for recovery/meal/recharge blocks in the timeline and Command Strip.
+  // Intentionally softer than the gold/error primary palette.
+
+  /** Soft steel-blue — used for meal_recovery and general rest blocks */
+  recovery: '#4A90B8',
+  recoveryMuted: 'rgba(74, 144, 184, 0.15)',
+  recoveryDim: 'rgba(74, 144, 184, 0.35)',
+
+  /** Warm amber — distinct from gold, used for meal break label */
+  meal: '#C97E3A',
+  mealMuted: 'rgba(201, 126, 58, 0.15)',
+
+  /** Soft teal — recharge breaks after demanding sessions */
+  recharge: '#3AB8A0',
+  rechargeMuted: 'rgba(58, 184, 160, 0.15)',
+
+  /** Soft lavender — reward breaks after critical completions */
+  reward: '#9B7EC8',
+  rewardMuted: 'rgba(155, 126, 200, 0.15)',
 
   overlay: 'rgba(0,0,0,0.6)',
   transparent: 'transparent',

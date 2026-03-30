@@ -1,17 +1,17 @@
 /**
- * paywall.tsx — Post-onboarding premium reveal screen.
+ * paywall.tsx — Trial-expired hard gate.
  *
- * Shown ONCE after onboarding completes, before the user enters the app.
- * This is the pay-first moment — the highest-conversion point in the funnel.
+ * Shown when the 3-day trial has expired and the user is not Pro.
+ * There is NO "Maybe later" escape — the only path is to subscribe.
  *
  * Design principles:
- *   - Personalized with the user's own identity data
- *   - Positions LifeOS as a system, not a tool
- *   - Single clear CTA: Start 7-Day Free Trial
- *   - "Maybe later" escape does NOT free-trial the user — it gates features
+ *   - Empathetic tone: "Your trial has ended"
+ *   - Surfaces what the user built during trial (goals, identity)
+ *   - Single clear CTA: Start LifeOS Pro
+ *   - No bypass path — no dismiss, no free tier
  */
 
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useMemo } from 'react';
 import {
   View,
   Text,
@@ -23,86 +23,42 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import { useTranslation } from 'react-i18next';
 import { useAppStore } from '../src/store/useAppStore';
 import { Colors, FontSize, FontWeight, Radius, Shadow, Spacing } from '../src/constants/theme';
-import type { LifeRole, EnergyStyle } from '../src/types';
-
-// ─── Role / energy display helpers ────────────────────────────────────────────
-
-const ROLE_LABELS: Record<LifeRole, string> = {
-  student:      'Student',
-  employee:     'Professional',
-  freelancer:   'Freelancer',
-  'shift-worker': 'Shift Worker',
-  creator:      'Creator',
-  other:        'Independent',
-};
-
-const ENERGY_LABELS: Record<EnergyStyle, string> = {
-  morning:   'Morning peak',
-  afternoon: 'Afternoon peak',
-  evening:   'Evening peak',
-  night:     'Night owl',
-  flexible:  'Flexible hours',
-};
-
-// ─── Value propositions — benefit-first, not feature-first ────────────────────
-
-const VALUE_PROPS = [
-  {
-    icon: 'calendar-outline' as const,
-    title: 'Plans your day intelligently',
-    body: 'Builds a real daily schedule around your goals, energy, and fixed commitments — automatically.',
-  },
-  {
-    icon: 'pulse-outline' as const,
-    title: 'Detects and corrects drift',
-    body: 'Knows when you\'re falling behind before it becomes a problem, and shows you exactly how to recover.',
-  },
-  {
-    icon: 'refresh-outline' as const,
-    title: 'Adapts when life interrupts',
-    body: 'When your day breaks down, LifeOS rebuilds it intelligently — not by deleting what you missed.',
-  },
-  {
-    icon: 'flag-outline' as const,
-    title: 'Keeps your goals moving every week',
-    body: 'Tracks weekly progress per goal, flags what\'s at risk, and ensures your priorities don\'t slip.',
-  },
-] as const;
 
 // ── Screen ────────────────────────────────────────────────────────────────────
 
 export default function PaywallScreen() {
-  const profile      = useAppStore((s) => s.profile);
-  const setPaywallSeen = useAppStore((s) => s.setPaywallSeen);
-  const goals        = useAppStore((s) => s.goals);
+  const { t } = useTranslation();
+  const profile = useAppStore((s) => s.profile);
+  const goals   = useAppStore((s) => s.goals);
 
   // Entrance animation
   const fadeAnim  = useRef(new Animated.Value(0)).current;
-  const slideAnim = useRef(new Animated.Value(24)).current;
+  const slideAnim = useRef(new Animated.Value(28)).current;
 
   useEffect(() => {
     Animated.parallel([
-      Animated.timing(fadeAnim,  { toValue: 1, duration: 600, useNativeDriver: true }),
-      Animated.timing(slideAnim, { toValue: 0, duration: 500, useNativeDriver: true, delay: 100 }),
+      Animated.timing(fadeAnim,  { toValue: 1, duration: 700, useNativeDriver: true }),
+      Animated.timing(slideAnim, { toValue: 0, duration: 600, useNativeDriver: true, delay: 80 }),
     ]).start();
   }, []);
 
-  const name       = profile?.name ? `, ${profile.name}` : '';
-  const roleLabel  = profile?.lifeRole  ? ROLE_LABELS[profile.lifeRole]  : null;
-  const energyLabel = profile?.energyStyle ? ENERGY_LABELS[profile.energyStyle] : null;
-  const trackCount = profile?.selectedTrackTypes?.length ?? 0;
-  const goalCount  = goals.length;
+  const VALUE_PROPS = useMemo(() => [
+    { icon: 'calendar-outline' as const, title: t('paywall.value_1_title'), body: t('paywall.value_1_body') },
+    { icon: 'pulse-outline'    as const, title: t('paywall.value_2_title'), body: t('paywall.value_2_body') },
+    { icon: 'refresh-outline'  as const, title: t('paywall.value_3_title'), body: t('paywall.value_3_body') },
+    { icon: 'flag-outline'     as const, title: t('paywall.value_4_title'), body: t('paywall.value_4_body') },
+  ], [t]);
 
-  const handleStartTrial = () => {
-    router.push('/upgrade' as any);
-  };
+  const name        = profile?.name ? `, ${profile.name}` : '';
+  const roleLabel   = profile?.lifeRole    ? t(`paywall.role_${profile.lifeRole.replace('-', '_')}`) : null;
+  const energyLabel = profile?.energyStyle ? t(`paywall.energy_${profile.energyStyle}`)               : null;
+  const trackCount  = profile?.selectedTrackTypes?.length ?? 0;
+  const goalCount   = goals.length;
 
-  const handleMaybeLater = () => {
-    setPaywallSeen();
-    router.replace('/(tabs)/home' as any);
-  };
+  const handleStartPro = () => router.push('/upgrade' as any);
 
   return (
     <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
@@ -114,34 +70,36 @@ export default function PaywallScreen() {
       >
         <Animated.View style={{ opacity: fadeAnim, transform: [{ translateY: slideAnim }] }}>
 
-          {/* ── Brand mark ──────────────────────────────────────────────────── */}
+          {/* ── Brand mark ────────────────────────────────────────────────────── */}
           <View style={styles.brand}>
             <View style={styles.logoMark}>
-              <Ionicons name="layers-outline" size={22} color={Colors.gold} />
+              <Ionicons name="layers-outline" size={20} color={Colors.gold} />
             </View>
             <Text style={styles.logoText}>LifeOS</Text>
           </View>
 
-          {/* ── Hero ────────────────────────────────────────────────────────── */}
+          {/* ── Hero ──────────────────────────────────────────────────────────── */}
           <View style={styles.hero}>
-            <Text style={styles.heroLabel}>YOUR OPERATING SYSTEM</Text>
-            <Text style={styles.heroTitle}>
-              Everything is{'\n'}ready for you{name}.
-            </Text>
-            <Text style={styles.heroSub}>
-              Your identity is set. Your goals are mapped.{'\n'}
-              Now let the intelligence run.
-            </Text>
+            <View style={styles.heroLabelRow}>
+              <View style={styles.heroDot} />
+              <Text style={styles.heroLabelText}>{t('paywall.system_label')}</Text>
+            </View>
+            <Text style={styles.heroTitle}>{t('paywall.hero_title_expired')}</Text>
+            <Text style={styles.heroSub}>{t('paywall.hero_sub_expired', { name })}</Text>
           </View>
 
-          {/* ── Identity strip — personalized ───────────────────────────────── */}
+          {/* ── Identity card — personalized ──────────────────────────────────── */}
           <View style={styles.identityCard}>
-            <Text style={styles.identityHeading}>BUILT AROUND YOUR LIFE</Text>
+            <View style={styles.identityCardHeader}>
+              <Ionicons name="person-circle-outline" size={15} color={Colors.gold} />
+              <Text style={styles.identityHeading}>{t('paywall.identity_heading')}</Text>
+            </View>
+            <View style={styles.identityDivider} />
             <View style={styles.identityRows}>
               {roleLabel && (
                 <View style={styles.identityRow}>
                   <View style={styles.identityIconWrap}>
-                    <Ionicons name="person-outline" size={13} color={Colors.gold} />
+                    <Ionicons name="briefcase-outline" size={11} color={Colors.gold} />
                   </View>
                   <Text style={styles.identityText}>{roleLabel}</Text>
                 </View>
@@ -149,7 +107,7 @@ export default function PaywallScreen() {
               {energyLabel && (
                 <View style={styles.identityRow}>
                   <View style={styles.identityIconWrap}>
-                    <Ionicons name="flash-outline" size={13} color={Colors.gold} />
+                    <Ionicons name="flash-outline" size={11} color={Colors.gold} />
                   </View>
                   <Text style={styles.identityText}>{energyLabel}</Text>
                 </View>
@@ -157,74 +115,71 @@ export default function PaywallScreen() {
               {trackCount > 0 && (
                 <View style={styles.identityRow}>
                   <View style={styles.identityIconWrap}>
-                    <Ionicons name="layers-outline" size={13} color={Colors.gold} />
+                    <Ionicons name="layers-outline" size={11} color={Colors.gold} />
                   </View>
                   <Text style={styles.identityText}>
-                    {trackCount} life track{trackCount !== 1 ? 's' : ''} selected
+                    {t('paywall.tracks', { count: trackCount })}
                   </Text>
                 </View>
               )}
               {goalCount > 0 && (
                 <View style={styles.identityRow}>
                   <View style={styles.identityIconWrap}>
-                    <Ionicons name="flag-outline" size={13} color={Colors.gold} />
+                    <Ionicons name="flag-outline" size={11} color={Colors.gold} />
                   </View>
                   <Text style={styles.identityText}>
-                    {goalCount} active goal{goalCount !== 1 ? 's' : ''}
+                    {t('paywall.goals', { count: goalCount })}
                   </Text>
                 </View>
               )}
               {trackCount === 0 && goalCount === 0 && (
                 <View style={styles.identityRow}>
                   <View style={styles.identityIconWrap}>
-                    <Ionicons name="checkmark-circle-outline" size={13} color={Colors.gold} />
+                    <Ionicons name="checkmark-circle-outline" size={11} color={Colors.gold} />
                   </View>
-                  <Text style={styles.identityText}>Profile complete — ready to plan</Text>
+                  <Text style={styles.identityText}>{t('paywall.profile_complete')}</Text>
                 </View>
               )}
             </View>
           </View>
 
-          {/* ── Divider label ───────────────────────────────────────────────── */}
-          <Text style={styles.sectionLabel}>WHAT IT DOES FOR YOU — EVERY DAY</Text>
+          {/* ── Section divider ───────────────────────────────────────────────── */}
+          <View style={styles.dividerRow}>
+            <View style={styles.dividerLine} />
+            <Text style={styles.sectionLabel}>{t('paywall.section_label')}</Text>
+            <View style={styles.dividerLine} />
+          </View>
 
-          {/* ── Value propositions ──────────────────────────────────────────── */}
+          {/* ── Value propositions — card style with accent ────────────────────── */}
           <View style={styles.valueList}>
             {VALUE_PROPS.map((vp, i) => (
               <View key={i} style={styles.valueProp}>
-                <View style={styles.valuePropIcon}>
-                  <Ionicons name={vp.icon} size={16} color={Colors.gold} />
-                </View>
-                <View style={styles.valuePropText}>
-                  <Text style={styles.valuePropTitle}>{vp.title}</Text>
-                  <Text style={styles.valuePropBody}>{vp.body}</Text>
+                <View style={styles.valuePropAccent} />
+                <View style={styles.valuePropInner}>
+                  <View style={styles.valuePropIcon}>
+                    <Ionicons name={vp.icon} size={14} color={Colors.gold} />
+                  </View>
+                  <View style={styles.valuePropText}>
+                    <Text style={styles.valuePropTitle}>{vp.title}</Text>
+                    <Text style={styles.valuePropBody}>{vp.body}</Text>
+                  </View>
                 </View>
               </View>
             ))}
           </View>
 
-          {/* ── Trial CTA ───────────────────────────────────────────────────── */}
+          {/* ── Trial CTA ─────────────────────────────────────────────────────── */}
           <View style={styles.ctaSection}>
             <TouchableOpacity
               style={styles.trialBtn}
-              onPress={handleStartTrial}
+              onPress={handleStartPro}
               activeOpacity={0.85}
             >
               <Ionicons name="sparkles" size={16} color={Colors.textInverse} />
-              <Text style={styles.trialBtnText}>Start 7-Day Free Trial</Text>
+              <Text style={styles.trialBtnText}>{t('paywall.pro_btn')}</Text>
             </TouchableOpacity>
 
-            <Text style={styles.trialNote}>
-              Then billed monthly. Cancel anytime before trial ends.
-            </Text>
-
-            <TouchableOpacity
-              onPress={handleMaybeLater}
-              style={styles.laterBtn}
-              activeOpacity={0.6}
-            >
-              <Text style={styles.laterText}>Maybe later</Text>
-            </TouchableOpacity>
+            <Text style={styles.trialNote}>{t('paywall.cancel_note')}</Text>
           </View>
 
         </Animated.View>
@@ -238,14 +193,15 @@ export default function PaywallScreen() {
 const styles = StyleSheet.create({
   safe:    { flex: 1, backgroundColor: Colors.background },
   scroll:  { flex: 1 },
-  content: { paddingHorizontal: Spacing.lg, paddingTop: Spacing.lg, paddingBottom: Spacing.xxl, gap: Spacing.xl },
+  content: {
+    paddingHorizontal: Spacing.lg,
+    paddingTop: Spacing.lg,
+    paddingBottom: Spacing.xxl,
+    gap: Spacing.xl,
+  },
 
   // Brand
-  brand: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.sm,
-  },
+  brand: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
   logoMark: {
     width: 36,
     height: 36,
@@ -260,12 +216,19 @@ const styles = StyleSheet.create({
     fontSize: FontSize.lg,
     fontWeight: FontWeight.bold,
     color: Colors.textPrimary,
-    letterSpacing: 0.5,
+    letterSpacing: 0.8,
   },
 
   // Hero
-  hero: { gap: Spacing.sm, paddingTop: Spacing.md },
-  heroLabel: {
+  hero: { gap: Spacing.sm, paddingTop: Spacing.xs },
+  heroLabelRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.xs },
+  heroDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: Colors.gold,
+  },
+  heroLabelText: {
     fontSize: FontSize.xs,
     fontWeight: FontWeight.semibold,
     color: Colors.gold,
@@ -276,6 +239,7 @@ const styles = StyleSheet.create({
     fontWeight: FontWeight.bold,
     color: Colors.textPrimary,
     lineHeight: 42,
+    letterSpacing: -0.5,
   },
   heroSub: {
     fontSize: FontSize.md,
@@ -286,28 +250,44 @@ const styles = StyleSheet.create({
   // Identity card
   identityCard: {
     backgroundColor: Colors.surfaceElevated,
-    borderRadius: Radius.lg,
+    borderRadius: Radius.xl,
     borderWidth: 1,
     borderColor: Colors.goldDim,
-    padding: Spacing.md,
-    gap: Spacing.sm,
+    overflow: 'hidden',
     ...Shadow.gold,
+  },
+  identityCardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.xs,
+    paddingHorizontal: Spacing.md,
+    paddingTop: Spacing.md,
+    paddingBottom: Spacing.sm,
   },
   identityHeading: {
     fontSize: FontSize.xs,
-    fontWeight: FontWeight.semibold,
+    fontWeight: FontWeight.bold,
     color: Colors.gold,
     letterSpacing: 1.5,
   },
-  identityRows: { gap: Spacing.xs + 2 },
+  identityDivider: {
+    height: 1,
+    backgroundColor: Colors.goldDim,
+    opacity: 0.3,
+    marginHorizontal: Spacing.md,
+  },
+  identityRows: {
+    gap: Spacing.xs + 2,
+    padding: Spacing.md,
+  },
   identityRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: Spacing.sm,
   },
   identityIconWrap: {
-    width: 24,
-    height: 24,
+    width: 22,
+    height: 22,
     borderRadius: Radius.sm,
     backgroundColor: Colors.goldMuted,
     alignItems: 'center',
@@ -319,7 +299,17 @@ const styles = StyleSheet.create({
     fontWeight: FontWeight.medium,
   },
 
-  // Section label
+  // Section divider
+  dividerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
+  },
+  dividerLine: {
+    flex: 1,
+    height: 1,
+    backgroundColor: Colors.border,
+  },
   sectionLabel: {
     fontSize: FontSize.xs,
     fontWeight: FontWeight.semibold,
@@ -328,41 +318,56 @@ const styles = StyleSheet.create({
   },
 
   // Value props
-  valueList: { gap: Spacing.md },
+  valueList: { gap: Spacing.sm },
   valueProp: {
     flexDirection: 'row',
-    gap: Spacing.md,
+    backgroundColor: Colors.surfaceElevated,
+    borderRadius: Radius.lg,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    overflow: 'hidden',
+  },
+  valuePropAccent: {
+    width: 3,
+    backgroundColor: Colors.gold,
+    flexShrink: 0,
+  },
+  valuePropInner: {
+    flex: 1,
+    flexDirection: 'row',
+    gap: Spacing.sm,
+    padding: Spacing.md,
     alignItems: 'flex-start',
   },
   valuePropIcon: {
-    width: 36,
-    height: 36,
-    borderRadius: Radius.md,
+    width: 30,
+    height: 30,
+    borderRadius: Radius.sm,
     backgroundColor: Colors.goldMuted,
     borderWidth: 1,
     borderColor: Colors.goldDim,
     alignItems: 'center',
     justifyContent: 'center',
     flexShrink: 0,
-    marginTop: 2,
+    marginTop: 1,
   },
-  valuePropText: { flex: 1, gap: 4 },
+  valuePropText: { flex: 1, gap: 3 },
   valuePropTitle: {
-    fontSize: FontSize.md,
+    fontSize: FontSize.sm,
     fontWeight: FontWeight.semibold,
     color: Colors.textPrimary,
   },
   valuePropBody: {
-    fontSize: FontSize.sm,
+    fontSize: FontSize.xs,
     color: Colors.textSecondary,
-    lineHeight: 20,
+    lineHeight: 17,
   },
 
   // CTA section
   ctaSection: {
     gap: Spacing.sm,
     alignItems: 'center',
-    paddingTop: Spacing.sm,
+    paddingTop: Spacing.xs,
   },
   trialBtn: {
     flexDirection: 'row',
@@ -370,13 +375,13 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: Spacing.sm,
     backgroundColor: Colors.gold,
-    borderRadius: Radius.md,
-    paddingVertical: Spacing.md,
+    borderRadius: Radius.lg,
+    paddingVertical: 18,
     width: '100%',
     ...Shadow.gold,
   },
   trialBtnText: {
-    fontSize: FontSize.md,
+    fontSize: FontSize.lg,
     fontWeight: FontWeight.bold,
     color: Colors.textInverse,
     letterSpacing: 0.3,

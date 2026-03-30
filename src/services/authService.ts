@@ -1,3 +1,4 @@
+import { Linking } from 'react-native';
 import { supabase } from '../lib/supabase';
 import type { Session } from '@supabase/supabase-js';
 
@@ -23,6 +24,31 @@ export async function signOut(): Promise<void> {
 export async function getSession(): Promise<Session | null> {
   const { data } = await supabase.auth.getSession();
   return data.session;
+}
+
+/**
+ * Initiate OAuth sign-in via system browser.
+ * On success the browser redirects to lifeos://auth/callback, which is
+ * picked up by the deep-link listener in app/_layout.tsx.
+ *
+ * Requires Supabase dashboard configuration:
+ *   Authentication → Providers → Google / Apple → enable + set redirect URL
+ *   Authentication → URL Configuration → add "lifeos://auth/callback" to allowed redirects
+ */
+export async function signInWithOAuthProvider(
+  provider: 'google' | 'apple',
+): Promise<void> {
+  const { data, error } = await supabase.auth.signInWithOAuth({
+    provider,
+    options: {
+      redirectTo: 'lifeos://auth/callback',
+      skipBrowserRedirect: true,
+    },
+  });
+  if (error) throw error;
+  if (data?.url) {
+    await Linking.openURL(data.url);
+  }
 }
 
 export function onAuthStateChange(

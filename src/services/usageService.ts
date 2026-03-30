@@ -147,6 +147,22 @@ export async function fetchMonthlyUsage(userId: string): Promise<MonthlyUsage> {
   }
 }
 
+// ─── Trial start date ─────────────────────────────────────────────────────────
+
+/**
+ * Fetch the server-authoritative trial start date for this user.
+ * Returns null when the row does not exist or the column is unset
+ * (pre-migration accounts, or users who never triggered activate-purchase).
+ */
+export async function getTrialStartedAt(userId: string): Promise<string | null> {
+  const { data } = await (supabase as any)
+    .from('ai_user_tier')
+    .select('trial_started_at')
+    .eq('user_id', userId)
+    .maybeSingle();
+  return (data as { trial_started_at: string | null } | null)?.trial_started_at ?? null;
+}
+
 // ─── Hook ─────────────────────────────────────────────────────────────────────
 
 const LOADING_STATE: MonthlyUsage = {

@@ -123,7 +123,8 @@ export function generateDailyPlan(input: GeneratePlanInput): DailyPlan {
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function sortByPriority(a: Task, b: Task): number {
-  const order = { high: 0, medium: 1, low: 2 };
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const order: Record<string, number> = { high: 0, medium: 1, low: 2 };
   if (order[a.priority] !== order[b.priority]) {
     return order[a.priority] - order[b.priority];
   }

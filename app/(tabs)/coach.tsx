@@ -30,6 +30,7 @@ import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { useTranslation } from 'react-i18next';
+import { useDirection } from '../../src/hooks/useDirection';
 import { useAppStore, useAIContext } from '../../src/store/useAppStore';
 import { LocalAIClient } from '../../src/ai/LocalAIClient';
 import { BackendAIClient } from '../../src/ai/BackendAIClient';
@@ -66,10 +67,12 @@ function ContextStrip({
   usage: UseMonthlyUsageResult | null;
   onCreditsExhausted?: () => void;
 }) {
+  const { t } = useTranslation();
+  const dir = useDirection();
   const hour = new Date().getHours();
   const energyLabel =
-    hour >= 6  && hour < 12 ? 'High energy' :
-    hour >= 12 && hour < 17 ? 'Mid energy'  : 'Low energy';
+    hour >= 6  && hour < 12 ? t('coach.energy_high') :
+    hour >= 12 && hour < 17 ? t('coach.energy_mid')  : t('coach.energy_low');
   const energyColor =
     hour >= 6  && hour < 12 ? '#6C8EBF' :
     hour >= 12 && hour < 17 ? Colors.gold : '#4ADE80';
@@ -82,7 +85,7 @@ function ContextStrip({
   const creditsAccent  = creditsDanger ? CREDITS_DANGER : creditsWarning ? Colors.gold : null;
 
   return (
-    <View style={ctx.strip}>
+    <View style={[ctx.strip, { flexDirection: dir.rowDir }]}>
       <View style={ctx.chip}>
         <Text style={ctx.chipText}>{formatDate(getTodayDate())}</Text>
       </View>
@@ -91,7 +94,7 @@ function ContextStrip({
       </View>
       <View style={ctx.chip}>
         <Text style={ctx.chipText}>
-          {goalCount === 0 ? 'No goals' : `${goalCount} goal${goalCount !== 1 ? 's' : ''}`}
+          {goalCount === 0 ? t('coach.no_goals') : t('coach.goal_count', { count: goalCount })}
         </Text>
       </View>
       {showCredits && (
@@ -102,12 +105,12 @@ function ContextStrip({
             activeOpacity={0.75}
           >
             <Ionicons name="sparkles" size={10} color={Colors.gold} />
-            <Text style={[ctx.chipText, ctx.chipGold]}>0 credits</Text>
+            <Text style={[ctx.chipText, ctx.chipGold]}>{t('coach.credits_zero')}</Text>
           </TouchableOpacity>
         ) : (
           <View style={[ctx.chip, creditsAccent ? { borderColor: creditsAccent + '55' } : undefined]}>
             <Text style={[ctx.chipText, creditsAccent ? { color: creditsAccent } : undefined]}>
-              {creditsLeft} credits
+              {t('coach.credits_count', { count: creditsLeft })}
             </Text>
           </View>
         )
@@ -161,18 +164,30 @@ function InlinePlanItem({ item }: { item: PlanItem }) {
 }
 
 function InlinePlan({ plan: p }: { plan: Plan }) {
+  const { t } = useTranslation();
+  const generateControlPlanAction = useAppStore((s) => s.generateControlPlanAction);
   const work = p.items.filter((i) => i.type !== 'break');
   if (!work.length) return null;
   return (
     <View style={plan.container}>
       <Text style={plan.header}>
-        {p.type === 'daily' ? 'Daily plan' : 'Weekly plan'}
-        {' · '}{work.length} session{work.length !== 1 ? 's' : ''}
+        {p.type === 'daily' ? t('coach.plan_daily') : t('coach.plan_weekly')}
+        {' · '}{t('coach.plan_sessions_label', { count: work.length })}
       </Text>
       {work.slice(0, 8).map((i) => <InlinePlanItem key={i.id} item={i} />)}
       {work.length > 8 && (
-        <Text style={plan.more}>+{work.length - 8} more sessions</Text>
+        <Text style={plan.more}>{t('coach.plan_more_items', { count: work.length - 8 })}</Text>
       )}
+      <TouchableOpacity
+        style={plan.applyBtn}
+        activeOpacity={0.85}
+        onPress={() => {
+          generateControlPlanAction(getTodayDate());
+          router.push('/(tabs)/home' as any);
+        }}
+      >
+        <Text style={plan.applyBtnText}>{t('home.coach_apply_plan')}</Text>
+      </TouchableOpacity>
     </View>
   );
 }
@@ -188,6 +203,8 @@ const plan = StyleSheet.create({
   title:     { fontSize: FontSize.sm, color: Colors.textPrimary },
   type:      { fontSize: FontSize.xs, textTransform: 'uppercase', letterSpacing: 0.5 },
   more:      { fontSize: FontSize.xs, color: Colors.textMuted, padding: Spacing.sm, textAlign: 'center' },
+  applyBtn:     { margin: Spacing.sm, paddingVertical: Spacing.sm, paddingHorizontal: Spacing.md, borderRadius: Radius.md, backgroundColor: Colors.goldMuted, borderWidth: 1, borderColor: Colors.goldDim, alignItems: 'center' },
+  applyBtnText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.gold, letterSpacing: 0.3 },
 });
 
 // ─── Chat bubble ──────────────────────────────────────────────────────────────
@@ -233,33 +250,35 @@ function ContextCard({
   mustDoCount: number;
   recoveryMessage?: string;
 }) {
+  const { t } = useTranslation();
+  const dir = useDirection();
   if (!isRecovery && driftScore === 0 && mustDoCount === 0) return null;
   return (
     <View style={[ctxCard.wrap, isRecovery && ctxCard.recovery]}>
-      <View style={ctxCard.header}>
+      <View style={[ctxCard.header, { flexDirection: dir.rowDir }]}>
         <Ionicons
           name={isRecovery ? 'alert-circle' : 'pulse-outline'}
           size={13}
           color={isRecovery ? Colors.error : Colors.gold}
         />
         <Text style={[ctxCard.heading, isRecovery && ctxCard.headingRecovery]}>
-          {isRecovery ? 'RECOVERY MODE' : "TODAY'S CONTEXT"}
+          {isRecovery ? t('coach.context_recovery') : t('coach.context_today')}
         </Text>
       </View>
       {recoveryMessage && isRecovery && (
         <Text style={ctxCard.msg}>{recoveryMessage}</Text>
       )}
-      <View style={ctxCard.pills}>
+      <View style={[ctxCard.pills, { flexDirection: dir.rowDir }]}>
         {driftScore > 0 && (
           <View style={ctxCard.pill}>
             <Text style={ctxCard.pillVal}>{driftScore}</Text>
-            <Text style={ctxCard.pillLabel}>drift</Text>
+            <Text style={ctxCard.pillLabel}>{t('coach.context_drift')}</Text>
           </View>
         )}
         {mustDoCount > 0 && (
           <View style={ctxCard.pill}>
             <Text style={ctxCard.pillVal}>{mustDoCount}</Text>
-            <Text style={ctxCard.pillLabel}>must-do</Text>
+            <Text style={ctxCard.pillLabel}>{t('coach.context_must_do')}</Text>
           </View>
         )}
       </View>
@@ -269,8 +288,8 @@ function ContextCard({
 
 const ctxCard = StyleSheet.create({
   wrap: {
-    backgroundColor: Colors.surfaceElevated, borderRadius: Radius.lg,
-    borderWidth: 1, borderColor: Colors.goldDim, padding: Spacing.md, gap: Spacing.sm,
+    backgroundColor: Colors.surfaceElevated, borderRadius: Radius.xl,
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.05)', padding: Spacing.md, gap: Spacing.sm,
   },
   recovery: { borderColor: Colors.error, backgroundColor: 'rgba(248,113,113,0.06)' },
   header: { flexDirection: 'row', alignItems: 'center', gap: Spacing.xs },
@@ -293,6 +312,7 @@ function makeUserMsg(content: string): ChatMessage {
 
 export default function CoachScreen() {
   const { t } = useTranslation();
+  const dir = useDirection();
 
   const chatHistory    = useAppStore((s) => s.chatHistory);
   const addChatMessage = useAppStore((s) => s.addChatMessage);
@@ -327,10 +347,8 @@ export default function CoachScreen() {
   // Quick actions with feature gating
   type QA = { label: string; prompt: string; feature: PlanFeature; event: AnalyticsEventName; icon: string };
   const quickActions: QA[] = [
-    { label: 'Fix my day', prompt: QUICK_ACTION_PROMPTS[0], feature: 'ai_recover_day', event: 'recover_day_used', icon: 'refresh-outline' },
-    { label: 'I feel stuck', prompt: QUICK_ACTION_PROMPTS[1], feature: 'ai_chat', event: 'ai_chat_used', icon: 'hand-left-outline' },
-    { label: 'Rebalance my schedule', prompt: QUICK_ACTION_PROMPTS[2], feature: 'ai_weekly_plan', event: 'ai_chat_used', icon: 'options-outline' },
-    { label: 'What should I do now?', prompt: QUICK_ACTION_PROMPTS[3], feature: 'ai_chat', event: 'ai_chat_used', icon: 'flash-outline' },
+    { label: t('coach.quick_fix_day'), prompt: QUICK_ACTION_PROMPTS[0], feature: 'ai_recover_day', event: 'recover_day_used', icon: 'refresh-outline' },
+    { label: t('coach.quick_stuck'), prompt: QUICK_ACTION_PROMPTS[1], feature: 'ai_chat', event: 'ai_chat_used', icon: 'hand-left-outline' },
   ];
 
   const getClient = useCallback((): AIClient => {
@@ -386,9 +404,9 @@ export default function CoachScreen() {
   const handleVoice = () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     Alert.alert(
-      'Voice Input',
-      'Voice input lets you plan, reflect, and check in by speaking naturally. This feature is coming in the next update.',
-      [{ text: 'Got it', style: 'default' }],
+      t('coach.voice_alert_title'),
+      t('coach.voice_alert_msg'),
+      [{ text: t('coach.voice_alert_btn'), style: 'default' }],
     );
   };
 
@@ -405,15 +423,15 @@ export default function CoachScreen() {
         keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 24}
       >
         {/* ── Header ──────────────────────────────────────────────────────── */}
-        <View style={s.header}>
+        <View style={[s.header, { flexDirection: dir.rowDir }]}>
           <View style={s.headerLeft}>
             <View style={s.headerIcon}>
               <Ionicons name="sparkles" size={15} color={Colors.gold} />
             </View>
             <View>
-              <Text style={s.headerTitle}>LifeOS Intelligence</Text>
+              <Text style={s.headerTitle}>{t('coach.header_title')}</Text>
               <Text style={s.headerSub}>
-                {session && !isGuestMode ? 'System Intelligence Active' : 'Local Intelligence'}
+                {session && !isGuestMode ? t('coach.header_sub_online') : t('coach.header_sub_offline')}
               </Text>
             </View>
           </View>
@@ -499,13 +517,20 @@ export default function CoachScreen() {
               })}
             </View>
             
-            <View style={s.multimodalRow}>
-              <TouchableOpacity style={s.micBox} onPress={handleVoice} activeOpacity={0.7}>
-                <Ionicons name="mic" size={24} color={Colors.surfaceElevated} />
-                <Text style={s.micBoxText}>Tap to Speak</Text>
+            <View style={[s.multimodalRow, { flexDirection: dir.rowDir }]}>
+              <TouchableOpacity style={s.affordanceBtn} onPress={handleVoice} activeOpacity={0.7}>
+                <View style={[s.affordanceBtnIcon, { backgroundColor: Colors.goldMuted, borderColor: Colors.goldDim }]}>
+                  <Ionicons name="mic-outline" size={20} color={Colors.gold} />
+                </View>
+                <Text style={s.affordanceBtnLabel}>{t('coach.tap_to_speak')}</Text>
+                <Text style={s.affordanceBtnSub}>Voice</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={s.imgBox} onPress={handleImageImport} activeOpacity={0.7}>
-                <Ionicons name="image-outline" size={20} color={Colors.textMuted} />
+              <TouchableOpacity style={s.affordanceBtn} onPress={handleImageImport} activeOpacity={0.7}>
+                <View style={[s.affordanceBtnIcon, { backgroundColor: Colors.purpleMuted, borderColor: 'rgba(157,78,221,0.25)' }]}>
+                  <Ionicons name="image-outline" size={20} color={Colors.purpleLight} />
+                </View>
+                <Text style={s.affordanceBtnLabel}>Import Schedule</Text>
+                <Text style={s.affordanceBtnSub}>Photo</Text>
               </TouchableOpacity>
             </View>
           </ScrollView>
@@ -558,7 +583,7 @@ export default function CoachScreen() {
         )}
 
         {/* ── Input bar — always visible ────────────────────────────────── */}
-        <View style={s.inputBar}>
+        <View style={[s.inputBar, { flexDirection: dir.rowDir }]}>
           {/* Voice affordance in input bar */}
           <TouchableOpacity onPress={handleVoice} style={s.micBtn} activeOpacity={0.7}>
             <Ionicons name="mic-outline" size={18} color={Colors.textMuted} />
@@ -610,26 +635,26 @@ const s = StyleSheet.create({
   // Header
   header: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingHorizontal: Spacing.lg, paddingVertical: Spacing.sm,
-    borderBottomWidth: 1, borderBottomColor: Colors.border,
+    paddingHorizontal: Spacing.lg, paddingTop: Spacing.md, paddingBottom: Spacing.sm,
   },
   headerLeft:  { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
   headerIcon: {
-    width: 32, height: 32, borderRadius: Radius.md,
+    width: 36, height: 36, borderRadius: Radius.full,
     backgroundColor: Colors.goldMuted, borderWidth: 1, borderColor: Colors.goldDim,
     alignItems: 'center', justifyContent: 'center',
   },
-  headerTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.textPrimary },
-  headerSub:   { fontSize: FontSize.xs, color: Colors.textMuted },
-  clearBtn:    { padding: Spacing.xs },
+  headerTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.textPrimary, letterSpacing: -0.3 },
+  headerSub:   { fontSize: FontSize.xs, color: Colors.textMuted, marginTop: 2 },
+  clearBtn:    { width: 36, height: 36, borderRadius: Radius.full, backgroundColor: Colors.surfaceElevated, borderWidth: 1, borderColor: Colors.border, alignItems: 'center', justifyContent: 'center' },
 
   // Landing content
   landingContent: { padding: Spacing.lg, gap: Spacing.xl, paddingBottom: Spacing.xxl + 24 },
 
-  multimodalRow: { flexDirection: 'row', gap: Spacing.md, alignItems: 'center', marginTop: Spacing.lg },
-  micBox: { flex: 1, backgroundColor: Colors.gold, borderRadius: Radius.full, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: Spacing.sm, paddingVertical: Spacing.md },
-  micBoxText: { color: Colors.surfaceElevated, fontSize: FontSize.md, fontWeight: FontWeight.bold },
-  imgBox: { width: 54, height: 54, borderRadius: Radius.full, backgroundColor: Colors.surfaceElevated, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: Colors.border },
+  multimodalRow: { flexDirection: 'row', gap: Spacing.md, marginTop: Spacing.sm },
+  affordanceBtn:      { flex: 1, backgroundColor: Colors.surfaceElevated, borderRadius: Radius.xl, borderWidth: 1, borderColor: 'rgba(255,255,255,0.05)', padding: Spacing.md, alignItems: 'center', gap: Spacing.xs },
+  affordanceBtnIcon:  { width: 48, height: 48, borderRadius: Radius.full, alignItems: 'center', justifyContent: 'center', borderWidth: 1, marginBottom: 4 },
+  affordanceBtnLabel: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.textPrimary, textAlign: 'center' },
+  affordanceBtnSub:   { fontSize: FontSize.xs, color: Colors.textMuted },
 
 
   // Input affordances (voice + image)
@@ -657,20 +682,20 @@ const s = StyleSheet.create({
   sectionLabel: { fontSize: FontSize.xs, fontWeight: FontWeight.semibold, color: Colors.textMuted, letterSpacing: 1.5 },
 
   // Action cards (primary)
-  actionCards: { gap: Spacing.sm },
-  actionCard: { marginBottom: 12, 
-    flexDirection: 'row', alignItems: 'center', gap: Spacing.sm,
-    backgroundColor: Colors.surfaceElevated, borderRadius: Radius.lg,
-    borderWidth: 1, borderColor: Colors.border, padding: Spacing.md,
+  actionCards: { gap: Spacing.md },
+  actionCard: { 
+    flexDirection: 'row', alignItems: 'center', gap: Spacing.md,
+    backgroundColor: Colors.surfaceElevated, borderRadius: Radius.xl,
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.05)', padding: Spacing.lg,
   },
   actionCardLocked: { opacity: 0.5 },
   actionIcon: { 
-    width: 32, height: 32, borderRadius: Radius.full,
+    width: 44, height: 44, borderRadius: Radius.full,
     backgroundColor: Colors.goldMuted, borderWidth: 1, borderColor: Colors.goldDim,
     alignItems: 'center', justifyContent: 'center',
   },
   actionIconLocked: { backgroundColor: Colors.surface, borderColor: Colors.border },
-  actionLabel: { flex: 1, fontSize: FontSize.sm, fontWeight: FontWeight.medium, color: Colors.textPrimary },
+  actionLabel: { flex: 1, fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.textPrimary },
   actionLabelLocked: { color: Colors.textMuted },
 
   // Chat content
@@ -708,8 +733,8 @@ const s = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center',
   },
   input: {
-    flex: 1, backgroundColor: Colors.surfaceElevated, borderRadius: Radius.lg,
-    borderWidth: 1, borderColor: Colors.border,
+    flex: 1, backgroundColor: Colors.surfaceElevated, borderRadius: Radius.xl,
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.05)',
     paddingHorizontal: Spacing.md, paddingVertical: Platform.OS === 'ios' ? Spacing.sm : Spacing.xs,
     color: Colors.textPrimary, fontSize: FontSize.sm,
     maxHeight: 120,

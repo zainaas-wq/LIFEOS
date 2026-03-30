@@ -7,6 +7,7 @@ import { getFocusSessions } from './focusService';
 import { getDailyPlan } from './planService';
 import { getDistractionLogs } from './distractionService';
 import { getReflections } from './reflectionService';
+import { getTrialStartedAt } from './usageService';
 import type {
   UserProfile,
   Goal,
@@ -29,6 +30,8 @@ export interface CloudData {
   controlPlan: ControlDailyPlan | null;
   distractionLogs: DistractionLog[];
   reflections: DailyReflection[];
+  /** Server-authoritative trial start date from ai_user_tier.trial_started_at */
+  trialStartDate: string | null;
 }
 
 /**
@@ -54,6 +57,7 @@ export async function hydrateFromCloud(
     controlPlan,
     distractionLogs,
     reflections,
+    trialStartDate,
   ] = await Promise.all([
     getProfile(userId),
     getGoals(userId),
@@ -64,6 +68,7 @@ export async function hydrateFromCloud(
     getDailyPlan(userId, todayDate),
     getDistractionLogs(userId, since),
     getReflections(userId),
+    getTrialStartedAt(userId),
   ]);
 
   return {
@@ -76,5 +81,6 @@ export async function hydrateFromCloud(
     controlPlan,
     distractionLogs,
     reflections,
+    trialStartDate,
   };
 }

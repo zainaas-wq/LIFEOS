@@ -1,6 +1,58 @@
-import type { ChatMessage, Goal, SkillPlan, Rule, ScheduleEvent, Plan, FocusSession } from '../types';
+import type { ChatMessage, Goal, SkillPlan, Rule, ScheduleEvent, Plan, FocusSession, RecoveryMode } from '../types';
+import type { PredictedRiskType } from './predictiveEngine';
 
 // ─── Context passed to every AI call ─────────────────────────────────────────
+
+/**
+ * Review-derived coaching signals injected into every AI context call.
+ * Populated by useAIContext() from computeAdaptationHints().
+ * All fields are optional so callers without review history still type-check.
+ */
+export interface ReviewSignalSummary {
+  /** systemTakeaway values from the last 1–3 reviews (most recent first). */
+  recentPatterns: string[];
+  /** Human-readable rationale for any active planning adaptations. */
+  adaptationRationale: string;
+  /** Recovery modes ranked by past effectiveness for this user. */
+  preferredRecoveryModes: RecoveryMode[];
+  /** Total number of saved daily reviews in local store. */
+  reviewCount: number;
+}
+
+/**
+ * A single predicted drift risk — shape subset of DriftPrediction,
+ * safe to embed in AIContext without importing the full engine type.
+ */
+export interface PredictedRiskEntry {
+  riskType:   PredictedRiskType;
+  confidence: 'low' | 'medium' | 'high';
+  headline:   string;
+  rationale:  string;
+}
+
+/**
+ * Plan-intensity explanation — why the system made this plan lighter/heavier.
+ * Deterministic and traceable to specific review signals.
+ */
+export interface PlanExplanationEntry {
+  decision:   string;
+  reason:     string;
+  signal:     string;
+  confidence: 'low' | 'medium' | 'high';
+}
+
+/**
+ * Predictive + explanation signals for the coach.
+ * Added in Batch 8 — present when controlPlan exists for today.
+ */
+export interface PredictionSignalSummary {
+  /** Up to 2 predicted drift risks, sorted high→low confidence. */
+  topRisks: PredictedRiskEntry[];
+  /** Plain-text prediction summary ready for coach system-prompt injection. */
+  predictionContext: string;
+  /** Why today's plan intensity was chosen. */
+  planExplanation: PlanExplanationEntry;
+}
 
 export interface AIContext {
   goals: Goal[];
@@ -14,6 +66,10 @@ export interface AIContext {
   focusSessions?: FocusSession[];
   currentPlan?: Plan;
   todayDate: string; // YYYY-MM-DD
+  /** Review-derived behavioral signals — present when the user has saved ≥1 review. */
+  reviewSignals?: ReviewSignalSummary;
+  /** Predictive + explanation signals — present when a plan exists for today. */
+  predictionSignals?: PredictionSignalSummary;
 }
 
 // ─── Abstract interface ───────────────────────────────────────────────────────

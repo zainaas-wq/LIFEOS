@@ -1,0 +1,29 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "CommonJS",
+    "moduleResolution": "node",
+    "strict": true,
+    "esModuleInterop": true,
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["src/*"]
+    },
+    "skipLibCheck": true,
+    "noEmit": true
+  },
+  "include": [
+    "__tests__/**/*.ts",
+    "src/ai/**/*.ts",
+    "src/types/**/*.ts",
+    "src/lib/utils.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "app",
+    "src/components",
+    "src/store",
+    "src/services",
+    "src/hooks"
+  ]
+}

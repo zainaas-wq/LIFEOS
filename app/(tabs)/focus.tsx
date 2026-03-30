@@ -1,531 +1,448 @@
-import React, { useState, useEffect, useRef } from 'react';
+/**
+ * focus.tsx — Immersive Focus Screen
+ *
+ * Two states:
+ *   Active session  — full-screen timer; task context; Done + Complete action
+ *   No session      — today's session history; CTA back to plan
+ */
+
+import React, { useEffect, useRef, useState } from 'react';
 import {
   View,
   Text,
+  TouchableOpacity,
   ScrollView,
   StyleSheet,
-  TouchableOpacity,
-  TextInput,
-  Modal,
-  KeyboardAvoidingView,
-  Platform,
+  Animated,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import { useTranslation } from 'react-i18next';
+import { useDirection } from '../../src/hooks/useDirection';
 import { useAppStore } from '../../src/store/useAppStore';
-import { Colors, FontSize, FontWeight, Spacing, Radius } from '../../src/constants/theme';
-import { getTodayDate, generateId } from '../../src/lib/utils';
+import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '../../src/constants/theme';
+import { getTodayDate } from '../../src/lib/utils';
 
-const DURATIONS = [25, 50, 90] as const;
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function formatElapsed(totalSeconds: number): string {
-  const m = Math.floor(totalSeconds / 60);
-  const s = totalSeconds % 60;
+function fmtSecs(secs: number): string {
+  const m = Math.floor(secs / 60);
+  const s = secs % 60;
   return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
 }
 
+function fmtMins(mins: number): string {
+  if (mins < 60) return `${mins}m`;
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  return m > 0 ? `${h}h ${m}m` : `${h}h`;
+}
+
+// ─── Screen ───────────────────────────────────────────────────────────────────
+
 export default function FocusTab() {
-  const goals           = useAppStore((s) => s.goals);
-  const activeFocus     = useAppStore((s) => s.activeFocus);
-  const focusSessions   = useAppStore((s) => s.focusSessions);
-  const startFocus      = useAppStore((s) => s.startFocus);
-  const endFocus        = useAppStore((s) => s.endFocus);
-  const logDistraction  = useAppStore((s) => s.logDistraction);
+  const { t } = useTranslation();
+  const dir = useDirection();
 
-  const [selectedGoalId, setSelectedGoalId]     = useState<string | null>(null);
-  const [selectedDuration, setSelectedDuration] = useState<number>(50);
-  const [showEndModal, setShowEndModal]         = useState(false);
-  const [sessionNotes, setSessionNotes]         = useState('');
-  const [showDistrInput, setShowDistrInput]     = useState(false);
-  const [distractionText, setDistractionText]   = useState('');
-  const [elapsedSeconds, setElapsedSeconds]     = useState(0);
+  const activeFocus           = useAppStore((s) => s.activeFocus);
+  const focusSessions         = useAppStore((s) => s.focusSessions);
+  const goals                 = useAppStore((s) => s.goals);
+  const controlPlan           = useAppStore((s) => s.controlPlan);
+  const endFocus              = useAppStore((s) => s.endFocus);
+  const toggleControlPlanItem = useAppStore((s) => s.toggleControlPlanItem);
 
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  // Drive elapsed-time counter from activeFocus.startedAt
+  // ── Elapsed timer ─────────────────────────────────────────────────────────
+  const [elapsedSecs, setElapsedSecs] = useState(0);
   useEffect(() => {
-    if (activeFocus) {
-      const startMs = new Date(activeFocus.startedAt).getTime();
-      const tick = () => setElapsedSeconds(Math.floor((Date.now() - startMs) / 1000));
-      tick();
-      timerRef.current = setInterval(tick, 1000);
-    } else {
-      setElapsedSeconds(0);
-      if (timerRef.current) {
-        clearInterval(timerRef.current);
-        timerRef.current = null;
-      }
-    }
-    return () => {
-      if (timerRef.current) clearInterval(timerRef.current);
-    };
-  }, [activeFocus]);
+    if (!activeFocus) { setElapsedSecs(0); return; }
+    const update = () =>
+      setElapsedSecs(
+        Math.floor((Date.now() - new Date(activeFocus.startedAt).getTime()) / 1000),
+      );
+    update();
+    const id = setInterval(update, 1000);
+    return () => clearInterval(id);
+  }, [activeFocus?.startedAt]);
 
+  // Breathing pulse while active
+  const pulseAnim = useRef(new Animated.Value(1)).current;
+  useEffect(() => {
+    if (!activeFocus) { pulseAnim.setValue(1); return; }
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulseAnim, { toValue: 1.03, duration: 1800, useNativeDriver: true }),
+        Animated.timing(pulseAnim, { toValue: 1,    duration: 1800, useNativeDriver: true }),
+      ]),
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [activeFocus?.id]);
+
+  // ── Today's session history ───────────────────────────────────────────────
   const today = getTodayDate();
-  const todaySessions = focusSessions.filter((s) => s.start.startsWith(today));
-  const totalTodayMins = todaySessions.reduce((sum, s) => sum + (s.durationMinutes ?? 0), 0);
+  const todaySessions = focusSessions.filter(
+    (session) => session.start.startsWith(today) && !!session.end,
+  );
+  const todayTotalMins = todaySessions.reduce(
+    (sum, session) => sum + (session.durationMinutes ?? 0),
+    0,
+  );
 
-  const handleStart = () => {
-    const goal = goals.find((g) => g.id === selectedGoalId);
-    startFocus({
-      id: generateId(),
-      goalId: selectedGoalId ?? undefined,
-      goalTitle: goal?.title ?? 'Focus Session',
-      durationMinutes: selectedDuration,
-      startedAt: new Date().toISOString(),
-    });
+  // ── End handler — marks matching plan item complete ───────────────────────
+  const handleEnd = () => {
+    if (!activeFocus) return;
+    endFocus();
+    const planItems = controlPlan?.plan.items ?? [];
+    const match = planItems.find(
+      (i) =>
+        i.goalId === activeFocus.goalId &&
+        !i.completed &&
+        (i.type === 'goal' || i.type === 'skill'),
+    );
+    if (match) toggleControlPlanItem(match.id);
   };
 
-  const handleEndConfirm = () => {
-    endFocus(sessionNotes.trim() || undefined);
-    setSessionNotes('');
-    setShowEndModal(false);
-  };
+  // ── Active session view ───────────────────────────────────────────────────
+  if (activeFocus) {
+    const totalSecs = activeFocus.durationMinutes * 60;
+    const pct = Math.min(100, Math.round((elapsedSecs / Math.max(1, totalSecs)) * 100));
+    const goal = goals.find((g) => g.id === activeFocus.goalId);
 
-  const handleLogDistraction = () => {
-    logDistraction(distractionText.trim() || undefined);
-    setDistractionText('');
-    setShowDistrInput(false);
-  };
+    return (
+      <SafeAreaView style={s.safe} edges={['top']}>
+        <View style={s.activeRoot}>
 
+          {/* Back button */}
+          <TouchableOpacity
+            onPress={() => router.back()}
+            style={s.backBtn}
+            activeOpacity={0.7}
+          >
+            <Ionicons name="chevron-down" size={22} color={Colors.textMuted} />
+          </TouchableOpacity>
+
+          {/* Live badge */}
+          <View style={[s.liveBadge, { flexDirection: dir.rowDir }]}>
+            <View style={s.liveDot} />
+            <Text style={s.liveBadgeText}>{t('focus.active_badge')}</Text>
+          </View>
+
+          {/* Goal context */}
+          {goal && (
+            <Text style={s.goalLabel}>{goal.title}</Text>
+          )}
+
+          {/* Task / session title */}
+          <Text style={s.taskName} numberOfLines={3}>
+            {activeFocus.goalTitle}
+          </Text>
+
+          {/* Animated timer */}
+          <Animated.View style={[s.timerBlock, { transform: [{ scale: pulseAnim }] }]}>
+            <Text style={s.timer}>{fmtSecs(elapsedSecs)}</Text>
+            <Text style={s.timerSub}>
+              {t('focus.active_of')} {fmtMins(activeFocus.durationMinutes)}
+            </Text>
+          </Animated.View>
+
+          {/* Progress bar */}
+          <View style={s.progressTrack}>
+            <View style={[s.progressFill, { width: `${pct}%` as any }]} />
+          </View>
+          <Text style={s.progressPct}>{pct}%</Text>
+
+          {/* Done CTA */}
+          <TouchableOpacity
+            onPress={handleEnd}
+            style={[s.doneBtn, { flexDirection: dir.rowDir }]}
+            activeOpacity={0.88}
+          >
+            <Ionicons name="checkmark" size={20} color={Colors.textInverse} />
+            <Text style={s.doneBtnText}>{t('focus.active_done_btn')}</Text>
+          </TouchableOpacity>
+
+          {/* Back to plan link */}
+          <TouchableOpacity
+            onPress={() => router.replace('/(tabs)/home' as any)}
+            style={s.goHomeLink}
+            activeOpacity={0.6}
+          >
+            <Text style={s.goHomeLinkText}>{t('focus.active_back')}</Text>
+          </TouchableOpacity>
+
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  // ── No active session — history view ─────────────────────────────────────
   return (
-    <SafeAreaView style={styles.root} edges={['top']}>
+    <SafeAreaView style={s.safe} edges={['top']}>
       <ScrollView
-        contentContainerStyle={styles.content}
-        keyboardShouldPersistTaps="handled"
+        contentContainerStyle={s.historyContent}
         showsVerticalScrollIndicator={false}
       >
-        {/* ── Header ───────────────────────────────────────────────────────── */}
-        <Text style={styles.title}>Focus</Text>
+        {/* Header */}
+        <View style={s.header}>
+          <Text style={s.headerTitle}>{t('focus.sessions_title')}</Text>
+          {todayTotalMins > 0 && (
+            <Text style={s.headerSub}>{fmtMins(todayTotalMins)} focused today</Text>
+          )}
+        </View>
 
-        {activeFocus ? (
-          /* ── Active session ─────────────────────────────────────────────── */
-          <View style={styles.activeCard}>
-            <View style={styles.activeTopRow}>
-              <View style={styles.activeBadge}>
-                <Text style={styles.activeBadgeText}>ACTIVE</Text>
-              </View>
-              <Text style={styles.elapsedTime}>{formatElapsed(elapsedSeconds)}</Text>
+        {/* Daily summary card */}
+        {todayTotalMins > 0 && (
+          <View style={[s.summaryCard, { flexDirection: dir.rowDir }]}>
+            <View style={s.summaryIcon}>
+              <Ionicons name="flame" size={20} color={Colors.gold} />
             </View>
-
-            <Text style={styles.activeGoalTitle}>{activeFocus.goalTitle}</Text>
-            <Text style={styles.activeSubtitle}>
-              {activeFocus.durationMinutes} min session · started{' '}
-              {new Date(activeFocus.startedAt).toLocaleTimeString([], {
-                hour: '2-digit',
-                minute: '2-digit',
-              })}
-            </Text>
-
-            {/* Distraction logger */}
-            {showDistrInput ? (
-              <View style={styles.distrRow}>
-                <TextInput
-                  style={styles.distrInput}
-                  placeholder="What distracted you?"
-                  placeholderTextColor={Colors.textMuted}
-                  value={distractionText}
-                  onChangeText={setDistractionText}
-                  returnKeyType="done"
-                  onSubmitEditing={handleLogDistraction}
-                  autoFocus
-                />
-                <TouchableOpacity
-                  onPress={handleLogDistraction}
-                  style={styles.distrConfirm}
-                  activeOpacity={0.8}
-                >
-                  <Ionicons name="checkmark" size={18} color={Colors.textInverse} />
-                </TouchableOpacity>
-              </View>
-            ) : (
-              <TouchableOpacity
-                style={styles.distrBtn}
-                onPress={() => setShowDistrInput(true)}
-                activeOpacity={0.7}
-              >
-                <Ionicons name="warning-outline" size={15} color={Colors.textSecondary} />
-                <Text style={styles.distrBtnText}>Log distraction</Text>
-              </TouchableOpacity>
-            )}
-
-            <TouchableOpacity
-              style={styles.endBtn}
-              onPress={() => setShowEndModal(true)}
-              activeOpacity={0.8}
-            >
-              <Text style={styles.endBtnText}>End Session</Text>
-            </TouchableOpacity>
-          </View>
-        ) : (
-          /* ── Start session ───────────────────────────────────────────────── */
-          <>
-            {/* Goal selector */}
-            <Text style={styles.sectionLabel}>Focus on</Text>
-            {goals.length === 0 ? (
-              <Text style={styles.emptyNote}>
-                Add life tracks in the Plan tab to link focus sessions.
+            <View style={s.summaryBody}>
+              <Text style={s.summaryVal}>{fmtMins(todayTotalMins)}</Text>
+              <Text style={s.summarySub}>
+                {t(
+                  todaySessions.length === 1
+                    ? 'focus.sessions_today'
+                    : 'focus.sessions_today_plural',
+                  { count: todaySessions.length },
+                )}
               </Text>
-            ) : (
-              <View style={styles.chipGrid}>
-                {goals.map((g) => {
-                  const active = selectedGoalId === g.id;
-                  return (
-                    <TouchableOpacity
-                      key={g.id}
-                      style={[styles.goalChip, active && styles.goalChipActive]}
-                      onPress={() => setSelectedGoalId(active ? null : g.id)}
-                      activeOpacity={0.7}
-                    >
-                      <Text style={[styles.goalChipText, active && styles.goalChipTextActive]}>
-                        {g.title}
-                      </Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
-            )}
-
-            {/* Duration selector */}
-            <Text style={styles.sectionLabel}>Duration</Text>
-            <View style={styles.durationRow}>
-              {DURATIONS.map((d) => {
-                const active = selectedDuration === d;
-                return (
-                  <TouchableOpacity
-                    key={d}
-                    style={[styles.durationChip, active && styles.durationChipActive]}
-                    onPress={() => setSelectedDuration(d)}
-                    activeOpacity={0.7}
-                  >
-                    <Text style={[styles.durationText, active && styles.durationTextActive]}>
-                      {d} min
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
             </View>
-
-            {/* Start button */}
-            <TouchableOpacity
-              style={styles.startBtn}
-              onPress={handleStart}
-              activeOpacity={0.8}
-            >
-              <Ionicons name="flash" size={20} color={Colors.textInverse} />
-              <Text style={styles.startBtnText}>Start Focus</Text>
-            </TouchableOpacity>
-          </>
+          </View>
         )}
 
-        {/* ── Today's sessions ─────────────────────────────────────────────── */}
-        {todaySessions.length > 0 && (
-          <View style={styles.historySection}>
-            <View style={styles.historyHeader}>
-              <Text style={styles.sectionLabel}>Today</Text>
-              <Text style={styles.totalLabel}>{totalTodayMins} min total</Text>
-            </View>
-            {todaySessions.map((session) => {
-              const goalTitle = goals.find((g) => g.id === session.goalId)?.title;
+        {/* Session list */}
+        {todaySessions.length > 0 ? (
+          <View style={s.sessionList}>
+            {[...todaySessions].reverse().map((session) => {
+              const goal = goals.find((g) => g.id === session.goalId);
+              const startTime = new Date(session.start).toLocaleTimeString([], {
+                hour: '2-digit',
+                minute: '2-digit',
+              });
               return (
-                <View key={session.id} style={styles.sessionRow}>
-                  <View style={styles.sessionDot} />
-                  <View style={styles.sessionInfo}>
-                    <Text style={styles.sessionGoal}>{goalTitle ?? 'Focus Session'}</Text>
-                    <Text style={styles.sessionMeta}>
-                      {session.durationMinutes ?? '—'} min
-                      {session.notes ? ` · ${session.notes}` : ''}
+                <View key={session.id} style={[s.sessionRow, { flexDirection: dir.rowDir }]}>
+                  <View style={s.sessionAccent} />
+                  <View style={s.sessionInfo}>
+                    <Text style={s.sessionGoal} numberOfLines={1}>
+                      {goal?.title ?? t('focus.default_title')}
+                    </Text>
+                    <Text style={s.sessionMeta}>
+                      {startTime} · {fmtMins(session.durationMinutes ?? 0)}
                     </Text>
                   </View>
-                  <Ionicons name="checkmark-circle" size={16} color={Colors.success} />
+                  <Ionicons name="checkmark-circle" size={18} color={Colors.success} />
                 </View>
               );
             })}
           </View>
-        )}
-      </ScrollView>
-
-      {/* ── End session modal ─────────────────────────────────────────────── */}
-      <Modal
-        visible={showEndModal}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setShowEndModal(false)}
-      >
-        <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-          style={styles.overlay}
-        >
-          <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>End Session</Text>
-            <TextInput
-              style={styles.notesInput}
-              placeholder="Session notes (optional)"
-              placeholderTextColor={Colors.textMuted}
-              value={sessionNotes}
-              onChangeText={setSessionNotes}
-              multiline
-              numberOfLines={3}
-              textAlignVertical="top"
-            />
-            <View style={styles.modalActions}>
-              <TouchableOpacity
-                onPress={() => setShowEndModal(false)}
-                style={styles.modalCancel}
-                activeOpacity={0.7}
-              >
-                <Text style={styles.modalCancelText}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                onPress={handleEndConfirm}
-                style={styles.modalConfirm}
-                activeOpacity={0.8}
-              >
-                <Text style={styles.modalConfirmText}>End Session</Text>
-              </TouchableOpacity>
+        ) : (
+          <View style={s.emptyWrap}>
+            <View style={s.emptyIcon}>
+              <Ionicons name="timer-outline" size={28} color={Colors.textMuted} />
             </View>
+            <Text style={s.emptyTitle}>{t('focus.no_history')}</Text>
+            <Text style={s.emptySub}>{t('focus.empty_sub')}</Text>
           </View>
-        </KeyboardAvoidingView>
-      </Modal>
+        )}
+
+        {/* CTA back to plan */}
+        <TouchableOpacity
+          onPress={() => router.replace('/(tabs)/home' as any)}
+          style={[s.ctaBtn, { flexDirection: dir.rowDir }]}
+          activeOpacity={0.85}
+        >
+          <Text style={s.ctaBtnText}>{t('focus.cta')}</Text>
+          <Ionicons name="arrow-forward" size={16} color={Colors.textInverse} />
+        </TouchableOpacity>
+
+      </ScrollView>
     </SafeAreaView>
   );
 }
 
-const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: Colors.background },
-  content: {
-    padding: Spacing.lg,
-    paddingBottom: Spacing.xxl,
+// ─── Styles ───────────────────────────────────────────────────────────────────
+
+const s = StyleSheet.create({
+  safe: { flex: 1, backgroundColor: Colors.background },
+
+  // ── Active session layout ──────────────────────────────────────────────────
+  activeRoot: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: Spacing.xl,
     gap: Spacing.md,
   },
-
-  // ── Header
-  title: {
+  backBtn: {
+    position: 'absolute',
+    top: Spacing.md,
+    left: Spacing.lg,
+    padding: Spacing.xs,
+  },
+  liveBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.xs,
+    backgroundColor: Colors.successMuted,
+    borderRadius: Radius.full,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.xs,
+    borderWidth: 1,
+    borderColor: Colors.success + '44',
+    marginBottom: Spacing.sm,
+  },
+  liveDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: Colors.success,
+  },
+  liveBadgeText: {
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.bold,
+    color: Colors.success,
+    letterSpacing: 2,
+  },
+  goalLabel: {
+    fontSize: FontSize.sm,
+    color: Colors.textMuted,
+    textTransform: 'uppercase',
+    letterSpacing: 1.5,
+    textAlign: 'center',
+  },
+  taskName: {
     fontSize: FontSize.xxl,
     fontWeight: FontWeight.bold,
     color: Colors.textPrimary,
+    textAlign: 'center',
+    letterSpacing: -0.5,
+    lineHeight: 32,
     marginBottom: Spacing.sm,
   },
-
-  // ── Section labels
-  sectionLabel: {
-    fontSize: FontSize.sm,
-    fontWeight: FontWeight.semibold,
-    color: Colors.textSecondary,
-    textTransform: 'uppercase',
-    letterSpacing: 0.8,
-    marginTop: Spacing.sm,
-    marginBottom: Spacing.xs,
+  timerBlock: {
+    alignItems: 'center',
+    gap: 4,
+    marginBottom: Spacing.sm,
   },
-  emptyNote: {
+  timer: {
+    fontSize: FontSize.display,
+    fontWeight: FontWeight.bold,
+    color: Colors.gold,
+    letterSpacing: -3,
+    ...Shadow.gold,
+  },
+  timerSub: {
     fontSize: FontSize.sm,
     color: Colors.textMuted,
-    marginBottom: Spacing.sm,
   },
-
-  // ── Goal chips
-  chipGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: Spacing.sm,
-  },
-  goalChip: {
-    paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.xs + 2,
+  progressTrack: {
+    width: '100%',
+    height: 4,
+    backgroundColor: Colors.surfaceHigh,
     borderRadius: Radius.full,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    backgroundColor: Colors.surface,
+    overflow: 'hidden',
   },
-  goalChipActive: {
-    borderColor: Colors.gold,
-    backgroundColor: Colors.goldMuted,
-  },
-  goalChipText: {
-    fontSize: FontSize.sm,
-    color: Colors.textSecondary,
-    fontWeight: FontWeight.medium,
-  },
-  goalChipTextActive: {
-    color: Colors.gold,
-  },
-
-  // ── Duration chips
-  durationRow: {
-    flexDirection: 'row',
-    gap: Spacing.sm,
-  },
-  durationChip: {
-    flex: 1,
-    paddingVertical: Spacing.sm + 2,
-    borderRadius: Radius.md,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    backgroundColor: Colors.surface,
-    alignItems: 'center',
-  },
-  durationChipActive: {
-    borderColor: Colors.gold,
-    backgroundColor: Colors.goldMuted,
-  },
-  durationText: {
-    fontSize: FontSize.sm,
-    fontWeight: FontWeight.medium,
-    color: Colors.textSecondary,
-  },
-  durationTextActive: {
-    color: Colors.gold,
-  },
-
-  // ── Start button
-  startBtn: {
+  progressFill: {
+    height: '100%',
     backgroundColor: Colors.gold,
-    borderRadius: Radius.md,
+    borderRadius: Radius.full,
+  },
+  progressPct: {
+    fontSize: FontSize.xs,
+    color: Colors.textMuted,
+    alignSelf: 'flex-end',
+    marginTop: -Spacing.xs,
+  },
+  doneBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: Spacing.md,
     gap: Spacing.sm,
-    marginTop: Spacing.sm,
+    backgroundColor: Colors.gold,
+    borderRadius: Radius.lg,
+    paddingVertical: 18,
+    width: '100%',
+    marginTop: Spacing.lg,
+    ...Shadow.gold,
   },
-  startBtnText: {
+  doneBtnText: {
     fontSize: FontSize.lg,
     fontWeight: FontWeight.bold,
     color: Colors.textInverse,
   },
+  goHomeLink: {
+    paddingVertical: Spacing.sm,
+  },
+  goHomeLinkText: {
+    fontSize: FontSize.sm,
+    color: Colors.textMuted,
+    textAlign: 'center',
+  },
 
-  // ── Active session card
-  activeCard: {
+  // ── History / no-session layout ────────────────────────────────────────────
+  historyContent: {
+    padding: Spacing.lg,
+    paddingBottom: Spacing.xxl,
+    gap: Spacing.xl,
+  },
+  header:      { gap: 4, paddingTop: Spacing.md },
+  headerTitle: { fontSize: FontSize.xxl, fontWeight: FontWeight.bold, color: Colors.textPrimary, letterSpacing: -0.5 },
+  headerSub:   { fontSize: FontSize.xs, color: Colors.textMuted, fontWeight: FontWeight.medium },
+
+  summaryCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.md,
     backgroundColor: Colors.surfaceElevated,
-    borderRadius: Radius.lg,
+    borderRadius: Radius.xl,
     borderWidth: 1,
     borderColor: Colors.goldDim,
     padding: Spacing.lg,
-    gap: Spacing.md,
   },
-  activeTopRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  activeBadge: {
-    paddingHorizontal: Spacing.sm,
-    paddingVertical: 3,
-    backgroundColor: Colors.goldMuted,
+  summaryIcon: {
+    width: 44,
+    height: 44,
     borderRadius: Radius.full,
+    backgroundColor: Colors.goldMuted,
+    alignItems: 'center',
+    justifyContent: 'center',
     borderWidth: 1,
-    borderColor: Colors.gold,
+    borderColor: Colors.goldDim,
   },
-  activeBadgeText: {
-    fontSize: FontSize.xs,
-    fontWeight: FontWeight.bold,
-    color: Colors.gold,
-    letterSpacing: 1,
-  },
-  elapsedTime: {
+  summaryBody: { gap: 2 },
+  summaryVal: {
     fontSize: FontSize.xxl,
     fontWeight: FontWeight.bold,
     color: Colors.gold,
     letterSpacing: -0.5,
-    fontVariant: ['tabular-nums'],
   },
-  activeGoalTitle: {
-    fontSize: FontSize.xl,
-    fontWeight: FontWeight.bold,
-    color: Colors.textPrimary,
-  },
-  activeSubtitle: {
-    fontSize: FontSize.sm,
-    color: Colors.textSecondary,
-    marginTop: -Spacing.sm,
-  },
-
-  // ── Distraction logger
-  distrBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.xs,
-    paddingVertical: Spacing.xs,
-    alignSelf: 'flex-start',
-  },
-  distrBtnText: {
+  summarySub: {
     fontSize: FontSize.sm,
     color: Colors.textSecondary,
   },
-  distrRow: {
-    flexDirection: 'row',
-    gap: Spacing.sm,
-    alignItems: 'center',
-  },
-  distrInput: {
-    flex: 1,
-    backgroundColor: Colors.surfaceHigh,
-    borderRadius: Radius.sm,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    paddingHorizontal: Spacing.sm,
-    paddingVertical: Spacing.xs + 2,
-    color: Colors.textPrimary,
-    fontSize: FontSize.sm,
-  },
-  distrConfirm: {
-    backgroundColor: Colors.gold,
-    borderRadius: Radius.sm,
-    padding: Spacing.sm,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
 
-  // ── End button
-  endBtn: {
-    backgroundColor: Colors.surfaceHigh,
-    borderRadius: Radius.md,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    paddingVertical: Spacing.md,
-    alignItems: 'center',
-    marginTop: Spacing.xs,
-  },
-  endBtnText: {
-    fontSize: FontSize.md,
-    fontWeight: FontWeight.semibold,
-    color: Colors.textSecondary,
-  },
-
-  // ── Today's sessions
-  historySection: {
-    marginTop: Spacing.md,
-    gap: Spacing.sm,
-  },
-  historyHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  totalLabel: {
-    fontSize: FontSize.sm,
-    color: Colors.textMuted,
-  },
+  sessionList: { gap: Spacing.xs },
   sessionRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: Spacing.sm,
-    paddingVertical: Spacing.sm,
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.border,
+    gap: Spacing.md,
+    backgroundColor: Colors.surfaceElevated,
+    borderRadius: Radius.md,
+    padding: Spacing.md,
+    borderWidth: 1,
+    borderColor: Colors.border,
   },
-  sessionDot: {
-    width: 8,
-    height: 8,
-    borderRadius: Radius.full,
+  sessionAccent: {
+    width: 3,
+    alignSelf: 'stretch',
+    minHeight: 32,
     backgroundColor: Colors.success,
+    borderRadius: Radius.full,
   },
-  sessionInfo: {
-    flex: 1,
-    gap: 2,
-  },
+  sessionInfo: { flex: 1, gap: 2 },
   sessionGoal: {
-    fontSize: FontSize.sm,
+    fontSize: FontSize.md,
     fontWeight: FontWeight.medium,
     color: Colors.textPrimary,
   },
@@ -534,60 +451,45 @@ const styles = StyleSheet.create({
     color: Colors.textMuted,
   },
 
-  // ── End session modal
-  overlay: {
-    flex: 1,
-    backgroundColor: Colors.overlay,
-    justifyContent: 'flex-end',
-  },
-  modalCard: {
-    backgroundColor: Colors.surfaceElevated,
-    borderTopLeftRadius: Radius.xl,
-    borderTopRightRadius: Radius.xl,
-    padding: Spacing.lg,
+  emptyWrap: {
+    alignItems: 'center',
     gap: Spacing.md,
-    paddingBottom: Spacing.xxl,
+    paddingVertical: Spacing.xxl,
   },
-  modalTitle: {
+  emptyIcon: {
+    width: 60,
+    height: 60,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.surfaceElevated,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  emptyTitle: {
     fontSize: FontSize.lg,
-    fontWeight: FontWeight.bold,
-    color: Colors.textPrimary,
-  },
-  notesInput: {
-    backgroundColor: Colors.surfaceHigh,
-    borderRadius: Radius.md,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    padding: Spacing.md,
-    color: Colors.textPrimary,
-    fontSize: FontSize.sm,
-    minHeight: 80,
-  },
-  modalActions: {
-    flexDirection: 'row',
-    gap: Spacing.sm,
-  },
-  modalCancel: {
-    flex: 1,
-    paddingVertical: Spacing.md,
-    borderRadius: Radius.md,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    alignItems: 'center',
-  },
-  modalCancelText: {
-    fontSize: FontSize.md,
+    fontWeight: FontWeight.semibold,
     color: Colors.textSecondary,
-    fontWeight: FontWeight.medium,
   },
-  modalConfirm: {
-    flex: 2,
-    paddingVertical: Spacing.md,
-    borderRadius: Radius.md,
-    backgroundColor: Colors.gold,
+  emptySub: {
+    fontSize: FontSize.sm,
+    color: Colors.textMuted,
+    textAlign: 'center',
+    lineHeight: 20,
+    maxWidth: 260,
+  },
+
+  ctaBtn: {
+    flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
+    gap: Spacing.sm,
+    backgroundColor: Colors.gold,
+    borderRadius: Radius.lg,
+    paddingVertical: 16,
+    ...Shadow.gold,
   },
-  modalConfirmText: {
+  ctaBtnText: {
     fontSize: FontSize.md,
     fontWeight: FontWeight.bold,
     color: Colors.textInverse,

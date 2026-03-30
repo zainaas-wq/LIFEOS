@@ -19,6 +19,8 @@ import type {
   Plan,
   PlanItem,
   PlanItemType,
+  EnergyStyle,
+  AdaptationHints,
 } from '../types';
 import {
   extractFreeTime,
@@ -79,11 +81,34 @@ interface SmartTarget {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-/** Energy level for a given start time (minutes from midnight). */
-export function getEnergyLevel(startMins: number): EnergyLevel {
-  if (startMins < 12 * 60) return 'high';   // 06:00–12:00
-  if (startMins < 17 * 60) return 'medium'; // 12:00–17:00
-  return 'low';                              // 17:00–22:00
+/**
+ * Energy level for a given start time, shifted by the user's energyStyle.
+ * Defaults to morning peak (legacy behavior) when energyStyle is absent.
+ */
+export function getEnergyLevel(startMins: number, energyStyle?: EnergyStyle): EnergyLevel {
+  switch (energyStyle) {
+    case 'afternoon':
+      if (startMins >= 12 * 60 && startMins < 17 * 60) return 'high';
+      if (startMins >= 9  * 60 && startMins < 12 * 60) return 'medium';
+      if (startMins >= 17 * 60 && startMins < 20 * 60) return 'medium';
+      return 'low';
+    case 'evening':
+      if (startMins >= 17 * 60 && startMins < 21 * 60) return 'high';
+      if (startMins >= 14 * 60 && startMins < 17 * 60) return 'medium';
+      if (startMins >= 21 * 60)                        return 'medium';
+      return 'low';
+    case 'night':
+      if (startMins >= 21 * 60)                        return 'high';
+      if (startMins >= 17 * 60)                        return 'medium';
+      if (startMins >= 12 * 60)                        return 'medium';
+      return 'low';
+    case 'morning':
+    case 'flexible':
+    default:
+      if (startMins < 12 * 60) return 'high';   // 06:00–12:00
+      if (startMins < 17 * 60) return 'medium'; // 12:00–17:00
+      return 'low';
+  }
 }
 
 /** Preferred energy for each goal category. */
@@ -111,20 +136,16 @@ export function breakDuration(energy: EnergyLevel): number {
   }
 }
 
-/** Urgency score (1–10) based on deadline proximity. */
+/** Urgency score (1–10) based on deadline proximity. No deadline → 4 (neutral). */
 export function urgencyScore(goal: Goal): number {
-  let score = 4; // default: no deadline
-  if (goal.deadline) {
-    const today = new Date();
-    const deadline = new Date(goal.deadline);
-    const daysLeft = Math.max(0, Math.floor((deadline.getTime() - today.getTime()) / 86400000));
-    if (daysLeft < 14) score = 10;
-    else if (daysLeft < 30) score = 7;
-    else if (daysLeft < 60) score = 5;
-    else score = 4;
-  }
-  // Assume slightly behind weekly target → +2
-  return Math.min(score + 2, 10);
+  if (!goal.deadline) return 4;
+  const today    = new Date();
+  const deadline = new Date(goal.deadline);
+  const daysLeft = Math.max(0, Math.floor((deadline.getTime() - today.getTime()) / 86400000));
+  if (daysLeft < 14) return 10;
+  if (daysLeft < 30) return 7;
+  if (daysLeft < 60) return 5;
+  return 4;
 }
 
 /** Importance score (1–9). Priority 1 → importance 9. */
@@ -226,8 +247,11 @@ export function generateSmartDailyPlan(
   skillPlans: SkillPlan[],
   rules: Rule[],
   date: string, // YYYY-MM-DD
-  fixedStart?: number, // minutes from midnight — planning window start
-  fixedEnd?: number,   // minutes from midnight — planning window end
+  fixedStart?: number,                     // minutes from midnight — planning window start
+  fixedEnd?: number,                       // minutes from midnight — planning window end
+  energyStyle?: EnergyStyle,              // user's peak energy preference
+  additionalBusyIntervals?: TimeInterval[], // constraint blocks already locked; excluded from free time
+  hints?: AdaptationHints,               // review-derived adaptation hints
 ): Plan {
   if (!goals.length) {
     return {
@@ -241,11 +265,15 @@ export function generateSmartDailyPlan(
   }
 
   const dow = new Date(date).getDay();
-  const freeSlots = clipSlots(
+  const rawFreeSlots = clipSlots(
     extractFreeTime(scheduleEvents, rules, dow, fixedStart ?? 8 * 60),
     fixedStart,
     fixedEnd,
   );
+  // Subtract locked constraint windows so goals are never placed over them
+  const freeSlots = additionalBusyIntervals?.length
+    ? subtractIntervals(rawFreeSlots, additionalBusyIntervals)
+    : rawFreeSlots;
   const items: PlanItem[] = [];
 
   // Add fixed events
@@ -284,16 +312,28 @@ export function generateSmartDailyPlan(
   // Build per-goal allocation targets
   const targets = goalsToSmartTargets(goals, skillPlans);
 
+  // Adaptation: bias target order so high-energy (deep-work) items are placed first.
+  // Applied when distraction_heavy pattern was detected — protects the morning focus window.
+  if (hints?.preferHighEnergyFirst) {
+    const energyRank = (t: SmartTarget): number =>
+      categoryEnergy(t.category) === 'high' ? 0 : categoryEnergy(t.category) === 'medium' ? 1 : 2;
+    targets.sort((a, b) => energyRank(a) - energyRank(b));
+  }
+
   // ── Block 2 quality controls ───────────────────────────────────────────────
   // Per-goal session counter (max 2 sessions/day)
   const sessionCount = new Map<string, number>();
-  // Daily time cap: schedule at most 80 % of available free minutes
+  // Daily time cap: schedule at most capMultiplier of available free minutes.
+  // Default 0.8. Reduced by AdaptationHints when overload or low_execution detected.
   const totalFreeMinutes = workSlots.reduce((sum, s) => sum + (s.end - s.start), 0);
-  const dailyCapMins = Math.floor(totalFreeMinutes * 0.8);
+  const dailyCapMins = Math.floor(totalFreeMinutes * (hints?.capMultiplier ?? 0.8));
   let totalScheduledMins = 0;
   // ──────────────────────────────────────────────────────────────────────────
 
   let lastEnergy: EnergyLevel | null = null;
+  // Adaptation: track whether the first goal/skill item has been placed.
+  // Used to cap first-session duration for avoidance_pattern users.
+  let firstWorkItemPlaced = false;
 
   // Detect long fixed block (≥2hrs) — triggers evening rest insertion
   const longBlock = dayEvents.find(
@@ -339,7 +379,7 @@ export function generateSmartDailyPlan(
 
     while (cursor + 20 <= slot.end) {
       const remaining = slot.end - cursor;
-      const currentEnergy = getEnergyLevel(cursor);
+      const currentEnergy = getEnergyLevel(cursor, energyStyle);
 
       // Daily cap: stop scheduling once 80 % of free time is used
       if (totalScheduledMins >= dailyCapMins) break;
@@ -366,12 +406,17 @@ export function generateSmartDailyPlan(
       const brkLen = breakDuration(targetEnergy);
 
       // Fit session into remaining time, also bounded by remaining cap
-      const actualDuration = Math.min(
+      let actualDuration = Math.min(
         idealDuration,
         target.remainingMins,
         remaining,
         dailyCapMins - totalScheduledMins,
       );
+      // Adaptation: cap first work session duration for avoidance_pattern users.
+      // Smaller first task → lower activation energy → builds momentum.
+      if (!firstWorkItemPlaced && hints?.firstSessionCapMins != null) {
+        actualDuration = Math.min(actualDuration, hints.firstSessionCapMins);
+      }
       if (actualDuration < 20) break;
 
       const isCritical = target.goalId === criticalGoalId && !hasCriticalBeenPlaced(items);
@@ -391,6 +436,7 @@ export function generateSmartDailyPlan(
       });
 
       lastEnergy = targetEnergy;
+      firstWorkItemPlaced = true;
       target.remainingMins -= actualDuration;
       sessionCount.set(target.goalId, (sessionCount.get(target.goalId) ?? 0) + 1);
       totalScheduledMins += actualDuration;
@@ -450,9 +496,10 @@ export function generateSmartWeeklyPlan(
   scheduleEvents: ScheduleEvent[],
   skillPlans: SkillPlan[],
   rules: Rule[],
-  startDate: string, // YYYY-MM-DD
-  fixedStart?: number, // minutes from midnight — planning window start
-  fixedEnd?: number,   // minutes from midnight — planning window end
+  startDate: string,         // YYYY-MM-DD
+  fixedStart?: number,       // minutes from midnight — planning window start
+  fixedEnd?: number,         // minutes from midnight — planning window end
+  energyStyle?: EnergyStyle, // user's peak energy preference
 ): Plan {
   if (!goals.length) {
     return {
@@ -511,7 +558,7 @@ export function generateSmartWeeklyPlan(
 
       while (cursor + 20 <= slot.end) {
         const remaining = slot.end - cursor;
-        const currentEnergy = getEnergyLevel(cursor);
+        const currentEnergy = getEnergyLevel(cursor, energyStyle);
 
         // Daily cap check
         if (dayScheduledMins >= dayCapMins) break;

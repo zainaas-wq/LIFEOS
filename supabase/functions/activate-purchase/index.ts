@@ -228,14 +228,25 @@ Deno.serve(async (req: Request) => {
 
   const now = new Date().toISOString();
 
+  // Read existing trial_started_at so we can preserve it (set-once semantics).
+  // If no row exists yet, trial_started_at defaults to now (first activation = trial start).
+  const { data: existing } = await adminClient
+    .from('ai_user_tier')
+    .select('trial_started_at')
+    .eq('user_id', user.id)
+    .maybeSingle();
+
+  const trialStartedAt: string = existing?.trial_started_at ?? now;
+
   const { error: upsertError } = await adminClient
     .from('ai_user_tier')
     .upsert(
       {
-        user_id:     user.id,
-        tier_id:     'pro',
-        rc_event_at: now,
-        updated_at:  now,
+        user_id:          user.id,
+        tier_id:          'pro',
+        rc_event_at:      now,
+        updated_at:       now,
+        trial_started_at: trialStartedAt,  // set-once: preserved if row existed
       },
       { onConflict: 'user_id' },
     );

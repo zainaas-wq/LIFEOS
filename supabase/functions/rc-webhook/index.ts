@@ -39,6 +39,25 @@
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
+// ─── Auth helpers ─────────────────────────────────────────────────────────────
+
+/**
+ * Constant-time string comparison — prevents timing-based secret enumeration.
+ * Compares UTF-8 byte representations so Unicode is handled correctly.
+ * Returns false immediately when lengths differ (length is not secret here since
+ * the attacker must supply the Authorization header at their chosen length).
+ */
+function timingSafeEqual(a: string, b: string): boolean {
+  const aBytes = new TextEncoder().encode(a);
+  const bBytes = new TextEncoder().encode(b);
+  if (aBytes.length !== bBytes.length) return false;
+  let diff = 0;
+  for (let i = 0; i < aBytes.length; i++) {
+    diff |= aBytes[i] ^ bBytes[i];
+  }
+  return diff === 0;
+}
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 interface RCEvent {
@@ -195,9 +214,11 @@ Deno.serve(async (req: Request) => {
     return new Response('Method not allowed', { status: 405 });
   }
 
-  // ── Auth: validate shared secret ──────────────────────────────────────────
+  // ── Auth: validate shared secret (constant-time comparison) ──────────────
   // This is the only auth mechanism — Supabase JWT verification is disabled
   // for this function (verify_jwt = false in supabase/config.toml).
+  // RevenueCat sends the raw secret in the Authorization header.
+  // We use timingSafeEqual to prevent timing-based enumeration of the secret.
 
   const expectedAuth = Deno.env.get('REVENUECAT_WEBHOOK_AUTH');
   if (!expectedAuth) {
@@ -205,8 +226,8 @@ Deno.serve(async (req: Request) => {
     return new Response('Server misconfigured', { status: 500 });
   }
 
-  const authHeader = req.headers.get('Authorization');
-  if (!authHeader || authHeader !== expectedAuth) {
+  const authHeader = req.headers.get('Authorization') ?? '';
+  if (!authHeader || !timingSafeEqual(authHeader, expectedAuth)) {
     console.warn('[rc-webhook] Rejected: auth header mismatch');
     return new Response('Unauthorized', { status: 401 });
   }
@@ -222,12 +243,16 @@ Deno.serve(async (req: Request) => {
 
   const adminClient: AdminClient = createClient(supabaseUrl, serviceRoleKey);
 
-  // ── Parse body ────────────────────────────────────────────────────────────
+  // ── Read raw body then parse ──────────────────────────────────────────────
+  // Read as text first so the body stream is consumed once.
+  // JSON.parse is then applied to the already-read string.
+  let rawBody: string;
   let body: RCWebhookBody;
   try {
-    body = await req.json() as RCWebhookBody;
+    rawBody = await req.text();
+    body = JSON.parse(rawBody) as RCWebhookBody;
   } catch {
-    console.warn('[rc-webhook] Failed to parse JSON body');
+    console.warn('[rc-webhook] Failed to read or parse JSON body');
     // 400 — malformed: RC should not retry this
     return new Response('Bad request', { status: 400 });
   }
