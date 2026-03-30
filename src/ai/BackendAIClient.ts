@@ -14,6 +14,7 @@ import type { ChatMessage, Plan } from '../types';
 import { LocalAIClient } from './LocalAIClient';
 import { generateSmartDailyPlan, generateSmartWeeklyPlan, parseFixedWindow } from './planningEngine';
 import { rescheduleRemaining } from './adaptiveRescheduler';
+import { buildAIContextPacket, selectContextDepth, historyDepthForMode } from './orchestrationEngine';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -112,8 +113,16 @@ export class BackendAIClient implements AIClient {
     history: ChatMessage[],
     context: AIContext,
   ): Promise<ChatMessage> {
+    // ── Orchestration: build depth-appropriate context and history ────────────
+    const depth       = context.contextDepth ?? selectContextDepth('focused_answer', null);
+    const histLimit   = historyDepthForMode(depth);
+    const slicedHist  = histLimit === 0 ? [] : history.slice(-histLimit);
+    const wireContext = context.aiMode
+      ? buildAIContextPacket(context, depth, context.aiMode)
+      : buildChatContext(context);
+
     // Slim history to wire-safe shape
-    const wireHistory = history.map((m) => ({ role: m.role, content: m.content }));
+    const wireHistory = slicedHist.map((m) => ({ role: m.role, content: m.content }));
 
     let responseData: {
       id?: string;
@@ -141,7 +150,7 @@ export class BackendAIClient implements AIClient {
         body: JSON.stringify({
           message: userMessage,
           history: wireHistory,
-          context: buildChatContext(context),
+          context: wireContext,
         }),
         signal: controller.signal,
       });

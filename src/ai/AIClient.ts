@@ -1,5 +1,6 @@
 import type { ChatMessage, Goal, SkillPlan, Rule, ScheduleEvent, Plan, FocusSession, RecoveryMode } from '../types';
 import type { PredictedRiskType } from './predictiveEngine';
+import type { AIRequestMode, ContextDepth } from './orchestrationEngine';
 
 // ─── Context passed to every AI call ─────────────────────────────────────────
 
@@ -70,6 +71,13 @@ export interface AIContext {
   reviewSignals?: ReviewSignalSummary;
   /** Predictive + explanation signals — present when a plan exists for today. */
   predictionSignals?: PredictionSignalSummary;
+  // ── Orchestration metadata (set by orchestrationEngine before each call) ──
+  /** Derived AI request mode for this specific turn. */
+  aiMode?: AIRequestMode;
+  /** Style instruction injected into the backend system prompt. */
+  responseStyleHint?: string;
+  /** Context depth selected by the orchestration layer. */
+  contextDepth?: ContextDepth;
 }
 
 // ─── Abstract interface ───────────────────────────────────────────────────────

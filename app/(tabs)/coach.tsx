@@ -54,6 +54,15 @@ import type { VoiceResult } from '../../src/components/VoiceRecordingModal';
 import { buildVoicePayload } from '../../src/ai/voiceHelpers';
 import { getLowCreditState, shouldShowUpgradeNudge } from '../../src/ai/creditUX';
 import { canAfford, CREDIT_COSTS } from '../../src/ai/creditRules';
+import {
+  deriveAIRequestMode,
+  selectContextDepth,
+  historyDepthForMode,
+  shouldUseExternalAI,
+  getResponseStyleHint,
+  getModeLabelDisplay,
+} from '../../src/ai/orchestrationEngine';
+import type { AIRequestMode } from '../../src/ai/orchestrationEngine';
 
 // ─── Quick action prompts (English — sent to AI) ──────────────────────────────
 
@@ -342,6 +351,7 @@ export default function CoachScreen() {
   const isGuestMode    = useAppStore((s) => s.isGuestMode);
   const goals          = useAppStore((s) => s.goals);
   const dailyDecision  = useAppStore((s) => s.dailyDecision);
+  const dayMode        = useAppStore((s) => s.dayMode);
   const aiContext      = useAIContext();
 
   const entitlements   = useEntitlements();
@@ -355,7 +365,30 @@ export default function CoachScreen() {
   const [voiceVisible, setVoiceVisible] = useState(false);
   const [warningDismissed, setWarningDismissed] = useState(false);
   const [sessionRequestCount, setSessionRequestCount] = useState(0);
+  const [lastAIMode, setLastAIMode] = useState<AIRequestMode>('focused_answer');
   const scrollRef = useRef<ScrollView>(null);
+
+  // ── Orchestration helper ──────────────────────────────────────────────────
+  const getOrchestration = useCallback((msg: string) => {
+    const balance = aiCredits.balance?.currentBalance ?? null;
+    const signals = {
+      userMessage:      msg,
+      driftScore:       aiContext.driftScore ?? 0,
+      isInRecoveryMode: aiContext.isInRecoveryMode ?? false,
+      missedTasksCount: aiContext.missedTasksCount ?? 0,
+      reviewCount:      aiContext.reviewSignals?.reviewCount ?? 0,
+      creditBalance:    balance,
+      dayMode:          dayMode ?? 'ON_TRACK',
+      hasActivePlan:    !!aiContext.currentPlan,
+      topRiskCount:     aiContext.predictionSignals?.topRisks?.length ?? 0,
+    };
+    const mode       = deriveAIRequestMode(signals);
+    const depth      = selectContextDepth(mode, balance);
+    const histDepth  = historyDepthForMode(depth);
+    const useExternal = shouldUseExternalAI(balance, mode, !!(session && !isGuestMode));
+    const styleHint  = getResponseStyleHint(mode);
+    return { mode, depth, histDepth, useExternal, styleHint };
+  }, [aiCredits.balance, aiContext, dayMode, session, isGuestMode]);
 
   // Derived credit state
   const currentBalance    = aiCredits.balance?.currentBalance ?? null;
@@ -383,8 +416,8 @@ export default function CoachScreen() {
     { label: t('coach.quick_stuck'), prompt: QUICK_ACTION_PROMPTS[1], feature: 'ai_chat', event: 'ai_chat_used', icon: 'hand-left-outline' },
   ];
 
-  const getClient = useCallback((): AIClient => {
-    if (session && !isGuestMode) {
+  const getClient = useCallback((useExternal: boolean): AIClient => {
+    if (useExternal && session && !isGuestMode) {
       return new BackendAIClient(
         process.env.EXPO_PUBLIC_SUPABASE_URL ?? '',
         session.access_token,
@@ -398,7 +431,12 @@ export default function CoachScreen() {
       const trimmed = text.trim();
       if (!trimmed || loading) return;
 
-      track(eventName);
+      // ── Orchestration decision ────────────────────────────────────────────
+      const orch = getOrchestration(trimmed);
+      setLastAIMode(orch.mode);
+
+      track(eventName, { ai_mode: orch.mode } as any);
+
       const userMsg = makeUserMsg(trimmed);
       addChatMessage(userMsg);
       setInput('');
@@ -406,9 +444,20 @@ export default function CoachScreen() {
       setSessionRequestCount((c) => c + 1);
       setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 50);
 
+      // Attach orchestration metadata to context before call
+      const orchestratedContext = {
+        ...aiContext,
+        aiMode:            orch.mode,
+        responseStyleHint: orch.styleHint,
+        contextDepth:      orch.depth,
+      };
+
+      // Use depth-limited history slice
+      const histSlice = orch.histDepth === 0 ? [] : chatHistory.slice(-orch.histDepth);
+
       try {
-        const client = getClient();
-        const reply = await client.chat(trimmed, chatHistory, aiContext);
+        const client = getClient(orch.useExternal);
+        const reply = await client.chat(trimmed, histSlice, orchestratedContext);
         addChatMessage({ ...reply, creditCost: CREDIT_COSTS.text, requestMode: 'text' });
         if (reply.plan) setCurrentPlan(reply.plan);
       } catch (err: any) {
@@ -424,7 +473,7 @@ export default function CoachScreen() {
         setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 100);
       }
     },
-    [loading, chatHistory, aiContext, getClient, addChatMessage, setCurrentPlan, refreshUsage, refreshBalance],
+    [loading, chatHistory, aiContext, getClient, getOrchestration, addChatMessage, setCurrentPlan, refreshUsage, refreshBalance],
   );
 
   const handleAction = (qa: QA) => {
@@ -801,13 +850,19 @@ export default function CoachScreen() {
 
         {/* ── Input bar — always visible ────────────────────────────────── */}
         <View style={s.inputBarOuter}>
-          {/* Cost preview chip + nudge row */}
+          {/* Cost preview chip + mode label + nudge row */}
           {session && !isGuestMode && (
             <View style={[s.inputMetaRow, { flexDirection: dir.rowDir }]}>
               <CreditCostChip
                 mode="text"
                 canAfford={!balanceKnown || canAfford(currentBalance!, 'text')}
               />
+              {/* Subtle AI mode indicator */}
+              {isChat && (
+                <View style={s.modeChip}>
+                  <Text style={s.modeChipText}>{getModeLabelDisplay(lastAIMode)}</Text>
+                </View>
+              )}
               {showNudge && (
                 <TouchableOpacity
                   style={s.nudgeBtn}
@@ -973,6 +1028,15 @@ const s = StyleSheet.create({
   inputMetaRow: {
     flexDirection: 'row', alignItems: 'center', gap: Spacing.xs,
     paddingHorizontal: Spacing.md, paddingTop: Spacing.xs + 2,
+  },
+  modeChip: {
+    paddingHorizontal: Spacing.xs + 2, paddingVertical: 2,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.surfaceElevated,
+    borderWidth: 1, borderColor: Colors.border,
+  },
+  modeChipText: {
+    fontSize: FontSize.xs - 1, color: Colors.textMuted, letterSpacing: 0.3,
   },
   nudgeBtn: {
     marginStart: 'auto' as any,
