@@ -43,7 +43,10 @@ test-parser.mjs
 # Claude Code local config (machine-specific permissions)
 .claude/settings.local.json
 
-# Session scratchpad files — not product code
+# Session scratchpad / backup files — not product code
 task.md
 walkthrough.md
 f
+home_original.txt
+*_original.txt
+*_backup.txt
