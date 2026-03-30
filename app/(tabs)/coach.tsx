@@ -47,9 +47,13 @@ import { track } from '../../src/services/analyticsService';
 import type { AnalyticsEventName } from '../../src/services/analyticsService';
 import { UpgradeModal } from '../../src/components/upgrade/UpgradeModal';
 import { CreditsCard } from '../../src/components/ui/CreditsCard';
+import { CreditCostChip } from '../../src/components/ui/CreditCostChip';
+import { CreditWarningBanner } from '../../src/components/ui/CreditWarningBanner';
 import { VoiceRecordingModal } from '../../src/components/VoiceRecordingModal';
 import type { VoiceResult } from '../../src/components/VoiceRecordingModal';
 import { buildVoicePayload } from '../../src/ai/voiceHelpers';
+import { getLowCreditState, shouldShowUpgradeNudge } from '../../src/ai/creditUX';
+import { canAfford, CREDIT_COSTS } from '../../src/ai/creditRules';
 
 // ─── Quick action prompts (English — sent to AI) ──────────────────────────────
 
@@ -217,6 +221,12 @@ const plan = StyleSheet.create({
 
 function ChatBubble({ msg }: { msg: ChatMessage }) {
   const isUser = msg.role === 'user';
+  const hasCost = !isUser && msg.creditCost != null && msg.creditCost > 0;
+  const costLabel = hasCost
+    ? msg.creditCost === 1
+      ? '-1 credit'
+      : `-${msg.creditCost} credits${msg.requestMode && msg.requestMode !== 'text' ? ` (${msg.requestMode})` : ''}`
+    : null;
   return (
     <View style={[bubble.row, isUser && bubble.rowUser]}>
       {!isUser && (
@@ -227,6 +237,9 @@ function ChatBubble({ msg }: { msg: ChatMessage }) {
       <View style={[bubble.wrap, isUser ? bubble.wrapUser : bubble.wrapAI]}>
         <Text style={[bubble.text, isUser && bubble.textUser]}>{msg.content}</Text>
         {msg.plan && <InlinePlan plan={msg.plan} />}
+        {costLabel && (
+          <Text style={bubble.costLabel}>{costLabel}</Text>
+        )}
       </View>
     </View>
   );
@@ -237,10 +250,11 @@ const bubble = StyleSheet.create({
   rowUser: { flexDirection: 'row-reverse' },
   avatar:  { width: 28, height: 28, borderRadius: Radius.full, backgroundColor: Colors.goldMuted, borderWidth: 1, borderColor: Colors.goldDim, alignItems: 'center', justifyContent: 'center' },
   wrap:    { maxWidth: '80%', borderRadius: Radius.lg, padding: Spacing.md },
-  wrapAI:  { backgroundColor: Colors.surfaceElevated, borderWidth: 1, borderColor: Colors.border, borderBottomStartRadius: 4 },
-  wrapUser:{ backgroundColor: Colors.goldMuted, borderWidth: 1, borderColor: Colors.goldDim, borderBottomEndRadius: 4 },
-  text:    { fontSize: FontSize.sm, color: Colors.textPrimary, lineHeight: 20 },
-  textUser:{ color: Colors.gold },
+  wrapAI:    { backgroundColor: Colors.surfaceElevated, borderWidth: 1, borderColor: Colors.border, borderBottomStartRadius: 4 },
+  wrapUser:  { backgroundColor: Colors.goldMuted, borderWidth: 1, borderColor: Colors.goldDim, borderBottomEndRadius: 4 },
+  text:      { fontSize: FontSize.sm, color: Colors.textPrimary, lineHeight: 20 },
+  textUser:  { color: Colors.gold },
+  costLabel: { fontSize: FontSize.xs - 1, color: Colors.textMuted, marginTop: 4, textAlign: 'right' as const },
 });
 
 // ─── Landing — behavioral context card ───────────────────────────────────────
@@ -339,7 +353,16 @@ export default function CoachScreen() {
   const [loading, setLoading]       = useState(false);
   const [upgradeFeat, setUpgradeFeat] = useState<string | null>(null);
   const [voiceVisible, setVoiceVisible] = useState(false);
+  const [warningDismissed, setWarningDismissed] = useState(false);
+  const [sessionRequestCount, setSessionRequestCount] = useState(0);
   const scrollRef = useRef<ScrollView>(null);
+
+  // Derived credit state
+  const currentBalance    = aiCredits.balance?.currentBalance ?? null;
+  const balanceKnown      = currentBalance !== null;
+  const lowState          = balanceKnown ? getLowCreditState(currentBalance!) : 'ok';
+  const showWarning       = balanceKnown && lowState !== 'ok' && !warningDismissed && session && !isGuestMode;
+  const showNudge         = balanceKnown && shouldShowUpgradeNudge(currentBalance!, sessionRequestCount);
 
   // Mode: landing when no history, chat otherwise
   const isChat = chatHistory.length > 0;
@@ -380,12 +403,13 @@ export default function CoachScreen() {
       addChatMessage(userMsg);
       setInput('');
       setLoading(true);
+      setSessionRequestCount((c) => c + 1);
       setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 50);
 
       try {
         const client = getClient();
         const reply = await client.chat(trimmed, chatHistory, aiContext);
-        addChatMessage(reply);
+        addChatMessage({ ...reply, creditCost: CREDIT_COSTS.text, requestMode: 'text' });
         if (reply.plan) setCurrentPlan(reply.plan);
       } catch (err: any) {
         addChatMessage({
@@ -444,6 +468,7 @@ export default function CoachScreen() {
     const userMsg: ChatMessage = makeUserMsg('[Voice message — processing…]');
     addChatMessage(userMsg);
     setLoading(true);
+    setSessionRequestCount((c) => c + 1);
     setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 50);
 
     try {
@@ -481,6 +506,8 @@ export default function CoachScreen() {
           id: generateId(), role: 'assistant',
           content: data.content,
           createdAt: data.createdAt ?? new Date().toISOString(),
+          creditCost: CREDIT_COSTS.voice,
+          requestMode: 'voice',
         });
       }
     } catch (err: any) {
@@ -535,6 +562,7 @@ export default function CoachScreen() {
       const userMsg: ChatMessage = makeUserMsg('[Image uploaded — analyzing…]');
       addChatMessage(userMsg);
       setLoading(true);
+      setSessionRequestCount((c) => c + 1);
       setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 50);
 
       const endpoint = `${process.env.EXPO_PUBLIC_SUPABASE_URL ?? ''}/functions/v1/ai-chat`;
@@ -564,7 +592,7 @@ export default function CoachScreen() {
         }
       } else {
         track('ai_request_succeeded', { mode: 'image' } as any);
-        addChatMessage({ id: generateId(), role: 'assistant', content: data.content, createdAt: data.createdAt ?? new Date().toISOString() });
+        addChatMessage({ id: generateId(), role: 'assistant', content: data.content, createdAt: data.createdAt ?? new Date().toISOString(), creditCost: CREDIT_COSTS.image, requestMode: 'image' });
       }
     } catch (err: any) {
       track('ai_request_failed', { mode: 'image' } as any);
@@ -613,6 +641,15 @@ export default function CoachScreen() {
           usage={session && !isGuestMode ? entitlements : null}
           onCreditsExhausted={() => { track('quota_exhausted'); setUpgradeFeat(''); }}
         />
+
+        {/* ── Low-credit warning banner ────────────────────────────────────── */}
+        {showWarning && (
+          <CreditWarningBanner
+            balance={currentBalance!}
+            onUpgrade={() => { track('upgrade_cta_opened'); setUpgradeFeat('AI Credits'); setWarningDismissed(true); }}
+            onDismiss={() => setWarningDismissed(true)}
+          />
+        )}
 
         {/* ── Body ─────────────────────────────────────────────────────────── */}
         {!isChat ? (
@@ -763,35 +800,56 @@ export default function CoachScreen() {
         )}
 
         {/* ── Input bar — always visible ────────────────────────────────── */}
-        <View style={[s.inputBar, { flexDirection: dir.rowDir }]}>
-          {/* Voice affordance in input bar */}
-          <TouchableOpacity onPress={handleVoice} style={s.micBtn} activeOpacity={0.7}>
-            <Ionicons name="mic-outline" size={18} color={Colors.textMuted} />
-          </TouchableOpacity>
+        <View style={s.inputBarOuter}>
+          {/* Cost preview chip + nudge row */}
+          {session && !isGuestMode && (
+            <View style={[s.inputMetaRow, { flexDirection: dir.rowDir }]}>
+              <CreditCostChip
+                mode="text"
+                canAfford={!balanceKnown || canAfford(currentBalance!, 'text')}
+              />
+              {showNudge && (
+                <TouchableOpacity
+                  style={s.nudgeBtn}
+                  onPress={() => { track('upgrade_cta_opened'); setUpgradeFeat('AI Credits'); }}
+                  activeOpacity={0.8}
+                >
+                  <Text style={s.nudgeBtnText}>Upgrade for more →</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          )}
 
-          <TextInput
-            style={s.input}
-            value={input}
-            onChangeText={setInput}
-            placeholder={t('coach.placeholder')}
-            placeholderTextColor={Colors.textMuted}
-            multiline
-            maxLength={2000}
-            returnKeyType="default"
-          />
+          <View style={[s.inputBar, { flexDirection: dir.rowDir }]}>
+            {/* Voice affordance in input bar */}
+            <TouchableOpacity onPress={handleVoice} style={s.micBtn} activeOpacity={0.7}>
+              <Ionicons name="mic-outline" size={18} color={Colors.textMuted} />
+            </TouchableOpacity>
 
-          <TouchableOpacity
-            onPress={() => send(input)}
-            style={[s.sendBtn, (!input.trim() || loading) && s.sendBtnDisabled]}
-            disabled={!input.trim() || loading}
-            activeOpacity={0.8}
-          >
-            <Ionicons
-              name="arrow-up"
-              size={16}
-              color={!input.trim() || loading ? Colors.textMuted : Colors.textInverse}
+            <TextInput
+              style={s.input}
+              value={input}
+              onChangeText={setInput}
+              placeholder={t('coach.placeholder')}
+              placeholderTextColor={Colors.textMuted}
+              multiline
+              maxLength={2000}
+              returnKeyType="default"
             />
-          </TouchableOpacity>
+
+            <TouchableOpacity
+              onPress={() => send(input)}
+              style={[s.sendBtn, (!input.trim() || loading) && s.sendBtnDisabled]}
+              disabled={!input.trim() || loading}
+              activeOpacity={0.8}
+            >
+              <Ionicons
+                name="arrow-up"
+                size={16}
+                color={!input.trim() || loading ? Colors.textMuted : Colors.textInverse}
+              />
+            </TouchableOpacity>
+          </View>
         </View>
 
       </KeyboardAvoidingView>
@@ -907,12 +965,28 @@ const s = StyleSheet.create({
   chipText:       { fontSize: FontSize.xs, color: Colors.gold, fontWeight: FontWeight.medium },
   chipTextLocked: { color: Colors.textMuted },
 
+  // Input bar wrapper (includes cost chip row)
+  inputBarOuter: {
+    borderTopWidth: 1, borderTopColor: Colors.border,
+    backgroundColor: Colors.background,
+  },
+  inputMetaRow: {
+    flexDirection: 'row', alignItems: 'center', gap: Spacing.xs,
+    paddingHorizontal: Spacing.md, paddingTop: Spacing.xs + 2,
+  },
+  nudgeBtn: {
+    marginStart: 'auto' as any,
+    paddingHorizontal: Spacing.sm, paddingVertical: 2,
+    backgroundColor: Colors.goldMuted, borderRadius: Radius.full,
+    borderWidth: 1, borderColor: Colors.goldDim,
+  },
+  nudgeBtnText: {
+    fontSize: FontSize.xs - 1, fontWeight: FontWeight.semibold, color: Colors.gold,
+  },
   // Input bar
   inputBar: {
     flexDirection: 'row', alignItems: 'flex-end', gap: Spacing.sm,
     paddingHorizontal: Spacing.md, paddingVertical: Spacing.sm,
-    borderTopWidth: 1, borderTopColor: Colors.border,
-    backgroundColor: Colors.background,
   },
   micBtn: {
     width: 36, height: 36, borderRadius: Radius.full,

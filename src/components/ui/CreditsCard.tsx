@@ -10,6 +10,8 @@ import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors, FontSize, FontWeight, Radius, Spacing } from '../../constants/theme';
 import type { AIBalance } from '../../services/aiCreditsService';
+import { getRefillCountdown } from '../../ai/creditUX';
+import { CreditUsageBreakdown } from './CreditUsageBreakdown';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -26,16 +28,6 @@ function fillColor(pct: number): string {
   if (pct <= 10) return '#F87171';  // red — exhausted
   if (pct <= 30) return Colors.gold; // amber — low
   return '#4ADE80';                  // green — healthy
-}
-
-function refillLabel(lastRefillAt: string | null): string {
-  if (!lastRefillAt) return 'Refills in ~30 days';
-  const refillDate = new Date(lastRefillAt);
-  const nextRefill = new Date(refillDate.getTime() + 30 * 24 * 60 * 60 * 1000);
-  const daysLeft   = Math.ceil((nextRefill.getTime() - Date.now()) / 86_400_000);
-  if (daysLeft <= 0) return 'Refill due soon';
-  if (daysLeft === 1) return 'Refills tomorrow';
-  return `Refills in ${daysLeft} days`;
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
@@ -80,7 +72,7 @@ export function CreditsCard({ balance, isLoading, onUpgrade, compact = false }: 
       {/* Footer row */}
       {!compact && (
         <View style={s.footer}>
-          <Text style={s.refill}>{refillLabel(lastRefillAt)}</Text>
+          <Text style={s.refill}>{getRefillCountdown(lastRefillAt)}</Text>
           {isExhausted && onUpgrade && (
             <TouchableOpacity onPress={onUpgrade} activeOpacity={0.8} style={s.upgradeBtn}>
               <Text style={s.upgradeBtnText}>Get more →</Text>
@@ -95,6 +87,11 @@ export function CreditsCard({ balance, isLoading, onUpgrade, compact = false }: 
             You've used all credits for this cycle. Local Coach is still available.
           </Text>
         </View>
+      )}
+
+      {/* Requests remaining breakdown — non-compact only */}
+      {!compact && !isExhausted && (
+        <CreditUsageBreakdown balance={currentBalance} />
       )}
     </View>
   );

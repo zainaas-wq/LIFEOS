@@ -420,6 +420,10 @@ export interface ChatMessage {
   content: string;
   createdAt: string;
   plan?: Plan;
+  /** Credits deducted for this AI response (undefined on user messages). */
+  creditCost?: number;
+  /** The request mode that generated this response. */
+  requestMode?: 'text' | 'voice' | 'image';
 }
 
 // ─── Behavior Engine — Missed Tasks & Daily Decision ─────────────────────────
