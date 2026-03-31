@@ -42,6 +42,8 @@ import {
   buildRecoverySystemPrompt,
 } from '../_shared/recoveryService.ts';
 import { routeTextRequest, modelNameForLogging } from '../_shared/providerRouter.ts';
+import { DEFAULT_BUDGET } from '../_shared/requestBudget.ts';
+import { getMaxCreditsPerRequest } from '../_shared/operatorPolicy.ts';
 import { GatewayError } from '../_shared/providers/types.ts';
 import type { RouteExecutionResult, ProviderHealthState, ProviderName } from '../_shared/providers/types.ts';
 
@@ -163,7 +165,8 @@ interface ErrorResponse {
     | 'timeout'
     | 'quota_exceeded'
     | 'action_not_entitled'
-    | 'insufficient_credits';
+    | 'insufficient_credits'
+    | 'cost_limit_exceeded';  // Batch 17: operator MAX_CREDITS_PER_REQUEST cap
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -557,6 +560,10 @@ interface UsageLogEntry {
   failure_reason:                 string | null;
   timeout_occurred:               boolean;
   provider_health_at_selection:   Record<ProviderName, ProviderHealthState> | null;
+  // Batch 17 operator observability fields
+  operator_forced_provider:       string | null;
+  operator_cheap_mode:            boolean;
+  operator_disabled_provider:     string | null;
 }
 
 // deno-lint-ignore no-explicit-any
@@ -641,6 +648,16 @@ Deno.serve(async (req: Request) => {
   const allowance  = TIER_ALLOWANCE[tierId] ?? 20;
   const creditCost = CREDIT_COSTS[requestMode];
 
+  // ── Operator credit cap (Batch 17) ───────────────────────────────────────
+  const maxCreditsPerReq = getMaxCreditsPerRequest();
+  if (maxCreditsPerReq !== null && creditCost > maxCreditsPerReq) {
+    return errorResponse(
+      `Request cost (${creditCost} credits) exceeds operator limit (${maxCreditsPerReq})`,
+      'cost_limit_exceeded',
+      400,
+    );
+  }
+
   // ── Credit check (atomic) ─────────────────────────────────────────────────
   const creditResult = await consumeAICredits(adminClient, user.id, creditCost, allowance);
   if (!creditResult.success && creditResult.errorCode === 'insufficient_credits') {
@@ -693,6 +710,9 @@ Deno.serve(async (req: Request) => {
         failure_reason:                null,
         timeout_occurred:              false,
         provider_health_at_selection:  null,
+        operator_forced_provider:      null,
+        operator_cheap_mode:           false,
+        operator_disabled_provider:    null,
       });
 
       return successResponse(textContent, creditResult.balanceAfter, tokenUsage);
@@ -718,7 +738,7 @@ Deno.serve(async (req: Request) => {
       const sysPr    = context ? buildSystemPrompt(context, memCtx, persTxt) : 'You are a helpful planning assistant.';
 
       // Voice text completion goes through the router (voice aiMode treated as focused_answer)
-      routeResult = await routeTextRequest(sysPr, history, transcript, controller.signal, aiMode ?? 'focused_answer');
+      routeResult = await routeTextRequest(sysPr, history, transcript, controller.signal, aiMode ?? 'focused_answer', DEFAULT_BUDGET, creditResult.balanceAfter);
       clearTimeout(timer);
       textContent = `_Transcribed: "${transcript}"_\n\n${routeResult.result.content}`;
       tokenUsage  = { ...routeResult.result.usage, provider: routeResult.providerUsed };
@@ -746,6 +766,9 @@ Deno.serve(async (req: Request) => {
         failure_reason:                routeResult.failureReason,
         timeout_occurred:              routeResult.timeoutOccurred,
         provider_health_at_selection:  routeResult.healthAtSelection,
+        operator_forced_provider:      routeResult.operatorForcedProvider,
+        operator_cheap_mode:           routeResult.operatorCheapMode,
+        operator_disabled_provider:    routeResult.operatorDisabledProvider,
       });
 
       return successResponse(textContent, creditResult.balanceAfter, tokenUsage);
@@ -789,6 +812,8 @@ Deno.serve(async (req: Request) => {
         message,
         controller.signal,
         aiMode ?? undefined,
+        DEFAULT_BUDGET,
+        creditResult.balanceAfter,
       );
       clearTimeout(timer);
       textContent = routeResult.result.content;
@@ -817,6 +842,9 @@ Deno.serve(async (req: Request) => {
         failure_reason:                routeResult.failureReason,
         timeout_occurred:              routeResult.timeoutOccurred,
         provider_health_at_selection:  routeResult.healthAtSelection,
+        operator_forced_provider:      routeResult.operatorForcedProvider,
+        operator_cheap_mode:           routeResult.operatorCheapMode,
+        operator_disabled_provider:    routeResult.operatorDisabledProvider,
       });
 
       return successResponse(textContent, creditResult.balanceAfter, tokenUsage);
@@ -850,6 +878,9 @@ Deno.serve(async (req: Request) => {
         failure_reason:                msg,
         timeout_occurred:              err.timeoutOccurred,
         provider_health_at_selection:  err.healthAtSelection,
+        operator_forced_provider:      null,
+        operator_cheap_mode:           false,
+        operator_disabled_provider:    null,
       });
     }
 

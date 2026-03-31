@@ -1,21 +1,25 @@
 /**
  * providerRouter.ts — Multi-provider AI routing, fallback, and execution.
  *
- * Batch 16 additions on top of Batch 15:
- *   - Per-provider timeout via execWithTimeout (primary / fallback each get a deadline)
- *   - effectiveFallbackMs caps fallback timeout by remaining total budget
- *   - selectProvider now checks providerHealth before committing to a primary;
- *     unhealthy primary is swapped with fallback so healthy providers are preferred
- *   - recordProviderSuccess / recordProviderFailure called after every attempt
- *   - RouteExecutionResult carries timeoutOccurred, failureReason, healthAtSelection
- *   - Throws GatewayError (not plain Error) on total failure, carrying observability fields
+ * Batch 17: operator control layer integrated into routing priority.
  *
- * Credit safety contract (unchanged from Batch 15):
- *   Credits are consumed by index.ts BEFORE calling routeTextRequest().
+ * Routing priority (highest to lowest):
+ *   1. FORCE_PROVIDER (operatorPolicy) — pins provider, skips health/cheap/table
+ *   2. DISABLED_PROVIDERS (operatorPolicy) — skips disabled primary, promotes fallback
+ *   3. FORCE_CHEAP_MODE / low-balance auto (operatorPolicy) — routes to NIM for eligible modes
+ *   4. Provider health check (providerHealth) — swaps unhealthy primary with fallback
+ *   5. Routing table / default — mode-based preference
+ *
+ * Fallback control:
+ *   - DISABLE_FALLBACK_MODES or disabled fallback provider → fallbackDisabled=true → no fallback
+ *   - allDisabled (both providers in DISABLED_PROVIDERS) → throw GatewayError immediately
+ *
+ * Credit safety contract (unchanged from Batch 15/16):
+ *   Credits consumed by index.ts BEFORE calling routeTextRequest().
  *   This module NEVER touches the credit ledger.
  *   If both providers fail → throw GatewayError → index.ts refunds.
  *
- * Routing policy (text mode — voice/image stay on OpenAI):
+ * Routing table (text mode; voice/image remain on OpenAI):
  *
  *   Mode                  Normal primary   Rationale
  *   ─────────────────────────────────────────────────────────────────────────────
@@ -25,17 +29,12 @@
  *   strategic_planning    OpenAI           Complex multi-step — OpenAI reasoning
  *   review_reflection     OpenAI           Interpretive analysis — OpenAI quality
  *   (unknown / absent)    OpenAI           Safe quality default
- *
- * Health override:
- *   If the routing-table primary is UNHEALTHY, its fallback is promoted to primary.
- *   FORCE_PROVIDER bypasses the health check entirely (explicit operator intent).
  */
 
 import { OpenAIAdapter } from './providers/openai.ts';
 import { NIMAdapter }    from './providers/nim.ts';
 import type {
   AIRequestMode,
-  GatewayError as IGatewayError,
   HistoryMessage,
   ProviderAdapter,
   ProviderName,
@@ -56,6 +55,12 @@ import {
   recordProviderSuccess,
   recordProviderFailure,
 } from './providerHealth.ts';
+import {
+  getForcedProvider,
+  isProviderDisabled,
+  shouldForceCheapMode,
+  shouldBypassFallback,
+} from './operatorPolicy.ts';
 
 // ─── Provider singletons ──────────────────────────────────────────────────────
 
@@ -80,43 +85,95 @@ const ROUTING_TABLE: Record<AIRequestMode, { primary: ProviderName; reason: stri
 // ─── selectProvider ───────────────────────────────────────────────────────────
 
 /**
- * Determine primary + fallback provider for a request.
+ * Determine primary + fallback provider using full operator policy + health state.
  *
- * Priority order:
- *   1. FORCE_PROVIDER env var  — operator override, bypasses health check
- *   2. Routing table + health  — if table primary is unhealthy, promote fallback
- *   3. Default (OpenAI)        — for unknown or absent aiMode
+ * All operator observability fields are populated so index.ts can log them.
+ *
+ * @param aiMode   Request mode string (from client orchestration layer).
+ * @param balance  Credit balance after deduction; used for auto-cheap-mode trigger.
  */
-export function selectProvider(aiMode?: string): RoutingDecision {
-  // 1. Env override (bypasses health check — explicit operator intent)
-  const force = (Deno.env.get('FORCE_PROVIDER') ?? '').trim().toLowerCase() as ProviderName | '';
-  if (force === 'openai' || force === 'nim') {
-    const fallback: ProviderName = force === 'openai' ? 'nim' : 'openai';
-    return { primary: force, fallback, reason: 'forced by FORCE_PROVIDER env var' };
+export function selectProvider(aiMode?: string, balance?: number | null): RoutingDecision {
+  // Operator field accumulators
+  let operatorForcedProvider:   ProviderName | null = null;
+  let operatorCheapMode:        boolean             = false;
+  let operatorDisabledProvider: ProviderName | null = null;
+
+  // ── Step 1: FORCE_PROVIDER (absolute override) ────────────────────────────
+  const forced = getForcedProvider();
+  if (forced) {
+    operatorForcedProvider = forced;
+    const fallback: ProviderName  = forced === 'openai' ? 'nim' : 'openai';
+    const fallbackDisabled        = isProviderDisabled(fallback) || shouldBypassFallback(aiMode);
+    const allDisabled             = false; // forced provider is never considered disabled
+    return {
+      primary: forced, fallback,
+      reason: 'forced by FORCE_PROVIDER operator override',
+      operatorForcedProvider, operatorCheapMode, operatorDisabledProvider,
+      fallbackDisabled, allDisabled,
+    };
   }
 
-  // 2. Routing table
+  // ── Step 2: Routing table base decision ────────────────────────────────────
   const mode  = aiMode as AIRequestMode | undefined;
   const entry = mode ? ROUTING_TABLE[mode] : undefined;
-
   let primary: ProviderName  = entry?.primary ?? 'openai';
   let fallback: ProviderName = primary === 'openai' ? 'nim' : 'openai';
   let reason: string         = entry?.reason ?? 'unknown mode — defaulting to OpenAI';
 
-  // 3. Health check — if table primary is unhealthy, promote fallback
-  const primaryHealth = getProviderHealth(primary);
-  if (primaryHealth === 'unhealthy') {
+  // ── Step 3: Cheap mode override (eligible modes only) ─────────────────────
+  const cheapMode = shouldForceCheapMode(balance ?? null, aiMode);
+  if (cheapMode) {
+    operatorCheapMode = true;
+    primary           = 'nim';
+    fallback          = 'openai';
+    reason            = `cheap mode active — routing to NIM (mode=${aiMode ?? 'unknown'})`;
+  }
+
+  // ── Step 4: Disabled provider check ───────────────────────────────────────
+  const primaryDisabled  = isProviderDisabled(primary);
+  const fallbackDisabledByPolicy = isProviderDisabled(fallback);
+
+  if (primaryDisabled) {
+    operatorDisabledProvider = primary;
+    if (fallbackDisabledByPolicy) {
+      // Both disabled — no provider can serve this request
+      console.error('[providerRouter] BOTH providers are disabled — all requests will fail');
+      return {
+        primary, fallback,
+        reason: `all providers disabled`,
+        operatorForcedProvider, operatorCheapMode, operatorDisabledProvider,
+        fallbackDisabled: true, allDisabled: true,
+      };
+    }
+    // Promote fallback to primary position
+    const tmp = primary;
+    primary   = fallback;
+    fallback  = tmp;
+    reason    = `${reason} [${operatorDisabledProvider} disabled — promoted ${primary}]`;
+  }
+
+  // ── Step 5: Health check ───────────────────────────────────────────────────
+  if (getProviderHealth(primary) === 'unhealthy') {
     console.warn(
       `[providerRouter] primary "${primary}" is UNHEALTHY — promoting "${fallback}" for mode=${aiMode ?? 'unknown'}`,
     );
-    return {
-      primary:  fallback,
-      fallback: primary,
-      reason:   `${reason} [primary unhealthy — swapped to ${fallback}]`,
-    };
+    const tmp = primary;
+    primary   = fallback;
+    fallback  = tmp;
+    reason    = `${reason} [primary unhealthy — swapped to ${primary}]`;
   }
 
-  return { primary, fallback, reason };
+  // ── Step 6: Fallback disabled? ────────────────────────────────────────────
+  const fallbackDisabled =
+    fallbackDisabledByPolicy          ||  // fallback provider is in DISABLED_PROVIDERS
+    isProviderDisabled(fallback)       ||  // re-check after swaps (edge case)
+    shouldBypassFallback(aiMode);         // aiMode is in DISABLE_FALLBACK_MODES
+
+  return {
+    primary, fallback, reason,
+    operatorForcedProvider, operatorCheapMode, operatorDisabledProvider,
+    fallbackDisabled, allDisabled: false,
+  };
 }
 
 // ─── routeTextRequest ─────────────────────────────────────────────────────────
@@ -124,20 +181,14 @@ export function selectProvider(aiMode?: string): RoutingDecision {
 /**
  * Execute a text request through the routing + timeout + fallback layer.
  *
- * Flow:
- *   1. Snapshot health state at selection time (for observability)
- *   2. selectProvider(aiMode) → { primary, fallback }
- *   3. execWithTimeout(primary, budget.primaryMs) — TimeoutError on deadline
- *   4. On primary failure (TimeoutError or provider error, NOT AbortError):
- *        a. recordProviderFailure(primary)
- *        b. compute effectiveFallbackMs from remaining budget
- *        c. execWithTimeout(fallback, effectiveFallbackMs)
- *        d. On fallback success: recordProviderSuccess(fallback); return with fallbackOccurred=true
- *        e. On fallback failure: recordProviderFailure(fallback); throw GatewayError
- *   5. Parent AbortError → propagate immediately (no fallback — user cancelled / outer timer)
+ * Batch 17 additions:
+ *   - Accepts `balance` for cheap-mode auto-trigger
+ *   - Checks allDisabled → throws GatewayError immediately
+ *   - Checks fallbackDisabled → skips fallback on primary failure
+ *   - Populates operator observability fields in RouteExecutionResult
  *
- * Throws GatewayError on total failure (both providers failed).
- * Never touches the credit ledger.
+ * Credit safety: this function never touches the credit ledger.
+ * Throws GatewayError on total failure (index.ts refunds credits).
  */
 export async function routeTextRequest(
   systemPrompt: string,
@@ -146,10 +197,23 @@ export async function routeTextRequest(
   signal:       AbortSignal,
   aiMode?:      string,
   budget:       RequestBudget = DEFAULT_BUDGET,
+  balance?:     number | null,
 ): Promise<RouteExecutionResult> {
   const healthAtSelection = getHealthSnapshot();
-  const decision          = selectProvider(aiMode);
+  const decision          = selectProvider(aiMode, balance);
   const startMs           = Date.now();
+
+  // Pull operator fields for inclusion in the result
+  const { operatorForcedProvider, operatorCheapMode, operatorDisabledProvider } = decision;
+
+  // ── Guard: all providers disabled ─────────────────────────────────────────
+  if (decision.allDisabled) {
+    throw new GatewayError(
+      'All providers are disabled by operator policy (DISABLED_PROVIDERS)',
+      false,
+      healthAtSelection,
+    );
+  }
 
   let timeoutOccurred = false;
 
@@ -171,23 +235,33 @@ export async function routeTextRequest(
       timeoutOccurred:   false,
       failureReason:     null,
       healthAtSelection,
+      operatorForcedProvider,
+      operatorCheapMode,
+      operatorDisabledProvider,
     };
   } catch (primaryErr: unknown) {
     const primaryMsg = primaryErr instanceof Error ? primaryErr.message : String(primaryErr);
 
-    // Parent signal aborted (client cancel or outer 25 s timer) — propagate, do NOT fallback
-    if (
-      primaryErr instanceof Error &&
-      primaryErr.name === 'AbortError'
-    ) {
+    // Parent signal aborted (client cancel / outer timer) — propagate, do NOT fallback
+    if (primaryErr instanceof Error && primaryErr.name === 'AbortError') {
       throw primaryErr;
     }
 
-    if (primaryErr instanceof TimeoutError) {
-      timeoutOccurred = true;
-    }
-
+    if (primaryErr instanceof TimeoutError) timeoutOccurred = true;
     recordProviderFailure(decision.primary);
+
+    // ── Guard: fallback disabled ───────────────────────────────────────────
+    if (decision.fallbackDisabled) {
+      console.warn(
+        `[providerRouter] primary "${decision.primary}" failed and fallback is disabled ` +
+        `(mode=${aiMode ?? 'unknown'}): ${primaryMsg}`,
+      );
+      throw new GatewayError(
+        `Primary (${decision.primary}) failed and fallback is disabled: ${primaryMsg}`,
+        timeoutOccurred,
+        healthAtSelection,
+      );
+    }
 
     console.warn(
       `[providerRouter] primary "${decision.primary}" failed (mode=${aiMode ?? 'unknown'}): ${primaryMsg}` +
@@ -195,8 +269,8 @@ export async function routeTextRequest(
     );
 
     // ── Fallback attempt ─────────────────────────────────────────────────────
-    const elapsedMs   = Date.now() - startMs;
-    const fallbackMs  = effectiveFallbackMs(budget, elapsedMs);
+    const elapsedMs  = Date.now() - startMs;
+    const fallbackMs = effectiveFallbackMs(budget, elapsedMs);
 
     try {
       const result = await execWithTimeout(
@@ -215,14 +289,15 @@ export async function routeTextRequest(
         timeoutOccurred,
         failureReason:     primaryMsg,
         healthAtSelection,
+        operatorForcedProvider,
+        operatorCheapMode,
+        operatorDisabledProvider,
       };
     } catch (fallbackErr: unknown) {
       const fallbackMsg = fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr);
       if (fallbackErr instanceof TimeoutError) timeoutOccurred = true;
       recordProviderFailure(decision.fallback);
-      console.error(
-        `[providerRouter] fallback "${decision.fallback}" also failed: ${fallbackMsg}`,
-      );
+      console.error(`[providerRouter] fallback "${decision.fallback}" also failed: ${fallbackMsg}`);
       throw new GatewayError(
         `All providers failed. Primary (${decision.primary}): ${primaryMsg}. ` +
         `Fallback (${decision.fallback}): ${fallbackMsg}`,

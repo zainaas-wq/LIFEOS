@@ -70,6 +70,10 @@ export interface RouteExecutionResult {
   timeoutOccurred:   boolean;        // true if primary (or fallback) timed out
   failureReason:     string | null;  // primary failure message when fallback was used; null on direct success
   healthAtSelection: Record<ProviderName, ProviderHealthState>; // snapshot at routing time
+  // Batch 17 operator observability fields
+  operatorForcedProvider:   ProviderName | null; // set when FORCE_PROVIDER overrode routing
+  operatorCheapMode:        boolean;             // true when cheap-mode routing was active
+  operatorDisabledProvider: ProviderName | null; // set when a provider was skipped due to DISABLED_PROVIDERS
 }
 
 // ─── Route policy decision ────────────────────────────────────────────────────
@@ -78,6 +82,12 @@ export interface RoutingDecision {
   primary:  ProviderName;
   fallback: ProviderName;
   reason:   string;
+  // Batch 17 operator control fields
+  operatorForcedProvider:   ProviderName | null; // non-null when FORCE_PROVIDER active
+  operatorCheapMode:        boolean;             // true when cheap-mode routing applied
+  operatorDisabledProvider: ProviderName | null; // provider that was skipped due to DISABLED_PROVIDERS
+  fallbackDisabled:         boolean;             // true → do not attempt fallback on primary failure
+  allDisabled:              boolean;             // true → both providers disabled; fail immediately
 }
 
 // ─── Batch 16: provider health and reliability types ─────────────────────────
