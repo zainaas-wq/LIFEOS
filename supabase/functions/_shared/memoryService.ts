@@ -9,6 +9,8 @@
  *   2. fetchUserMemory() — fail-safe SELECT for prompt injection
  *   3. upsertMemory()   — idempotent INSERT/UPDATE (ready for Block B+)
  *   4. buildMemoryContext() — converts rows to compact prompt section string
+ *   5. buildMemoryPromptSummary() — execution pattern narrative (Batch 18)
+ *   6. selectCoachingMemories() — mode-aware ranking + TTL filtering (Batch 18)
  *
  * Design contracts:
  *   - All functions are fail-open: errors produce empty/void results, never throws.
@@ -16,6 +18,10 @@
  *   - buildMemoryContext returns '' when records is empty — callers must guard
  *     against injecting an empty section into the prompt.
  *   - memory_value must be a JSON object (not array/scalar); enforced by app layer.
+ *
+ * Batch 18: selectCoachingMemories() replaces the raw updated_at DESC ordering
+ * with a two-step filter (TTL expiry) + sort (mode-aware type priority) before
+ * the records reach buildMemoryContext / buildMemoryPromptSummary.
  */
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -44,12 +50,17 @@ export interface MemoryRecord {
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 /**
- * Hard cap on records injected into the prompt.
- * 12 records × ~55 chars ≈ 660 chars ≈ 165 tokens — well within budget.
- * Records are ordered by updated_at DESC so the most-recently-relevant
- * preferences take priority when the cap is hit.
+ * Hard cap on records fetched from the database.
+ * Fetching more than needed lets the policy layer filter/rank before
+ * the final prompt cap is applied.
  */
-const MAX_MEMORY_RECORDS = 12;
+const MAX_MEMORY_RECORDS = 20;
+
+/**
+ * Maximum records injected into the prompt after policy ranking.
+ * 8 records × ~55 chars ≈ 440 chars ≈ 110 tokens — well within budget.
+ */
+const MAX_PROMPT_RECORDS = 8;
 
 /**
  * Human-readable labels for canonical memory keys.
@@ -78,6 +89,122 @@ const KEY_LABELS: Record<string, string> = {
   morning_routine:             'Morning routine',
   wind_down_routine:           'Wind-down routine',
 };
+
+// ─── Batch 18: Policy layer (inline — avoids cross-module import in Deno) ─────
+
+/**
+ * TTL in milliseconds per memory type.  0 = permanent (no expiry).
+ * Mirrors MEMORY_TTL_MS from src/ai/memoryPolicyEngine.ts.
+ */
+const MEMORY_TTL_MS: Record<MemoryType, number> = {
+  profile_preference:   0,
+  productivity_pattern: 30 * 24 * 60 * 60 * 1000,
+  coaching_preference:  90 * 24 * 60 * 60 * 1000,
+  goal:                 0,
+  habit:                45 * 24 * 60 * 60 * 1000,
+};
+
+const DURABLE_SAMPLE_THRESHOLD = 7;
+
+const ROLLING_TAKEAWAY_WINDOW = 7;  // exported for callers that build prompt summaries
+
+const MODE_MEMORY_PRIORITY: Record<string, MemoryType[]> = {
+  strategic_planning: ['goal', 'profile_preference', 'productivity_pattern', 'coaching_preference', 'habit'],
+  recovery_coach:     ['coaching_preference', 'productivity_pattern', 'profile_preference', 'goal', 'habit'],
+  review_reflection:  ['productivity_pattern', 'goal', 'coaching_preference', 'profile_preference', 'habit'],
+  quick_nudge:        ['productivity_pattern', 'coaching_preference', 'profile_preference', 'goal', 'habit'],
+  focused_answer:     ['productivity_pattern', 'coaching_preference', 'profile_preference', 'goal', 'habit'],
+};
+
+const DEFAULT_MEMORY_PRIORITY: MemoryType[] = [
+  'profile_preference', 'productivity_pattern', 'coaching_preference', 'goal', 'habit',
+];
+
+function _isExpired(record: MemoryRecord, nowMs: number): boolean {
+  const ttl = MEMORY_TTL_MS[record.memory_type] ?? 0;
+  if (ttl === 0) return false;
+  return nowMs - new Date(record.updated_at).getTime() > ttl;
+}
+
+function _isDurable(record: MemoryRecord): boolean {
+  if (record.memory_type !== 'productivity_pattern') return false;
+  const count = record.memory_value.sampleCount;
+  return typeof count === 'number' && count >= DURABLE_SAMPLE_THRESHOLD;
+}
+
+/**
+ * Filters and ranks memory records for prompt injection.
+ *
+ * Steps:
+ *   1. Remove expired records (durable records are exempt).
+ *   2. Sort by mode-specific type priority → recency tiebreaker.
+ *   3. Cap at MAX_PROMPT_RECORDS.
+ *
+ * @param records  All records fetched for the user.
+ * @param aiMode   AI request mode string (determines priority order).
+ */
+export function selectCoachingMemories(
+  records: MemoryRecord[],
+  aiMode?: string,
+): MemoryRecord[] {
+  const nowMs    = Date.now();
+  const live     = records.filter((r) => _isDurable(r) || !_isExpired(r, nowMs));
+  const priority = (aiMode && MODE_MEMORY_PRIORITY[aiMode]) ?? DEFAULT_MEMORY_PRIORITY;
+
+  const sorted = [...live].sort((a, b) => {
+    const aIdx  = priority.indexOf(a.memory_type);
+    const bIdx  = priority.indexOf(b.memory_type);
+    const aNorm = aIdx === -1 ? priority.length : aIdx;
+    const bNorm = bIdx === -1 ? priority.length : bIdx;
+    if (aNorm !== bNorm) return aNorm - bNorm;
+    return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime();
+  });
+
+  return sorted.slice(0, MAX_PROMPT_RECORDS);
+}
+
+/**
+ * Builds a compact EXECUTION PATTERNS narrative section from selected records.
+ *
+ * Returns '' when no productivity_pattern record is in the set.
+ * Callers must guard before injecting a section header into the prompt.
+ *
+ * Example output:
+ *   ═══ EXECUTION PATTERNS ═══
+ *   • Recent pattern: avoidance_pattern (7-day avg: 58% completion)
+ *   • Rolling patterns: solid_day, clean_day, avoidance_pattern
+ *   • Recurring drift: avoidance
+ */
+export function buildMemoryPromptSummary(records: MemoryRecord[]): string {
+  const pr = records.find((r) => r.memory_type === 'productivity_pattern');
+  if (!pr) return '';
+
+  const v = pr.memory_value;
+  const lines: string[] = [];
+
+  const takeaway    = typeof v.systemTakeaway   === 'string' ? v.systemTakeaway   : null;
+  const avgRate     = typeof v.avgCompletionRate === 'number' ? v.avgCompletionRate : null;
+  const sampleCount = typeof v.sampleCount      === 'number' ? v.sampleCount      : null;
+  const rolling     = Array.isArray(v.rollingTakeaways) ? (v.rollingTakeaways as string[]) : [];
+
+  if (takeaway) {
+    const sample = sampleCount && sampleCount > 1 ? `${sampleCount}-day` : 'latest';
+    const avgStr = avgRate !== null ? ` (${sample} avg: ${Math.round(avgRate * 100)}% completion)` : '';
+    lines.push(`• Recent pattern: ${takeaway}${avgStr}`);
+  }
+
+  if (rolling.length > 1) {
+    lines.push(`• Rolling patterns: ${rolling.slice(-5).join(', ')}`);
+  }
+
+  const drift = typeof v.dominantDrift === 'string' && v.dominantDrift ? v.dominantDrift : null;
+  if (drift) lines.push(`• Recurring drift: ${drift}`);
+
+  if (lines.length === 0) return '';
+  return '═══ EXECUTION PATTERNS ═══\n' + lines.join('\n');
+}
+
+export { ROLLING_TAKEAWAY_WINDOW };
 
 // ─── Database helpers ─────────────────────────────────────────────────────────
 

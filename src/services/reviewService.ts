@@ -35,7 +35,9 @@
 import { supabase } from '../lib/supabase';
 import { upsertMemory } from './memoryService';
 import { generateReviewMemorySignals } from '../ai/reviewEngine';
+import { shouldStoreMemory, STABLE_SIGNAL_KEYS } from '../ai/memoryPolicyEngine';
 import type { DailyReview } from '../types';
+import type { MemoryType } from './memoryService';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const table = () => (supabase as any).from('daily_reviews');
@@ -82,13 +84,18 @@ export async function saveDailyReview(
   }
 
   // Emit memory signals — fire and forget, never blocks the save result.
+  // Quality gate: low-signal reviews (e.g. no tasks, zero focus) are skipped.
+  // Stable keys: one row per signal type per user — avoids date-keyed pollution.
   const signals = generateReviewMemorySignals(review);
   for (const signal of signals) {
-    upsertMemory({
-      memoryType:  signal.signalType,
-      memoryKey:   `${signal.signalType}_${signal.date}`,
-      memoryValue: JSON.parse(signal.content) as Record<string, unknown>,
-    }).catch(console.warn);
+    const memoryType  = signal.signalType as MemoryType;
+    const memoryKey   = STABLE_SIGNAL_KEYS[memoryType] ?? signal.signalType;
+    const memoryValue = JSON.parse(signal.content) as Record<string, unknown>;
+
+    const candidate = { memoryType, memoryKey, memoryValue };
+    if (!shouldStoreMemory(candidate)) continue;
+
+    upsertMemory({ memoryType, memoryKey, memoryValue }).catch(console.warn);
   }
 }
 
