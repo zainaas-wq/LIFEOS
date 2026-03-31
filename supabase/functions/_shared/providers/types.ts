@@ -61,11 +61,15 @@ export interface ProviderAdapter {
  * Contains everything needed for logging and credit accounting.
  */
 export interface RouteExecutionResult {
-  result:           ProviderResult;
-  providerSelected: ProviderName;   // what the policy chose
-  providerUsed:     ProviderName;   // what actually responded
-  fallbackOccurred: boolean;        // true if primary failed and secondary succeeded
-  latencyMs:        number;
+  result:            ProviderResult;
+  providerSelected:  ProviderName;   // what the policy chose
+  providerUsed:      ProviderName;   // what actually responded
+  fallbackOccurred:  boolean;        // true if primary failed and secondary succeeded
+  latencyMs:         number;
+  // Batch 16 reliability fields
+  timeoutOccurred:   boolean;        // true if primary (or fallback) timed out
+  failureReason:     string | null;  // primary failure message when fallback was used; null on direct success
+  healthAtSelection: Record<ProviderName, ProviderHealthState>; // snapshot at routing time
 }
 
 // ─── Route policy decision ────────────────────────────────────────────────────
@@ -74,4 +78,24 @@ export interface RoutingDecision {
   primary:  ProviderName;
   fallback: ProviderName;
   reason:   string;
+}
+
+// ─── Batch 16: provider health and reliability types ─────────────────────────
+
+/** Per-provider health state at a point in time. */
+export type ProviderHealthState = 'healthy' | 'unhealthy';
+
+/**
+ * Thrown by routeTextRequest when both primary and fallback providers fail.
+ * Carries structured observability fields so index.ts can log even on total failure.
+ */
+export class GatewayError extends Error {
+  constructor(
+    message:                                                  string,
+    public readonly timeoutOccurred:     boolean,
+    public readonly healthAtSelection:   Record<ProviderName, ProviderHealthState>,
+  ) {
+    super(message);
+    this.name = 'GatewayError';
+  }
 }

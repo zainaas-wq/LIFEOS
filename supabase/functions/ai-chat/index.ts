@@ -42,7 +42,8 @@ import {
   buildRecoverySystemPrompt,
 } from '../_shared/recoveryService.ts';
 import { routeTextRequest, modelNameForLogging } from '../_shared/providerRouter.ts';
-import type { RouteExecutionResult } from '../_shared/providers/types.ts';
+import { GatewayError } from '../_shared/providers/types.ts';
+import type { RouteExecutionResult, ProviderHealthState, ProviderName } from '../_shared/providers/types.ts';
 
 // ─── Credit costs (server-authoritative) ─────────────────────────────────────
 
@@ -538,20 +539,24 @@ function classifyAction(msg: string): string {
 // ─── Usage logging ────────────────────────────────────────────────────────────
 
 interface UsageLogEntry {
-  user_id:           string;
-  provider:          string;
-  provider_selected: string;
-  provider_used:     string;
-  fallback_occurred: boolean;
-  model:             string;
-  prompt_tokens:     number;
-  completion_tokens: number;
-  total_tokens:      number;
-  action:            string;
-  request_mode:      string;
-  credits_used:      number;
-  latency_ms:        number;
-  ai_mode:           string | null;
+  user_id:                        string;
+  provider:                       string;
+  provider_selected:              string;
+  provider_used:                  string;
+  fallback_occurred:              boolean;
+  model:                          string;
+  prompt_tokens:                  number;
+  completion_tokens:              number;
+  total_tokens:                   number;
+  action:                         string;
+  request_mode:                   string;
+  credits_used:                   number;
+  latency_ms:                     number;
+  ai_mode:                        string | null;
+  // Batch 16 reliability fields
+  failure_reason:                 string | null;
+  timeout_occurred:               boolean;
+  provider_health_at_selection:   Record<ProviderName, ProviderHealthState> | null;
 }
 
 // deno-lint-ignore no-explicit-any
@@ -671,20 +676,23 @@ Deno.serve(async (req: Request) => {
       }
 
       logUsage(adminClient, {
-        user_id:           user.id,
-        provider:          'openai',
-        provider_selected: 'openai',
-        provider_used:     'openai',
-        fallback_occurred: false,
-        model:             OPENAI_VISION_MODEL,
-        prompt_tokens:     tokenUsage?.promptTokens     ?? 0,
-        completion_tokens: tokenUsage?.completionTokens ?? 0,
-        total_tokens:      tokenUsage?.totalTokens      ?? 0,
-        action:            'image_request',
-        request_mode:      requestMode,
-        credits_used:      creditCost,
-        latency_ms:        Date.now() - requestStart,
-        ai_mode:           aiMode,
+        user_id:                       user.id,
+        provider:                      'openai',
+        provider_selected:             'openai',
+        provider_used:                 'openai',
+        fallback_occurred:             false,
+        model:                         OPENAI_VISION_MODEL,
+        prompt_tokens:                 tokenUsage?.promptTokens     ?? 0,
+        completion_tokens:             tokenUsage?.completionTokens ?? 0,
+        total_tokens:                  tokenUsage?.totalTokens      ?? 0,
+        action:                        'image_request',
+        request_mode:                  requestMode,
+        credits_used:                  creditCost,
+        latency_ms:                    Date.now() - requestStart,
+        ai_mode:                       aiMode,
+        failure_reason:                null,
+        timeout_occurred:              false,
+        provider_health_at_selection:  null,
       });
 
       return successResponse(textContent, creditResult.balanceAfter, tokenUsage);
@@ -721,20 +729,23 @@ Deno.serve(async (req: Request) => {
       }
 
       logUsage(adminClient, {
-        user_id:           user.id,
-        provider:          routeResult.providerUsed,
-        provider_selected: routeResult.providerSelected,
-        provider_used:     routeResult.providerUsed,
-        fallback_occurred: routeResult.fallbackOccurred,
-        model:             OPENAI_AUDIO_MODEL + '+' + modelNameForLogging(routeResult.providerUsed),
-        prompt_tokens:     routeResult.result.usage.promptTokens,
-        completion_tokens: routeResult.result.usage.completionTokens,
-        total_tokens:      routeResult.result.usage.totalTokens,
-        action:            'voice_request',
-        request_mode:      requestMode,
-        credits_used:      creditCost,
-        latency_ms:        routeResult.latencyMs,
-        ai_mode:           aiMode,
+        user_id:                       user.id,
+        provider:                      routeResult.providerUsed,
+        provider_selected:             routeResult.providerSelected,
+        provider_used:                 routeResult.providerUsed,
+        fallback_occurred:             routeResult.fallbackOccurred,
+        model:                         OPENAI_AUDIO_MODEL + '+' + modelNameForLogging(routeResult.providerUsed),
+        prompt_tokens:                 routeResult.result.usage.promptTokens,
+        completion_tokens:             routeResult.result.usage.completionTokens,
+        total_tokens:                  routeResult.result.usage.totalTokens,
+        action:                        'voice_request',
+        request_mode:                  requestMode,
+        credits_used:                  creditCost,
+        latency_ms:                    routeResult.latencyMs,
+        ai_mode:                       aiMode,
+        failure_reason:                routeResult.failureReason,
+        timeout_occurred:              routeResult.timeoutOccurred,
+        provider_health_at_selection:  routeResult.healthAtSelection,
       });
 
       return successResponse(textContent, creditResult.balanceAfter, tokenUsage);
@@ -789,20 +800,23 @@ Deno.serve(async (req: Request) => {
       }
 
       logUsage(adminClient, {
-        user_id:           user.id,
-        provider:          routeResult.providerUsed,
-        provider_selected: routeResult.providerSelected,
-        provider_used:     routeResult.providerUsed,
-        fallback_occurred: routeResult.fallbackOccurred,
-        model:             modelNameForLogging(routeResult.providerUsed),
-        prompt_tokens:     routeResult.result.usage.promptTokens,
-        completion_tokens: routeResult.result.usage.completionTokens,
-        total_tokens:      routeResult.result.usage.totalTokens,
+        user_id:                       user.id,
+        provider:                      routeResult.providerUsed,
+        provider_selected:             routeResult.providerSelected,
+        provider_used:                 routeResult.providerUsed,
+        fallback_occurred:             routeResult.fallbackOccurred,
+        model:                         modelNameForLogging(routeResult.providerUsed),
+        prompt_tokens:                 routeResult.result.usage.promptTokens,
+        completion_tokens:             routeResult.result.usage.completionTokens,
+        total_tokens:                  routeResult.result.usage.totalTokens,
         action,
-        request_mode:      requestMode,
-        credits_used:      creditCost,
-        latency_ms:        routeResult.latencyMs,
-        ai_mode:           aiMode,
+        request_mode:                  requestMode,
+        credits_used:                  creditCost,
+        latency_ms:                    routeResult.latencyMs,
+        ai_mode:                       aiMode,
+        failure_reason:                routeResult.failureReason,
+        timeout_occurred:              routeResult.timeoutOccurred,
+        provider_health_at_selection:  routeResult.healthAtSelection,
       });
 
       return successResponse(textContent, creditResult.balanceAfter, tokenUsage);
@@ -816,7 +830,33 @@ Deno.serve(async (req: Request) => {
     const name = err instanceof Error ? err.name : '';
     const msg  = err instanceof Error ? err.message : String(err);
 
+    // Log structured failure for GatewayError (both providers failed)
+    if (err instanceof GatewayError) {
+      logUsage(adminClient, {
+        user_id:                       user.id,
+        provider:                      'none',
+        provider_selected:             'unknown',
+        provider_used:                 'none',
+        fallback_occurred:             true,
+        model:                         'none',
+        prompt_tokens:                 0,
+        completion_tokens:             0,
+        total_tokens:                  0,
+        action:                        'failed',
+        request_mode:                  requestMode,
+        credits_used:                  0,   // refunded
+        latency_ms:                    Date.now() - requestStart,
+        ai_mode:                       aiMode,
+        failure_reason:                msg,
+        timeout_occurred:              err.timeoutOccurred,
+        provider_health_at_selection:  err.healthAtSelection,
+      });
+    }
+
     if (name === 'AbortError' || msg.includes('AbortError') || msg.toLowerCase().includes('aborted')) {
+      return errorResponse('AI provider timed out', 'timeout', 504);
+    }
+    if (name === 'TimeoutError') {
       return errorResponse('AI provider timed out', 'timeout', 504);
     }
 

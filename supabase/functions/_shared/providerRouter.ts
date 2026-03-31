@@ -1,49 +1,63 @@
 /**
  * providerRouter.ts — Multi-provider AI routing, fallback, and execution.
  *
- * Responsibilities:
- *   1. Select primary + fallback provider from request mode and env policy
- *   2. Execute primary → on failure, execute fallback once
- *   3. Return full RouteExecutionResult (provider selected, used, fallback flag, latency)
- *   4. NEVER charge credits twice — caller deducts once; this layer only executes
+ * Batch 16 additions on top of Batch 15:
+ *   - Per-provider timeout via execWithTimeout (primary / fallback each get a deadline)
+ *   - effectiveFallbackMs caps fallback timeout by remaining total budget
+ *   - selectProvider now checks providerHealth before committing to a primary;
+ *     unhealthy primary is swapped with fallback so healthy providers are preferred
+ *   - recordProviderSuccess / recordProviderFailure called after every attempt
+ *   - RouteExecutionResult carries timeoutOccurred, failureReason, healthAtSelection
+ *   - Throws GatewayError (not plain Error) on total failure, carrying observability fields
  *
- * Credit safety contract:
- *   - Credits are consumed by index.ts BEFORE calling routeTextRequest().
- *   - If primary succeeds: credits stay deducted. Done.
- *   - If primary fails AND fallback succeeds: credits stay deducted. Done.
- *     (One deduction covers the whole logical request, regardless of provider used.)
- *   - If primary AND fallback both fail: caller (index.ts) refunds credits.
- *   - This module NEVER touches the credit ledger.
+ * Credit safety contract (unchanged from Batch 15):
+ *   Credits are consumed by index.ts BEFORE calling routeTextRequest().
+ *   This module NEVER touches the credit ledger.
+ *   If both providers fail → throw GatewayError → index.ts refunds.
  *
- * Routing policy (text mode only — voice/image stay on OpenAI):
+ * Routing policy (text mode — voice/image stay on OpenAI):
  *
- *   Mode                  Primary   Fallback   Rationale
- *   ─────────────────────────────────────────────────────────────────────────
- *   quick_nudge           NIM       OpenAI     Short, action-first — NIM is fast + cheap
- *   focused_answer        NIM       OpenAI     Conversational — NIM handles well
- *   recovery_coach        OpenAI    NIM        Needs empathy + nuance — OpenAI quality
- *   strategic_planning    OpenAI    NIM        Complex multi-step reasoning — OpenAI
- *   review_reflection     OpenAI    NIM        Interpretive, pattern-rich — OpenAI
- *   (unknown / absent)   OpenAI    NIM        Safe default — prefer quality
+ *   Mode                  Normal primary   Rationale
+ *   ─────────────────────────────────────────────────────────────────────────────
+ *   quick_nudge           NIM              Short, action-first — fast + cheap
+ *   focused_answer        NIM              Conversational — NIM handles well
+ *   recovery_coach        OpenAI           Empathy/nuance — OpenAI quality
+ *   strategic_planning    OpenAI           Complex multi-step — OpenAI reasoning
+ *   review_reflection     OpenAI           Interpretive analysis — OpenAI quality
+ *   (unknown / absent)    OpenAI           Safe quality default
  *
- * Policy override:
- *   FORCE_PROVIDER env var overrides the routing table entirely.
- *   Set to "openai" or "nim" to pin all text requests to one provider.
- *   Useful for testing, cost management, or provider outage mitigation.
+ * Health override:
+ *   If the routing-table primary is UNHEALTHY, its fallback is promoted to primary.
+ *   FORCE_PROVIDER bypasses the health check entirely (explicit operator intent).
  */
 
 import { OpenAIAdapter } from './providers/openai.ts';
 import { NIMAdapter }    from './providers/nim.ts';
 import type {
   AIRequestMode,
+  GatewayError as IGatewayError,
   HistoryMessage,
   ProviderAdapter,
   ProviderName,
   RouteExecutionResult,
   RoutingDecision,
 } from './providers/types.ts';
+import { GatewayError } from './providers/types.ts';
+import {
+  execWithTimeout,
+  effectiveFallbackMs,
+  DEFAULT_BUDGET,
+  TimeoutError,
+} from './requestBudget.ts';
+import type { RequestBudget } from './requestBudget.ts';
+import {
+  getHealthSnapshot,
+  getProviderHealth,
+  recordProviderSuccess,
+  recordProviderFailure,
+} from './providerHealth.ts';
 
-// ─── Provider singletons (instantiated once per function invocation) ──────────
+// ─── Provider singletons ──────────────────────────────────────────────────────
 
 const OPENAI = new OpenAIAdapter();
 const NIM    = new NIMAdapter();
@@ -55,60 +69,74 @@ const PROVIDERS: Record<ProviderName, ProviderAdapter> = {
 
 // ─── Routing table ────────────────────────────────────────────────────────────
 
-/**
- * Mode-to-provider routing table.
- * Fallback is always the other provider.
- */
 const ROUTING_TABLE: Record<AIRequestMode, { primary: ProviderName; reason: string }> = {
-  quick_nudge:       { primary: 'nim',    reason: 'short action request — NIM is faster and cheaper' },
-  focused_answer:    { primary: 'nim',    reason: 'conversational — NIM handles well at lower cost' },
-  recovery_coach:    { primary: 'openai', reason: 'requires empathy and nuance — OpenAI quality' },
-  strategic_planning:{ primary: 'openai', reason: 'complex multi-step planning — OpenAI reasoning' },
-  review_reflection: { primary: 'openai', reason: 'interpretive analysis of patterns — OpenAI quality' },
+  quick_nudge:        { primary: 'nim',    reason: 'short action request — NIM is faster and cheaper' },
+  focused_answer:     { primary: 'nim',    reason: 'conversational — NIM handles well at lower cost' },
+  recovery_coach:     { primary: 'openai', reason: 'requires empathy and nuance — OpenAI quality' },
+  strategic_planning: { primary: 'openai', reason: 'complex multi-step planning — OpenAI reasoning' },
+  review_reflection:  { primary: 'openai', reason: 'interpretive analysis of patterns — OpenAI quality' },
 };
 
 // ─── selectProvider ───────────────────────────────────────────────────────────
 
 /**
- * Determine which provider to use as primary and which as fallback.
+ * Determine primary + fallback provider for a request.
  *
- * Respects FORCE_PROVIDER env override, then routing table, then defaults to OpenAI.
+ * Priority order:
+ *   1. FORCE_PROVIDER env var  — operator override, bypasses health check
+ *   2. Routing table + health  — if table primary is unhealthy, promote fallback
+ *   3. Default (OpenAI)        — for unknown or absent aiMode
  */
 export function selectProvider(aiMode?: string): RoutingDecision {
-  // Env override: FORCE_PROVIDER pins everything
+  // 1. Env override (bypasses health check — explicit operator intent)
   const force = (Deno.env.get('FORCE_PROVIDER') ?? '').trim().toLowerCase() as ProviderName | '';
   if (force === 'openai' || force === 'nim') {
     const fallback: ProviderName = force === 'openai' ? 'nim' : 'openai';
+    return { primary: force, fallback, reason: 'forced by FORCE_PROVIDER env var' };
+  }
+
+  // 2. Routing table
+  const mode  = aiMode as AIRequestMode | undefined;
+  const entry = mode ? ROUTING_TABLE[mode] : undefined;
+
+  let primary: ProviderName  = entry?.primary ?? 'openai';
+  let fallback: ProviderName = primary === 'openai' ? 'nim' : 'openai';
+  let reason: string         = entry?.reason ?? 'unknown mode — defaulting to OpenAI';
+
+  // 3. Health check — if table primary is unhealthy, promote fallback
+  const primaryHealth = getProviderHealth(primary);
+  if (primaryHealth === 'unhealthy') {
+    console.warn(
+      `[providerRouter] primary "${primary}" is UNHEALTHY — promoting "${fallback}" for mode=${aiMode ?? 'unknown'}`,
+    );
     return {
-      primary:  force,
-      fallback,
-      reason:   `forced by FORCE_PROVIDER env var`,
+      primary:  fallback,
+      fallback: primary,
+      reason:   `${reason} [primary unhealthy — swapped to ${fallback}]`,
     };
   }
 
-  const mode = aiMode as AIRequestMode | undefined;
-  if (mode && ROUTING_TABLE[mode]) {
-    const entry = ROUTING_TABLE[mode];
-    const fallback: ProviderName = entry.primary === 'openai' ? 'nim' : 'openai';
-    return { primary: entry.primary, fallback, reason: entry.reason };
-  }
-
-  // Unknown mode: safe default
-  return { primary: 'openai', fallback: 'nim', reason: 'unknown mode — defaulting to OpenAI' };
+  return { primary, fallback, reason };
 }
 
 // ─── routeTextRequest ─────────────────────────────────────────────────────────
 
 /**
- * Execute a text request through the routing + fallback layer.
+ * Execute a text request through the routing + timeout + fallback layer.
  *
  * Flow:
- *   1. selectProvider(aiMode) → { primary, fallback }
- *   2. Try primary provider
- *   3. On primary failure → log warning → try fallback provider
- *   4. On fallback failure → throw (caller refunds credits)
+ *   1. Snapshot health state at selection time (for observability)
+ *   2. selectProvider(aiMode) → { primary, fallback }
+ *   3. execWithTimeout(primary, budget.primaryMs) — TimeoutError on deadline
+ *   4. On primary failure (TimeoutError or provider error, NOT AbortError):
+ *        a. recordProviderFailure(primary)
+ *        b. compute effectiveFallbackMs from remaining budget
+ *        c. execWithTimeout(fallback, effectiveFallbackMs)
+ *        d. On fallback success: recordProviderSuccess(fallback); return with fallbackOccurred=true
+ *        e. On fallback failure: recordProviderFailure(fallback); throw GatewayError
+ *   5. Parent AbortError → propagate immediately (no fallback — user cancelled / outer timer)
  *
- * Returns RouteExecutionResult with full observability metadata.
+ * Throws GatewayError on total failure (both providers failed).
  * Never touches the credit ledger.
  */
 export async function routeTextRequest(
@@ -117,58 +145,89 @@ export async function routeTextRequest(
   userMessage:  string,
   signal:       AbortSignal,
   aiMode?:      string,
+  budget:       RequestBudget = DEFAULT_BUDGET,
 ): Promise<RouteExecutionResult> {
-  const decision = selectProvider(aiMode);
-  const startMs  = Date.now();
+  const healthAtSelection = getHealthSnapshot();
+  const decision          = selectProvider(aiMode);
+  const startMs           = Date.now();
 
-  const primary  = PROVIDERS[decision.primary];
-  const fallback = PROVIDERS[decision.fallback];
+  let timeoutOccurred = false;
 
   // ── Primary attempt ────────────────────────────────────────────────────────
   try {
-    const result = await primary.callText(systemPrompt, history, userMessage, signal);
+    const result = await execWithTimeout(
+      (s) => PROVIDERS[decision.primary].callText(systemPrompt, history, userMessage, s),
+      budget.primaryMs,
+      signal,
+      decision.primary,
+    );
+    recordProviderSuccess(decision.primary);
     return {
       result,
-      providerSelected: decision.primary,
-      providerUsed:     decision.primary,
-      fallbackOccurred: false,
-      latencyMs:        Date.now() - startMs,
+      providerSelected:  decision.primary,
+      providerUsed:      decision.primary,
+      fallbackOccurred:  false,
+      latencyMs:         Date.now() - startMs,
+      timeoutOccurred:   false,
+      failureReason:     null,
+      healthAtSelection,
     };
   } catch (primaryErr: unknown) {
     const primaryMsg = primaryErr instanceof Error ? primaryErr.message : String(primaryErr);
 
-    // Abort signal fired — do not attempt fallback, let caller handle
+    // Parent signal aborted (client cancel or outer 25 s timer) — propagate, do NOT fallback
     if (
       primaryErr instanceof Error &&
-      (primaryErr.name === 'AbortError' || primaryMsg.includes('aborted'))
+      primaryErr.name === 'AbortError'
     ) {
       throw primaryErr;
     }
 
+    if (primaryErr instanceof TimeoutError) {
+      timeoutOccurred = true;
+    }
+
+    recordProviderFailure(decision.primary);
+
     console.warn(
-      `[providerRouter] primary provider "${decision.primary}" failed (mode=${aiMode ?? 'unknown'}): ${primaryMsg}` +
-      ` — attempting fallback to "${decision.fallback}"`,
+      `[providerRouter] primary "${decision.primary}" failed (mode=${aiMode ?? 'unknown'}): ${primaryMsg}` +
+      ` — fallback to "${decision.fallback}"`,
     );
 
     // ── Fallback attempt ─────────────────────────────────────────────────────
+    const elapsedMs   = Date.now() - startMs;
+    const fallbackMs  = effectiveFallbackMs(budget, elapsedMs);
+
     try {
-      const result = await fallback.callText(systemPrompt, history, userMessage, signal);
+      const result = await execWithTimeout(
+        (s) => PROVIDERS[decision.fallback].callText(systemPrompt, history, userMessage, s),
+        fallbackMs,
+        signal,
+        decision.fallback,
+      );
+      recordProviderSuccess(decision.fallback);
       return {
         result,
-        providerSelected: decision.primary,
-        providerUsed:     decision.fallback,
-        fallbackOccurred: true,
-        latencyMs:        Date.now() - startMs,
+        providerSelected:  decision.primary,
+        providerUsed:      decision.fallback,
+        fallbackOccurred:  true,
+        latencyMs:         Date.now() - startMs,
+        timeoutOccurred,
+        failureReason:     primaryMsg,
+        healthAtSelection,
       };
     } catch (fallbackErr: unknown) {
       const fallbackMsg = fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr);
+      if (fallbackErr instanceof TimeoutError) timeoutOccurred = true;
+      recordProviderFailure(decision.fallback);
       console.error(
-        `[providerRouter] fallback provider "${decision.fallback}" also failed: ${fallbackMsg}`,
+        `[providerRouter] fallback "${decision.fallback}" also failed: ${fallbackMsg}`,
       );
-      // Both providers failed — throw so index.ts refunds credits
-      throw new Error(
+      throw new GatewayError(
         `All providers failed. Primary (${decision.primary}): ${primaryMsg}. ` +
         `Fallback (${decision.fallback}): ${fallbackMsg}`,
+        timeoutOccurred,
+        healthAtSelection,
       );
     }
   }
@@ -177,7 +236,7 @@ export async function routeTextRequest(
 // ─── modelNameForLogging ──────────────────────────────────────────────────────
 
 /**
- * Returns the model name string for ai_usage_log, given the provider that actually ran.
+ * Returns the model string for ai_usage_log, given the provider that ran.
  */
 export function modelNameForLogging(provider: ProviderName): string {
   if (provider === 'nim') return 'meta/llama-3.1-8b-instruct';
