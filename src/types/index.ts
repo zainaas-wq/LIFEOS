@@ -813,6 +813,98 @@ export interface AdaptationHints {
   reviewCount: number;
 }
 
+// ─── Weekly / Monthly Intelligence — Batch 19 ────────────────────────────────
+
+/**
+ * High-level character of a week derived from review + drift signals.
+ *
+ * strong           — high completion, low drift
+ * stable           — consistent moderate performance
+ * volatile         — high variance between days
+ * overloaded       — overload drift is dominant pattern
+ * rebuilding       — recovery used >= 3 days; system is self-correcting
+ * insufficient_data — fewer than 3 reviewed days; no reliable pattern yet
+ */
+export type WeekCharacter =
+  | 'strong'
+  | 'stable'
+  | 'volatile'
+  | 'overloaded'
+  | 'rebuilding'
+  | 'insufficient_data';
+
+/**
+ * Direction of the user's execution momentum.
+ */
+export type MomentumState =
+  | 'building'          // improving trend, quality rising
+  | 'maintaining'       // flat but consistently good
+  | 'recovering'        // was worse, now visibly improving
+  | 'stalled'           // flat or declining, low quality
+  | 'insufficient_data';
+
+/**
+ * A single actionable strategic recommendation derived from weekly/monthly signals.
+ */
+export interface StrategicRecommendation {
+  /** Short action directive (e.g. "reduce weekly load"). */
+  action: string;
+  /** Why this action is recommended now. */
+  rationale: string;
+  priority: 'high' | 'medium' | 'low';
+  /** The signal that triggered this recommendation. */
+  signal: string;
+}
+
+/**
+ * Weekly intelligence — computed from DailyReview[] for a given 7-day window.
+ * Pure derived state; never persisted. Recomputed on demand from review records.
+ */
+export interface WeeklyIntelligence {
+  weekStart: string;                   // YYYY-MM-DD (Monday)
+  weekEnd: string;                     // YYYY-MM-DD (Sunday)
+  reviewedDays: number;                // 0–7: number of days with a saved review
+  avgCompletionRate: number;           // 0–1 mean across days with tasks
+  totalFocusMinutes: number;
+  completionRates: number[];           // per-day completion rates (chronological order)
+  recoveryDependence: 'none' | 'occasional' | 'frequent';
+  dominantDriftPattern: DriftType | null;
+  weekCharacter: WeekCharacter;
+  executionQuality: 'high' | 'medium' | 'low' | 'insufficient_data';
+  reviewConsistency: number;           // 0–1 (reviewedDays / 7)
+  momentumTrend: 'improving' | 'flat' | 'declining' | 'insufficient_data';
+  systemTakeaways: string[];           // daily systemTakeaway tags (non-null only)
+}
+
+/**
+ * Monthly intelligence — computed from DailyReview[] for the last 30 days.
+ * Data-sparse guard: most fields are 'insufficient_data' with < 7 reviewed days.
+ */
+export interface MonthlyIntelligence {
+  periodStart: string;    // YYYY-MM-DD 30 days before periodEnd
+  periodEnd: string;      // YYYY-MM-DD (today)
+  reviewedDays: number;
+  avgCompletionRate: number;
+  executionTrend: 'improving' | 'declining' | 'oscillating' | 'flat' | 'insufficient_data';
+  routineStability: 'stable' | 'unstable' | 'insufficient_data';
+  /** Drift types that appeared in >= 40% of reviewed days. */
+  repeatedBreakdownPatterns: DriftType[];
+  monthlyInterpretation: 'progressing' | 'oscillating' | 'decaying' | 'building' | 'insufficient_data';
+}
+
+/**
+ * Full strategic intelligence packet — weekly + monthly + derived signals.
+ * Injected into the AI coach context at 'rich' depth.
+ */
+export interface StrategicIntelligenceSummary {
+  weekly: WeeklyIntelligence;
+  monthly: MonthlyIntelligence;
+  momentumState: MomentumState;
+  recommendations: StrategicRecommendation[];
+  /** Compact prompt section ready for system prompt injection. */
+  coachSummary: string;
+}
+
 // ─── Legacy type stubs — deprecated, kept for compile compat ─────────────────
 // These types are used by files pending deletion or active files that still
 // import legacy helpers (goals.tsx → weeklyPlanner, store → planGenerator).

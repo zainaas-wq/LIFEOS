@@ -313,6 +313,19 @@ export function buildAIContextPacket(
           },
         }
       : {}),
+    // Batch 19: strategic intelligence (weekly + monthly trajectory)
+    ...(ctx.strategicIntelligence?.coachSummary
+      ? {
+          strategicIntelligence: {
+            weekCharacter:          ctx.strategicIntelligence.weekly.weekCharacter,
+            momentumState:          ctx.strategicIntelligence.momentumState,
+            monthlyInterpretation:  ctx.strategicIntelligence.monthly.monthlyInterpretation,
+            recoveryDependence:     ctx.strategicIntelligence.weekly.recoveryDependence,
+            topRecommendation:      ctx.strategicIntelligence.recommendations[0]?.action ?? null,
+            coachSummary:           ctx.strategicIntelligence.coachSummary,
+          },
+        }
+      : {}),
   };
 }
 

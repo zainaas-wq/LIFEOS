@@ -1,4 +1,4 @@
-import type { ChatMessage, Goal, SkillPlan, Rule, ScheduleEvent, Plan, FocusSession, RecoveryMode } from '../types';
+import type { ChatMessage, Goal, SkillPlan, Rule, ScheduleEvent, Plan, FocusSession, RecoveryMode, StrategicIntelligenceSummary } from '../types';
 import type { PredictedRiskType } from './predictiveEngine';
 import type { AIRequestMode, ContextDepth } from './orchestrationEngine';
 
@@ -78,6 +78,8 @@ export interface AIContext {
   responseStyleHint?: string;
   /** Context depth selected by the orchestration layer. */
   contextDepth?: ContextDepth;
+  /** Batch 19: weekly + monthly strategic intelligence — injected at rich depth. */
+  strategicIntelligence?: StrategicIntelligenceSummary;
 }
 
 // ─── Abstract interface ───────────────────────────────────────────────────────
