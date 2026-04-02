@@ -68,6 +68,14 @@ import { computeAdaptationHints } from '../ai/adaptationEngine';
 import { computeRecoveryStats } from '../ai/metricsEngine';
 import { predictDrift, rankRecoveryModes } from '../ai/predictiveEngine';
 import { explainPlanIntensity, buildPredictionContext } from '../ai/decisionExplanationEngine';
+import {
+  computeWeeklyIntelligence,
+  computeMonthlyIntelligence,
+  getMomentumState,
+  buildStrategicRecommendations,
+  buildStrategicCoachSummary,
+  getWeekStartForIntelligence,
+} from '../ai/intelligenceEngine';
 import { computeStreakData } from '../ai/retentionEngine';
 import { track } from '../services/analyticsService';
 import { computePressure } from '../ai/executionEngine';
@@ -2003,6 +2011,15 @@ export const useAIContext = () =>
     ).length ?? 0;
     const planExpl = explainPlanIntensity(hints, actionableCount);
 
+    // Batch 19: Strategic intelligence — weekly + monthly trajectory
+    const today        = getTodayDate();
+    const weekStart    = getWeekStartForIntelligence(today);
+    const siWeekly     = computeWeeklyIntelligence(s.dailyReviews, weekStart);
+    const siMonthly    = computeMonthlyIntelligence(s.dailyReviews, today);
+    const siMomentum   = getMomentumState(siWeekly);
+    const siRecs       = buildStrategicRecommendations(siWeekly, siMonthly);
+    const siSummary    = buildStrategicCoachSummary(siWeekly, siMonthly, siRecs);
+
     return {
       goals: s.goals,
       skillPlans: s.skillPlans,
@@ -2044,6 +2061,14 @@ export const useAIContext = () =>
           signal:     planExpl.signal,
           confidence: planExpl.confidence,
         },
+      },
+      // Batch 19: Strategic intelligence — injected at rich depth by orchestrationEngine
+      strategicIntelligence: {
+        weekly:          siWeekly,
+        monthly:         siMonthly,
+        momentumState:   siMomentum,
+        recommendations: siRecs,
+        coachSummary:    siSummary,
       },
     };
   });

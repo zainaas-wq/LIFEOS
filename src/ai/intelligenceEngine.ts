@@ -77,6 +77,18 @@ function _thirtyDaysAgo(todayDate: string): string {
   return _addDays(todayDate, -29); // inclusive 30-day window
 }
 
+/**
+ * Returns the ISO Monday (week start) for the given YYYY-MM-DD date.
+ * Exported so callers (useAIContext, useStrategicIntelligence, tests) can
+ * compute weekStart without importing reviewEngine → planGenerator → react-native.
+ */
+export function getWeekStartForIntelligence(dateStr: string): string {
+  const d = new Date(dateStr + 'T00:00:00Z');
+  const day = d.getUTCDay(); // 0 = Sun … 6 = Sat
+  const offset = day === 0 ? -6 : 1 - day; // shift to Monday
+  return _addDays(dateStr, offset);
+}
+
 // ─── computeWeeklyIntelligence ────────────────────────────────────────────────
 
 /**
