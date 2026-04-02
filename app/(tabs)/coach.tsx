@@ -500,6 +500,9 @@ export default function CoachScreen() {
 
   const handleVoiceSubmit = useCallback(async (result: VoiceResult) => {
     setVoiceVisible(false);
+    // Guard: reject if another request is already in flight.
+    if (loading) return;
+
     track('voice_record_submitted');
     track('ai_voice_used');
     track('ai_request_started', { mode: 'voice' } as any);
@@ -520,6 +523,10 @@ export default function CoachScreen() {
     setSessionRequestCount((c) => c + 1);
     setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 50);
 
+    // Abort controller: 40 s hard timeout (voice needs Whisper transcription + completion).
+    const controller = new AbortController();
+    const timeoutId  = setTimeout(() => controller.abort(), 40_000);
+
     try {
       const endpoint = `${process.env.EXPO_PUBLIC_SUPABASE_URL ?? ''}/functions/v1/ai-chat`;
       const res = await fetch(endpoint, {
@@ -529,6 +536,7 @@ export default function CoachScreen() {
           Authorization:  `Bearer ${session!.access_token}`,
         },
         body: JSON.stringify(payload),
+        signal: controller.signal,
       });
 
       const data = await res.json().catch(() => null);
@@ -545,7 +553,7 @@ export default function CoachScreen() {
           track('ai_request_failed', { mode: 'voice' } as any);
           addChatMessage({
             id: generateId(), role: 'assistant',
-            content: `_Voice processing failed: ${data?.error ?? 'Unknown error'}_`,
+            content: '_Voice processing failed. Please try again._',
             createdAt: new Date().toISOString(),
           });
         }
@@ -561,18 +569,22 @@ export default function CoachScreen() {
       }
     } catch (err: any) {
       track('ai_request_failed', { mode: 'voice' } as any);
+      const isTimeout = err?.name === 'AbortError' || String(err?.message).toLowerCase().includes('aborted');
       addChatMessage({
         id: generateId(), role: 'assistant',
-        content: `_Voice error: ${err?.message ?? 'Something went wrong'}_`,
+        content: isTimeout
+          ? '_Voice request timed out. Please try again._'
+          : '_Voice processing encountered an error. Please try again._',
         createdAt: new Date().toISOString(),
       });
     } finally {
+      clearTimeout(timeoutId);
       setLoading(false);
       refreshUsage();
       refreshBalance();
       setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 100);
     }
-  }, [chatHistory, session, addChatMessage, refreshUsage, refreshBalance]);
+  }, [loading, chatHistory, session, addChatMessage, refreshUsage, refreshBalance]);
 
   const handleVoiceCancel = useCallback(() => {
     track('voice_record_cancelled');
@@ -589,6 +601,8 @@ export default function CoachScreen() {
       Alert.alert('Sign in required', 'Image analysis requires an active session.');
       return;
     }
+    // Guard: reject if another request is already in flight.
+    if (loading) return;
 
     try {
       const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -614,45 +628,59 @@ export default function CoachScreen() {
       setSessionRequestCount((c) => c + 1);
       setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 50);
 
-      const endpoint = `${process.env.EXPO_PUBLIC_SUPABASE_URL ?? ''}/functions/v1/ai-chat`;
-      const res = await fetch(endpoint, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization:  `Bearer ${session.access_token}`,
-        },
-        body: JSON.stringify({
-          request_mode: 'image',
-          image_data:   base64,
-          message:      'Analyze this image and help me with my schedule or planning.',
-          context:      { todayDate: getTodayDate(), tracks: [], schedule: [], frictions: [], focusSummary: { weeklyMinsByGoal: {}, totalWeeklyMins: 0 } },
-        }),
-      });
+      // Abort controller: 40 s hard timeout for image analysis round-trip.
+      const controller = new AbortController();
+      const timeoutId  = setTimeout(() => controller.abort(), 40_000);
 
-      const data = await res.json().catch(() => null);
+      try {
+        const endpoint = `${process.env.EXPO_PUBLIC_SUPABASE_URL ?? ''}/functions/v1/ai-chat`;
+        const res = await fetch(endpoint, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization:  `Bearer ${session.access_token}`,
+          },
+          body: JSON.stringify({
+            request_mode: 'image',
+            image_data:   base64,
+            message:      'Analyze this image and help me with my schedule or planning.',
+            context:      { todayDate: getTodayDate(), tracks: [], schedule: [], frictions: [], focusSummary: { weeklyMinsByGoal: {}, totalWeeklyMins: 0 } },
+          }),
+          signal: controller.signal,
+        });
 
-      if (!res.ok || data?.error) {
-        if (data?.code === 'insufficient_credits') {
-          track('ai_insufficient_credits');
-          addChatMessage({ id: generateId(), role: 'assistant', content: '_Your AI credits are exhausted. They refill automatically on a 30-day cycle._', createdAt: new Date().toISOString() });
+        const data = await res.json().catch(() => null);
+
+        if (!res.ok || data?.error) {
+          if (data?.code === 'insufficient_credits') {
+            track('ai_insufficient_credits');
+            addChatMessage({ id: generateId(), role: 'assistant', content: '_Your AI credits are exhausted. They refill automatically on a 30-day cycle._', createdAt: new Date().toISOString() });
+          } else {
+            track('ai_request_failed', { mode: 'image' } as any);
+            addChatMessage({ id: generateId(), role: 'assistant', content: '_Image analysis failed. Please try again._', createdAt: new Date().toISOString() });
+          }
         } else {
-          track('ai_request_failed', { mode: 'image' } as any);
-          addChatMessage({ id: generateId(), role: 'assistant', content: `_Image analysis failed: ${data?.error ?? 'Unknown error'}_`, createdAt: new Date().toISOString() });
+          track('ai_request_succeeded', { mode: 'image' } as any);
+          addChatMessage({ id: generateId(), role: 'assistant', content: data.content, createdAt: data.createdAt ?? new Date().toISOString(), creditCost: CREDIT_COSTS.image, requestMode: 'image' });
         }
-      } else {
-        track('ai_request_succeeded', { mode: 'image' } as any);
-        addChatMessage({ id: generateId(), role: 'assistant', content: data.content, createdAt: data.createdAt ?? new Date().toISOString(), creditCost: CREDIT_COSTS.image, requestMode: 'image' });
+      } catch (err: any) {
+        track('ai_request_failed', { mode: 'image' } as any);
+        const isTimeout = err?.name === 'AbortError' || String(err?.message).toLowerCase().includes('aborted');
+        addChatMessage({ id: generateId(), role: 'assistant',
+          content: isTimeout
+            ? '_Image analysis timed out. Please try again._'
+            : '_Image analysis encountered an error. Please try again._',
+          createdAt: new Date().toISOString() });
+      } finally {
+        clearTimeout(timeoutId);
       }
-    } catch (err: any) {
-      track('ai_request_failed', { mode: 'image' } as any);
-      addChatMessage({ id: generateId(), role: 'assistant', content: `_Image analysis error: ${err?.message ?? 'Something went wrong'}_`, createdAt: new Date().toISOString() });
     } finally {
       setLoading(false);
       refreshUsage();
       refreshBalance();
       setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 100);
     }
-  }, [entitlements.isPro, session, isGuestMode, addChatMessage, refreshUsage, refreshBalance]);
+  }, [loading, entitlements.isPro, session, isGuestMode, addChatMessage, refreshUsage, refreshBalance]);
 
   // ── Render ──────────────────────────────────────────────────────────────────
   return (

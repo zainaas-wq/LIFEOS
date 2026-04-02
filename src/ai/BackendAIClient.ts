@@ -15,6 +15,7 @@ import { LocalAIClient } from './LocalAIClient';
 import { generateSmartDailyPlan, generateSmartWeeklyPlan, parseFixedWindow } from './planningEngine';
 import { rescheduleRemaining } from './adaptiveRescheduler';
 import { buildAIContextPacket, selectContextDepth, historyDepthForMode } from './orchestrationEngine';
+import { isPayloadTooLarge, MAX_PAYLOAD_CHARS } from './requestGuard';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -124,6 +125,17 @@ export class BackendAIClient implements AIClient {
     // Slim history to wire-safe shape
     const wireHistory = slicedHist.map((m) => ({ role: m.role, content: m.content }));
 
+    // ── Payload size guard ─────────────────────────────────────────────────────
+    // Catch runaway payloads client-side before wasting bandwidth / backend budget.
+    const wireBody = { message: userMessage, history: wireHistory, context: wireContext };
+    const wireStr  = JSON.stringify(wireBody);
+    if (isPayloadTooLarge(wireStr)) {
+      if (__DEV__) {
+        console.warn(`[BackendAIClient] payload too large (${wireStr.length} chars > ${MAX_PAYLOAD_CHARS}) — falling back to local`);
+      }
+      return this.fallback(userMessage, history, context, 'payload_too_large');
+    }
+
     let responseData: {
       id?: string;
       role?: string;
@@ -147,11 +159,7 @@ export class BackendAIClient implements AIClient {
           'Content-Type':  'application/json',
           Authorization:   `Bearer ${this.accessToken}`,
         },
-        body: JSON.stringify({
-          message: userMessage,
-          history: wireHistory,
-          context: wireContext,
-        }),
+        body: wireStr,
         signal: controller.signal,
       });
       clearTimeout(timeoutId);

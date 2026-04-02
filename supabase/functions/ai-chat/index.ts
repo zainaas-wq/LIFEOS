@@ -175,6 +175,18 @@ const TIMEOUT_MS      = 25_000;
 const MAX_TOKENS      = 1024;
 const MAX_IMG_TOKENS  = 1024;
 
+// ─── Input validation limits (Batch 20) ──────────────────────────────────────
+// Mirror src/ai/requestGuard.ts — keep in sync when limits change.
+
+const MAX_MESSAGE_CHARS = 4_000;
+const MAX_HISTORY_ITEMS = 20;
+const MAX_HISTORY_ITEM_CHARS = 2_000; // per-message cap to prevent single-message bloat
+
+const KNOWN_AI_MODES = new Set([
+  'quick_nudge', 'focused_answer', 'recovery_coach',
+  'strategic_planning', 'review_reflection',
+]);
+
 const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
 const OPENAI_VISION_MODEL = 'gpt-4o';
@@ -631,11 +643,26 @@ Deno.serve(async (req: Request) => {
     if (!message || typeof message !== 'string' || !message.trim()) {
       return errorResponse('message is required', 'invalid_request', 400);
     }
+    if (message.length > MAX_MESSAGE_CHARS) {
+      return errorResponse(`message exceeds ${MAX_MESSAGE_CHARS} character limit`, 'invalid_request', 400);
+    }
     if (!context || typeof context !== 'object') {
       return errorResponse('context is required', 'invalid_request', 400);
     }
     if (typeof context.todayDate !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(context.todayDate)) {
       return errorResponse('context.todayDate must be YYYY-MM-DD', 'invalid_request', 400);
+    }
+  }
+
+  // ── History depth + per-item length caps (all request modes) ─────────────
+  if (body.history) {
+    if (body.history.length > MAX_HISTORY_ITEMS) {
+      return errorResponse(`history exceeds ${MAX_HISTORY_ITEMS} message limit`, 'invalid_request', 400);
+    }
+    for (const item of body.history) {
+      if (typeof item.content === 'string' && item.content.length > MAX_HISTORY_ITEM_CHARS) {
+        return errorResponse(`history message exceeds ${MAX_HISTORY_ITEM_CHARS} character limit`, 'invalid_request', 400);
+      }
     }
   }
 
@@ -669,8 +696,10 @@ Deno.serve(async (req: Request) => {
   const timer        = setTimeout(() => controller.abort(), TIMEOUT_MS);
   const requestStart = Date.now();
 
-  // Extract aiMode from context (Batch 14)
-  const aiMode = body.context?.aiMode ?? null;
+  // Extract and sanitize aiMode from context (Batch 14 / Batch 20).
+  // Only accept known values — reject arbitrary strings from the client.
+  const rawAiMode = body.context?.aiMode ?? null;
+  const aiMode    = rawAiMode && KNOWN_AI_MODES.has(rawAiMode) ? rawAiMode : null;
 
   let textContent = '';
   let tokenUsage: TokenUsage | undefined;
