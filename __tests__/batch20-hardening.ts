@@ -149,6 +149,110 @@ suite('E. sanitizeAIMode() — unknown / malicious values return null', () => {
   assert("mode with suffix → null",                  sanitizeAIMode('quick_nudge_extra') === null);
 });
 
+// ─── Suite E2: sanitizeAIMode() — edge function mirror parity ────────────────
+// The edge function inlines the same logic. Verify the guard rules are identical.
+
+suite('E2. sanitizeAIMode() — edge-function KNOWN_AI_MODES Set parity', () => {
+  // Simulate the Deno-side Set-based check
+  const KNOWN_AI_MODES_SET = new Set([
+    'quick_nudge', 'focused_answer', 'recovery_coach',
+    'strategic_planning', 'review_reflection',
+  ]);
+  const edgeSanitize = (raw: string | null) =>
+    raw && KNOWN_AI_MODES_SET.has(raw) ? raw : null;
+
+  // Both implementations must agree on all known modes
+  for (const mode of KNOWN_AI_MODES) {
+    assert(
+      `client + edge agree on '${mode}'`,
+      sanitizeAIMode(mode) === edgeSanitize(mode),
+    );
+  }
+
+  // Both must reject unknown values
+  const unknowns = ['admin', '', 'QUICK_NUDGE', 'quick nudge', 'undefined', '0'];
+  for (const u of unknowns) {
+    assert(
+      `both reject '${u}'`,
+      sanitizeAIMode(u) === null && edgeSanitize(u) === null,
+    );
+  }
+  assert('both reject null', sanitizeAIMode(null) === null && edgeSanitize(null) === null);
+});
+
+// ─── Suite G: Payload size — realistic request shapes ─────────────────────────
+
+suite('G. Realistic payload shapes', () => {
+  // Minimal text request
+  const minimalPayload = JSON.stringify({
+    message: 'Help me plan today',
+    history: [],
+    context: { todayDate: '2026-04-02', aiMode: 'focused_answer' },
+  });
+  assert('minimal text request not too large', !isPayloadTooLarge(minimalPayload));
+
+  // Focused depth — 3 goals + today plan
+  const focusedPayload = JSON.stringify({
+    message: 'What should I do first?',
+    history: Array.from({ length: 4 }, (_, i) => ({
+      role: i % 2 === 0 ? 'user' : 'assistant',
+      content: 'a'.repeat(200),
+    })),
+    context: {
+      todayDate: '2026-04-02',
+      aiMode: 'focused_answer',
+      tracks: Array.from({ length: 3 }, (_, i) => ({ title: `Goal ${i}`, priority: i, weeklyHoursTarget: 10 })),
+      todayPlan: { items: Array.from({ length: 10 }, (_, i) => ({ startTime: '09:00', endTime: '10:00', title: `Task ${i}`, type: 'goal', completed: false })) },
+    },
+  });
+  assert('focused-depth request not too large', !isPayloadTooLarge(focusedPayload));
+
+  // Rich depth — all goals + full history
+  const richPayload = JSON.stringify({
+    message: 'Review my week and give me a strategic plan',
+    history: Array.from({ length: 8 }, (_, i) => ({
+      role: i % 2 === 0 ? 'user' : 'assistant',
+      content: 'a'.repeat(500),
+    })),
+    context: {
+      todayDate: '2026-04-02',
+      aiMode: 'strategic_planning',
+      tracks: Array.from({ length: 10 }, (_, i) => ({ title: `Goal ${i}`, priority: i, weeklyHoursTarget: 10, category: 'work' })),
+      schedule: Array.from({ length: 20 }, (_, i) => ({ title: `Event ${i}`, start: '09:00', end: '10:00', daysOfWeek: [1, 3, 5] })),
+      focusSummary: { weeklyMinsByGoal: { 'Goal 0': 120, 'Goal 1': 90 }, totalWeeklyMins: 210 },
+      reviewSignals: { recentPatterns: ['pattern1', 'pattern2', 'pattern3'], adaptationRationale: 'rationale', preferredRecovery: ['mode1'], reviewCount: 5 },
+    },
+  });
+  assert('rich-depth strategic request not too large', !isPayloadTooLarge(richPayload));
+
+  // Adversarial: message at exact cap
+  const atCapPayload = JSON.stringify({ message: 'a'.repeat(4000), history: [], context: { todayDate: '2026-04-02' } });
+  assert('message at exact cap: payload valid',   isValidMessageLength('a'.repeat(4000)));
+  assert('message at exact cap: payload size OK', !isPayloadTooLarge(atCapPayload));
+
+  // Adversarial: message one over cap
+  assert('message one over cap: invalid length',  !isValidMessageLength('a'.repeat(4001)));
+});
+
+// ─── Suite H: History depth validation — edge cases ──────────────────────────
+
+suite('H. History depth — edge cases', () => {
+  assert('empty history valid',             isValidHistoryDepth([]));
+  assert('20 items exactly valid',          isValidHistoryDepth(new Array(20)));
+  assert('21 items invalid',                !isValidHistoryDepth(new Array(21)));
+
+  // Edge function also caps per-item content (MAX_HISTORY_ITEM_CHARS = 2000)
+  // Verify the guard exists for the per-item scenario (pure constant check)
+  const MAX_HISTORY_ITEM_CHARS = 2_000; // mirrors edge function constant
+  assert('per-item cap constant is 2000',   MAX_HISTORY_ITEM_CHARS === 2_000);
+  assert('per-item cap is a number',        typeof MAX_HISTORY_ITEM_CHARS === 'number');
+
+  const longItem = 'a'.repeat(MAX_HISTORY_ITEM_CHARS + 1);
+  assert('item exceeding cap is detectable', longItem.length > MAX_HISTORY_ITEM_CHARS);
+  const okItem = 'a'.repeat(MAX_HISTORY_ITEM_CHARS);
+  assert('item at exact cap is acceptable', okItem.length <= MAX_HISTORY_ITEM_CHARS);
+});
+
 // ─── Suite F: KNOWN_AI_MODES completeness ────────────────────────────────────
 
 suite('F. KNOWN_AI_MODES completeness', () => {

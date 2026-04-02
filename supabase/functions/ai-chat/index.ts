@@ -920,8 +920,9 @@ Deno.serve(async (req: Request) => {
       return errorResponse('AI provider timed out', 'timeout', 504);
     }
 
+    // Log full error server-side only — do NOT echo internal details to the client.
     const modeLabel = aiMode ?? 'unknown';
     console.error(`[ai-chat] mode=${modeLabel} requestMode=${requestMode} error:`, msg);
-    return errorResponse(`Provider error: ${msg}`, 'provider_error', 502);
+    return errorResponse('AI provider error — please try again', 'provider_error', 502);
   }
 });

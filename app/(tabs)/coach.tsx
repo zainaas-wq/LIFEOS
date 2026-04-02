@@ -12,7 +12,7 @@
  *   - Voice and image are premium features surfaced as first-class affordances
  */
 
-import React, { useState, useRef, useCallback } from 'react';
+import React, { useState, useRef, useCallback, useEffect } from 'react';
 import {
   View,
   Text,
@@ -366,7 +366,36 @@ export default function CoachScreen() {
   const [warningDismissed, setWarningDismissed] = useState(false);
   const [sessionRequestCount, setSessionRequestCount] = useState(0);
   const [lastAIMode, setLastAIMode] = useState<AIRequestMode>('focused_answer');
-  const scrollRef = useRef<ScrollView>(null);
+  const scrollRef       = useRef<ScrollView>(null);
+  /**
+   * sendingRef — synchronous duplicate-send guard.
+   * React state (`loading`) is async: a rapid second tap can slip through
+   * before the first `setLoading(true)` fires. This ref is set to `true`
+   * synchronously at the top of `send()` and reset synchronously in `finally`.
+   */
+  const sendingRef      = useRef(false);
+  /**
+   * mountedRef — stale-update guard.
+   * Set to `false` by the cleanup effect when the screen unmounts.
+   * Checked before any component-local state mutation after an await so we
+   * do not attempt to update unmounted-component state.
+   */
+  const mountedRef      = useRef(true);
+  /**
+   * activeAbortRef — holds the AbortController for the current in-flight
+   * voice or image fetch.  The cleanup effect calls `.abort()` on unmount
+   * so the fetch is cancelled if the user leaves the screen mid-request.
+   */
+  const activeAbortRef  = useRef<AbortController | null>(null);
+
+  // Cancel any pending voice/image fetch and stop stale state mutations on
+  // unmount (e.g. user navigates away mid-request).
+  useEffect(() => {
+    return () => {
+      mountedRef.current = false;
+      activeAbortRef.current?.abort();
+    };
+  }, []);
 
   // ── Orchestration helper ──────────────────────────────────────────────────
   const getOrchestration = useCallback((msg: string) => {
@@ -429,7 +458,10 @@ export default function CoachScreen() {
   const send = useCallback(
     async (text: string, eventName: AnalyticsEventName = 'ai_chat_used') => {
       const trimmed = text.trim();
-      if (!trimmed || loading) return;
+      // sendingRef check is synchronous — catches rapid taps that beat the async
+      // loading state update. loading check remains as the persistent UI guard.
+      if (!trimmed || loading || sendingRef.current) return;
+      sendingRef.current = true;
 
       // ── Orchestration decision ────────────────────────────────────────────
       const orch = getOrchestration(trimmed);
@@ -458,15 +490,26 @@ export default function CoachScreen() {
       try {
         const client = getClient(orch.useExternal);
         const reply = await client.chat(trimmed, histSlice, orchestratedContext);
+        // Guard: skip state mutation if the component unmounted while we were
+        // awaiting (BackendAIClient already handles fallback/timeout internally).
+        if (!mountedRef.current) return;
         addChatMessage({ ...reply, creditCost: CREDIT_COSTS.text, requestMode: 'text' });
         if (reply.plan) setCurrentPlan(reply.plan);
       } catch (err: any) {
+        if (!mountedRef.current) return;
+        // Do not surface raw err.message — BackendAIClient maps auth/quota/timeout
+        // to specific user-facing notices before throwing. This branch only fires
+        // if the local fallback itself fails, which should not happen in practice.
         addChatMessage({
           id: generateId(), role: 'assistant',
-          content: `Error: ${err?.message ?? 'Something went wrong. Please try again.'}`,
+          content: '_Something went wrong. Please try again._',
           createdAt: new Date().toISOString(),
         });
       } finally {
+        // Reset ref first — always, even if unmounted, so the guard is clean for
+        // the next mount cycle.
+        sendingRef.current = false;
+        if (!mountedRef.current) return;
         setLoading(false);
         refreshUsage();
         refreshBalance();
@@ -524,7 +567,9 @@ export default function CoachScreen() {
     setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 50);
 
     // Abort controller: 40 s hard timeout (voice needs Whisper transcription + completion).
+    // Also stored in activeAbortRef so the cleanup effect can cancel on unmount.
     const controller = new AbortController();
+    activeAbortRef.current = controller;
     const timeoutId  = setTimeout(() => controller.abort(), 40_000);
 
     try {
@@ -540,6 +585,9 @@ export default function CoachScreen() {
       });
 
       const data = await res.json().catch(() => null);
+
+      // Guard: skip if screen unmounted while fetch was in flight.
+      if (!mountedRef.current) return;
 
       if (!res.ok || data?.error) {
         if (data?.code === 'insufficient_credits') {
@@ -568,6 +616,7 @@ export default function CoachScreen() {
         });
       }
     } catch (err: any) {
+      if (!mountedRef.current) return;
       track('ai_request_failed', { mode: 'voice' } as any);
       const isTimeout = err?.name === 'AbortError' || String(err?.message).toLowerCase().includes('aborted');
       addChatMessage({
@@ -579,6 +628,8 @@ export default function CoachScreen() {
       });
     } finally {
       clearTimeout(timeoutId);
+      activeAbortRef.current = null;
+      if (!mountedRef.current) return;
       setLoading(false);
       refreshUsage();
       refreshBalance();
@@ -629,7 +680,9 @@ export default function CoachScreen() {
       setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 50);
 
       // Abort controller: 40 s hard timeout for image analysis round-trip.
+      // Stored in activeAbortRef so the cleanup effect can cancel on unmount.
       const controller = new AbortController();
+      activeAbortRef.current = controller;
       const timeoutId  = setTimeout(() => controller.abort(), 40_000);
 
       try {
@@ -651,6 +704,9 @@ export default function CoachScreen() {
 
         const data = await res.json().catch(() => null);
 
+        // Guard: skip if screen unmounted while fetch was in flight.
+        if (!mountedRef.current) return;
+
         if (!res.ok || data?.error) {
           if (data?.code === 'insufficient_credits') {
             track('ai_insufficient_credits');
@@ -664,6 +720,7 @@ export default function CoachScreen() {
           addChatMessage({ id: generateId(), role: 'assistant', content: data.content, createdAt: data.createdAt ?? new Date().toISOString(), creditCost: CREDIT_COSTS.image, requestMode: 'image' });
         }
       } catch (err: any) {
+        if (!mountedRef.current) return;
         track('ai_request_failed', { mode: 'image' } as any);
         const isTimeout = err?.name === 'AbortError' || String(err?.message).toLowerCase().includes('aborted');
         addChatMessage({ id: generateId(), role: 'assistant',
@@ -673,8 +730,10 @@ export default function CoachScreen() {
           createdAt: new Date().toISOString() });
       } finally {
         clearTimeout(timeoutId);
+        activeAbortRef.current = null;
       }
     } finally {
+      if (!mountedRef.current) return;
       setLoading(false);
       refreshUsage();
       refreshBalance();
