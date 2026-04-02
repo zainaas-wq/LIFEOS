@@ -93,6 +93,46 @@ No `.env` file is required to build or run the app itself. The mobile client aut
 
 ---
 
+## GitHub Pages — Legal Document Hosting
+
+The `docs/` folder is configured as the GitHub Pages source. It hosts the
+public legal pages required for App Store and Google Play submissions.
+
+### Enabling GitHub Pages
+
+1. Go to **Settings → Pages** in the GitHub repository.
+2. Under **Source**, select **Deploy from a branch**.
+3. Choose branch: `main` (or `feature/behavior-engine` during development).
+4. Choose folder: **`/docs`**.
+5. Click **Save**. GitHub will deploy within ~60 seconds.
+
+### Expected Public URLs
+
+| Page | URL |
+|------|-----|
+| Landing | `https://zainaas-wq.github.io/LIFEOS/` |
+| Terms of Service | `https://zainaas-wq.github.io/LIFEOS/legal/terms/` |
+| Privacy Policy | `https://zainaas-wq.github.io/LIFEOS/legal/privacy/` |
+
+### Using These URLs in App Store / Google Play
+
+- **App Store Connect** → App Information → Privacy Policy URL
+  → `https://zainaas-wq.github.io/LIFEOS/legal/privacy/`
+- **App Store Connect** → App Information → Terms of Use (EULA)
+  → `https://zainaas-wq.github.io/LIFEOS/legal/terms/`
+- **Google Play Console** → Store Listing → Privacy Policy
+  → `https://zainaas-wq.github.io/LIFEOS/legal/privacy/`
+
+### Updating Legal Content
+
+Edit **`src/legal/legalContent.ts`** only. Then manually update the
+corresponding HTML files (`docs/legal/terms/index.html`,
+`docs/legal/privacy/index.html`) and markdown files (`legal/terms.md`,
+`legal/privacy.md`) to match. All four files derive from the same content
+structure — there is no automated build step.
+
+---
+
 ## First Run Behavior
 
 - **Production builds**: new users are directed to the onboarding screen. No demo data is auto-loaded.

@@ -1,0 +1,174 @@
+/* LifeOS Legal Pages — docs/legal/style.css
+   Self-contained, no external dependencies.
+   Suitable for App Store / Google Play review links.
+*/
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:        #ffffff;
+  --surface:   #f7f7f8;
+  --border:    #e4e4e7;
+  --text:      #18181b;
+  --text-muted:#71717a;
+  --accent:    #9a7b3c;   /* warm gold — matches app palette */
+  --link:      #2563eb;
+  --radius:    8px;
+  --max-w:     720px;
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+          "Helvetica Neue", Arial, sans-serif;
+}
+
+html { font-size: 16px; -webkit-text-size-adjust: 100%; }
+
+body {
+  font-family: var(--font);
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.7;
+  padding: 24px 16px 64px;
+}
+
+/* ── Layout ───────────────────────────────────────────── */
+.page {
+  max-width: var(--max-w);
+  margin: 0 auto;
+}
+
+/* ── Nav ──────────────────────────────────────────────── */
+.nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 40px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border);
+}
+.nav-brand {
+  font-weight: 700;
+  font-size: 1rem;
+  color: var(--text);
+  text-decoration: none;
+  letter-spacing: -0.01em;
+}
+.nav-brand span { color: var(--accent); }
+.nav-links { display: flex; gap: 24px; }
+.nav-links a {
+  font-size: 0.875rem;
+  color: var(--text-muted);
+  text-decoration: none;
+}
+.nav-links a:hover { color: var(--text); }
+
+/* ── Header ───────────────────────────────────────────── */
+.doc-header { margin-bottom: 32px; }
+
+.doc-header h1 {
+  font-size: 2rem;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  line-height: 1.2;
+  margin-bottom: 8px;
+}
+
+.doc-meta {
+  font-size: 0.875rem;
+  color: var(--text-muted);
+}
+
+/* ── Intro ────────────────────────────────────────────── */
+.intro {
+  font-size: 0.9375rem;
+  color: #3f3f46;
+  background: var(--surface);
+  border-left: 3px solid var(--accent);
+  padding: 16px 20px;
+  border-radius: 0 var(--radius) var(--radius) 0;
+  margin-bottom: 32px;
+  line-height: 1.65;
+}
+
+/* ── Divider ──────────────────────────────────────────── */
+hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 32px 0;
+}
+
+/* ── Sections ─────────────────────────────────────────── */
+.section { margin-bottom: 36px; }
+
+.section h2 {
+  font-size: 1.0625rem;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 12px;
+  scroll-margin-top: 24px;
+}
+
+.section h2 a {
+  color: inherit;
+  text-decoration: none;
+}
+.section h2 a:hover { color: var(--accent); }
+
+.section p,
+.section li {
+  font-size: 0.9375rem;
+  color: #3f3f46;
+  line-height: 1.7;
+}
+
+.section ul {
+  padding-left: 1.4em;
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.section strong { color: var(--text); font-weight: 600; }
+
+/* ── Contact block ─────────────────────────────────────── */
+.contact-block {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px 24px;
+  margin-top: 8px;
+}
+.contact-block .label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+.contact-block p {
+  font-size: 0.9375rem;
+  color: var(--text);
+}
+.contact-block a { color: var(--link); }
+
+/* ── Footer ───────────────────────────────────────────── */
+.footer {
+  margin-top: 56px;
+  padding-top: 24px;
+  border-top: 1px solid var(--border);
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 24px;
+  align-items: center;
+  justify-content: space-between;
+}
+.footer a { color: var(--text-muted); text-decoration: none; }
+.footer a:hover { color: var(--text); }
+
+/* ── Responsive ────────────────────────────────────────── */
+@media (max-width: 600px) {
+  .doc-header h1 { font-size: 1.5rem; }
+  .nav-links { gap: 16px; }
+}
