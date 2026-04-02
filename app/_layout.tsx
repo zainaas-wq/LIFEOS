@@ -183,6 +183,8 @@ export default function RootLayout() {
         <Stack.Screen name="paywall" />
         <Stack.Screen name="upgrade" />
         <Stack.Screen name="(tabs)" />
+        <Stack.Screen name="legal/terms"   options={{ animation: 'slide_from_right' }} />
+        <Stack.Screen name="legal/privacy" options={{ animation: 'slide_from_right' }} />
       </Stack>
     </>
   );

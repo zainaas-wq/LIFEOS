@@ -267,6 +267,32 @@ export default function SettingsScreen() {
           </Card>
         </View>
 
+        {/* Legal */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Legal</Text>
+          <Card elevated>
+            <TouchableOpacity
+              style={styles.legalRow}
+              onPress={() => router.push('/legal/terms' as any)}
+              activeOpacity={0.7}
+            >
+              <Ionicons name="document-text-outline" size={16} color={Colors.textSecondary} />
+              <Text style={styles.legalLabel}>Terms of Service</Text>
+              <Ionicons name="chevron-forward" size={14} color={Colors.textMuted} />
+            </TouchableOpacity>
+            <Divider />
+            <TouchableOpacity
+              style={styles.legalRow}
+              onPress={() => router.push('/legal/privacy' as any)}
+              activeOpacity={0.7}
+            >
+              <Ionicons name="shield-checkmark-outline" size={16} color={Colors.textSecondary} />
+              <Text style={styles.legalLabel}>Privacy Policy</Text>
+              <Ionicons name="chevron-forward" size={14} color={Colors.textMuted} />
+            </TouchableOpacity>
+          </Card>
+        </View>
+
         {/* Danger Zone */}
         <View style={styles.section}>
           {isAuthenticated && (
@@ -497,5 +523,16 @@ const styles = StyleSheet.create({
     fontSize: FontSize.xs,
     color: Colors.textMuted,
     textAlign: 'center',
+  },
+  legalRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
+    paddingVertical: Spacing.xs,
+  },
+  legalLabel: {
+    flex: 1,
+    fontSize: FontSize.sm,
+    color: Colors.textSecondary,
   },
 });
