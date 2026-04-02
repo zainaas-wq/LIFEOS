@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState, useMemo } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -15,32 +15,24 @@ import Svg, { Circle } from 'react-native-svg';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
-import { useAppStore } from '../../src/store/useAppStore';
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '../../src/constants/theme';
-import { getTodayDate, formatDate, generateId } from '../../src/lib/utils';
+import { formatDate, generateId } from '../../src/lib/utils';
 import { MorningLaunchCard } from '../../src/components/MorningLaunchCard';
 import { NightShutdownCard } from '../../src/components/NightShutdownCard';
 import { PredictiveWarningCard } from '../../src/components/PredictiveWarningCard';
-import { buildMorningLaunch, buildNightShutdown } from '../../src/ai/ritualEngine';
-import { computeAdaptationHints } from '../../src/ai/adaptationEngine';
-import { predictDrift } from '../../src/ai/predictiveEngine';
 import type { PlanItem, ActiveFocusSession, DailyScheduleEntry, DayMode, DriftEvent, RecoveryMode } from '../../src/types';
-import { computeDayProgress, computePressure, type PressureLevel, type PressureGrade } from '../../src/ai/executionEngine';
 import { isRecoveryBlock } from '../../src/ai/recoveryEngine';
-import { enrichPlanItemsWithStudentLabels } from '../../src/ai/studentScheduler';
 import { computeWhyThisNow } from '../../src/ai/driftEngine';
 import { useDirection } from '../../src/hooks/useDirection';
 import { timeToMins } from '../../src/ai/planGenerator';
 import { Badge } from '../../src/components/ui/Badge';
-import { computeSubscriptionState, getTrialDaysLeft } from '../../src/lib/trialUtils';
+import { getTrialDaysLeft } from '../../src/lib/trialUtils';
 import { OutcomeDashboard } from '../../src/components/OutcomeDashboard';
 import { ProContextCard } from '../../src/components/ProContextCard';
-import { computeOutcomeTrend } from '../../src/ai/outcomeEngine';
-import { useEntitlements } from '../../src/services/entitlementService';
 import { StreakBadge } from '../../src/components/StreakBadge';
 import { ReentryBanner } from '../../src/components/ReentryBanner';
-import { computeStreakData, buildReentryMessage, buildCommitmentSignal } from '../../src/ai/retentionEngine';
 import { track } from '../../src/services/analyticsService';
+import { useHomeState } from '../../src/hooks/useHomeState';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -1144,49 +1136,24 @@ const tb = StyleSheet.create({
 export default function HomeScreen() {
   const { t } = useTranslation();
   const dir = useDirection();
-  const today = getTodayDate();
 
-  const profile                  = useAppStore((s) => s.profile);
-  const dailyReviews             = useAppStore((s) => s.dailyReviews);
-  const goals                    = useAppStore((s) => s.goals);
-  const controlPlan              = useAppStore((s) => s.controlPlan);
-  const activeFocus              = useAppStore((s) => s.activeFocus);
-  const taskSkipCount            = useAppStore((s) => s.taskSkipCount);
-  const skippedPlanItemIds       = useAppStore((s) => s.skippedPlanItemIds);
-  const dayStreak                = useAppStore((s) => s.dayStreak);
-  const trialStartDate           = useAppStore((s) => s.trialStartDate);
-  const isPro                    = useAppStore((s) => s.profile?.isPro ?? false);
-  const todayScheduleEntry       = useAppStore((s) => s.todayScheduleEntry);
-  const setTodayScheduleEntry    = useAppStore((s) => s.setTodayScheduleEntry);
-  const endRecoveryEarly         = useAppStore((s) => s.endRecoveryEarly);
-  const recordInteraction        = useAppStore((s) => s.recordInteraction);
-  const startFocus               = useAppStore((s) => s.startFocus);
-  const endFocus                 = useAppStore((s) => s.endFocus);
-  const toggleControlPlanItem    = useAppStore((s) => s.toggleControlPlanItem);
-  const skipNowAction            = useAppStore((s) => s.skipNowAction);
-  const skipItem                 = useAppStore((s) => s.skipItem);
-  const generateControlPlanAction= useAppStore((s) => s.generateControlPlanAction);
-  const completeHabitToday       = useAppStore((s) => s.completeHabitToday);
-  const restartDay               = useAppStore((s) => s.restartDay);
-  const focusSessions            = useAppStore((s) => s.focusSessions);
-  const dayMode                  = useAppStore((s) => s.dayMode);
-  const activeDrift              = useAppStore((s) => s.activeDrift);
-  const dailyDecision            = useAppStore((s) => s.dailyDecision);
-  const dismissActiveDrift       = useAppStore((s) => s.dismissActiveDrift);
-  const applyRecoveryAction      = useAppStore((s) => s.applyRecoveryAction);
-
-  // nowMins ticks every 60s for timeline
-  const [nowMins, setNowMins] = useState(() => {
-    const d = new Date(); return d.getHours() * 60 + d.getMinutes();
-  });
-  useEffect(() => {
-    const id = setInterval(() => {
-      const d = new Date(); setNowMins(d.getHours() * 60 + d.getMinutes());
-    }, 60_000);
-    return () => clearInterval(id);
-  }, []);
-
-  const subState = computeSubscriptionState(trialStartDate, isPro);
+  // ── All store state + derived values via consolidated hook ────────────────
+  const {
+    profile, dailyReviews, goals, controlPlan, activeFocus, taskSkipCount,
+    skippedPlanItemIds, dayStreak, trialStartDate, isPro, todayScheduleEntry,
+    focusSessions, dayMode, activeDrift, dailyDecision,
+    setTodayScheduleEntry, endRecoveryEarly, recordInteraction,
+    startFocus, endFocus, toggleControlPlanItem, skipNowAction, skipItem,
+    generateControlPlanAction, completeHabitToday, restartDay,
+    dismissActiveDrift, applyRecoveryAction,
+    today, nowMins, subState, isProUser,
+    planItems, enrichedItems, progress, todayFocusMins,
+    pressure, pressureGrade, isBuilding, nextBestAction, isAiPlan,
+    morningLaunch, nightShutdown, topPrediction,
+    outcomeTrend, streakData, reentryMessage, commitmentSignal,
+    lateStartItem, effectiveItem, isCurrentConstraint, nextItem, allSkipped,
+    needsScheduleEntry,
+  } = useHomeState();
 
   // ── Reentry analytics — fire once per session after a 2+ day gap ─────────
   const reentryFiredRef = React.useRef(false);
@@ -1199,148 +1166,20 @@ export default function HomeScreen() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // ── Local UI state ────────────────────────────────────────────────────────
+  const [reentryDismissed, setReentryDismissed] = React.useState(false);
+  const [dismissedRisk, setDismissedRisk]       = React.useState<string | null>(null);
+  const [proCardDismissed, setProCardDismissed] = React.useState(false);
+
   // Flash feedback
   const [flashMsg, setFlashMsg] = useState<string | null>(null);
   const flashAnim  = useRef(new Animated.Value(0)).current;
   const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // ── Derived state ────────────────────────────────────────────────────────
-  const planItems     = controlPlan?.plan.items ?? [];
-  const enrichedItems = useMemo(
-    () => enrichPlanItemsWithStudentLabels(planItems, goals, today),
-    [planItems, goals, today],
-  );
-  const progress      = useMemo(() => computeDayProgress(enrichedItems), [enrichedItems]);
-  const todayFocusMins = useMemo(() => {
-    return focusSessions
-      .filter((fs) => fs.start.startsWith(today) && !!fs.end)
-      .reduce((sum, fs) => sum + (fs.durationMinutes ?? 0), 0);
-  }, [focusSessions, today]);
-
-  const pressureInfo  = useMemo(
-    () => computePressure(taskSkipCount, nowMins, enrichedItems, timeToMins(profile?.fixedScheduleEnd ?? '22:00')),
-    [taskSkipCount, nowMins, enrichedItems, profile?.fixedScheduleEnd],
-  );
-  const pressure      = pressureInfo.level;
-  const pressureGrade = pressureInfo.grade;
-  const isBuilding    = !controlPlan || controlPlan.date !== today;
-  const nextBestAction= controlPlan?.nextBestAction ?? null;
-
-  // ── Ritual cards ─────────────────────────────────────────────────────────
-  const hourFromNow = Math.floor(nowMins / 60);
-
-  const morningLaunch = useMemo(() => {
-    if (!controlPlan || isBuilding || hourFromNow >= 11) return null;
-    const hints = computeAdaptationHints(dailyReviews);
-    return buildMorningLaunch(controlPlan, dailyReviews, hints);
-  }, [controlPlan, isBuilding, hourFromNow, dailyReviews]);
-
-  const nightShutdown = useMemo(() => {
-    if (!controlPlan || isBuilding || hourFromNow < 19 || progress.total === 0) return null;
-    return buildNightShutdown(controlPlan, todayFocusMins);
-  }, [controlPlan, isBuilding, hourFromNow, progress.total, todayFocusMins]);
-
-  // ── Pro entitlements ─────────────────────────────────────────────────────
-  const { isPro: isProUser } = useEntitlements();
-
-  // ── Retention state ───────────────────────────────────────────────────────
-  const [reentryDismissed, setReentryDismissed] = React.useState(false);
-
-  // ── Predictive warning ───────────────────────────────────────────────────
-  const [dismissedRisk, setDismissedRisk] = React.useState<string | null>(null);
-  const [proCardDismissed, setProCardDismissed] = React.useState(false);
-
-  const topPrediction = useMemo(() => {
-    if (!controlPlan || isBuilding) return null;
-    const hints = computeAdaptationHints(dailyReviews);
-    const preds = predictDrift(controlPlan, dailyReviews, hints, nowMins);
-    // Only surface medium+ confidence predictions
-    const visible = preds.filter((p) => p.confidence !== 'low');
-    return visible[0] ?? null;
-  }, [controlPlan, isBuilding, dailyReviews, nowMins]);
-
+  // activeWarning: filter topPrediction by locally-dismissed risk type
   const activeWarning = topPrediction && topPrediction.riskType !== dismissedRisk
     ? topPrediction
     : null;
-  const isAiPlan = controlPlan?.plan.source === 'ai';
-
-  // ── Outcome dashboard (shown when user has ≥ 3 reviews) ──────────────────
-  const outcomeTrend = useMemo(
-    () => computeOutcomeTrend(dailyReviews, isProUser ? 30 : 7),
-    [dailyReviews, isProUser],
-  );
-
-  // ── Retention: streak + re-entry ─────────────────────────────────────────
-  const streakData = useMemo(
-    () => computeStreakData(dailyReviews, today),
-    [dailyReviews, today],
-  );
-
-  const reentryMessage = streakData.missedDays >= 1
-    ? buildReentryMessage(streakData.missedDays)
-    : null;
-
-  const hints = useMemo(
-    () => computeAdaptationHints(dailyReviews),
-    [dailyReviews],
-  );
-
-  const commitmentSignal = useMemo(
-    () => buildCommitmentSignal(dailyReviews, hints, streakData.currentStreak),
-    [dailyReviews, hints, streakData.currentStreak],
-  );
-
-  // D6: late start item
-  const lateStartItem = useMemo(() => {
-    if (nextBestAction || isBuilding) return null;
-    return enrichedItems
-      .filter(i => !i.completed && (i.type === 'goal' || i.type === 'skill'))
-      .sort((a, b) => timeToMins(a.startTime) - timeToMins(b.startTime))[0] ?? null;
-  }, [nextBestAction, isBuilding, enrichedItems]);
-
-  const effectiveItem = nextBestAction ?? lateStartItem;
-
-  // ── Constraint block detection ────────────────────────────────────────────
-  // An item is a constraint block when it was pre-placed by the constraint engine.
-  const isCurrentConstraint = !!effectiveItem && (
-    effectiveItem.source === 'constraint' &&
-    effectiveItem.blockKind === 'constraint'
-  );
-
-  // "Next up" — first non-recovery, non-completed actionable item after effectiveItem
-  const nextItem = useMemo(() => {
-    if (!effectiveItem) return null;
-    const idx = enrichedItems.findIndex(i => i.id === effectiveItem.id);
-    if (idx === -1) return null;
-    return enrichedItems.slice(idx + 1).find(
-      i => !i.completed && (i.type === 'goal' || i.type === 'skill'),
-    ) ?? null;
-  }, [effectiveItem, enrichedItems]);
-
-  // D7: all skipped
-  const allSkipped = useMemo(() => {
-    if (nextBestAction || isBuilding) return false;
-    const actionable = enrichedItems.filter(i => (i.type === 'goal' || i.type === 'skill') && !i.completed);
-    return actionable.length > 0 && actionable.every(i => skippedPlanItemIds.includes(i.id));
-  }, [nextBestAction, isBuilding, enrichedItems, skippedPlanItemIds]);
-
-  // ── Schedule prompt gate (daily_input users who haven't entered today) ───────
-  // When true: show the entry prompt and block plan generation.
-  // Guards:
-  //   - scheduleType must be 'daily_input' (not fixed/weekly_known/flexible)
-  //   - entry must be absent OR stale (for a previous date, not today)
-  //   - today must NOT be an off-day (off-days need no schedule entry)
-  //   - userType must be a constrained type (not flexible)
-  const todayDOW    = new Date(today).getDay();
-  const isOffDay    = (profile?.offDays ?? []).includes(todayDOW);
-  const entryIsForToday = todayScheduleEntry?.date === today;
-  const needsScheduleEntry = (
-    profile?.scheduleType === 'daily_input' &&
-    !entryIsForToday &&
-    !isOffDay &&
-    !!profile?.userType &&
-    profile.userType !== 'flexible'
-  );
 
   // Greeting
   const hour = new Date().getHours();
@@ -1348,7 +1187,7 @@ export default function HomeScreen() {
     hour < 12 ? 'home.greeting_morning' :
     hour < 17 ? 'home.greeting_afternoon' :
                 'home.greeting_evening';
-  const firstName = profile?.name?.split(' ')[0] ?? null;
+  const firstName   = profile?.name?.split(' ')[0] ?? null;
   const greetingText = `${t(greetingKey)}${firstName ? `, ${firstName}` : ''}`;
 
   // D8: starting confirmation

@@ -80,9 +80,16 @@ Installs `expo-dev-client` on a physical device, enabling full native module sup
 
 ---
 
-## Environment / API Key
+## Environment / Secrets
 
-LifeOS has no server-side secrets. The Anthropic API key is entered by the user in **Settings → AI API Key** and stored locally in AsyncStorage. No `.env` file is required to build or run the app.
+LifeOS uses a backend AI routing layer (Supabase Edge Functions). Server-side secrets are managed in Supabase and never ship inside the app binary.
+
+**Required Supabase secrets** (set via `supabase secrets set`):
+- `OPENAI_API_KEY` — primary AI provider
+- `NVIDIA_NIM_API_KEY` — cheap-mode / fallback provider
+- `ANTHROPIC_API_KEY` — optional third provider
+
+No `.env` file is required to build or run the app itself. The mobile client authenticates to Supabase using the project `EXPO_PUBLIC_SUPABASE_URL` and `EXPO_PUBLIC_SUPABASE_ANON_KEY` values in `app.config.js` / EAS environment variables — these are safe to expose in the bundle (anon key, RLS-enforced).
 
 ---
 
