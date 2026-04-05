@@ -388,15 +388,31 @@ export default function GoalsScreen() {
         </View>
 
         {filteredGoals.length === 0 ? (
-          <View style={s.emptyWrap}>
-            <Ionicons name="flag-outline" size={40} color={Colors.textMuted} />
-            <Text style={s.emptyTitle}>{t('goals.no_goals_title')}</Text>
-            <Text style={s.emptyText}>{t('goals.no_goals_text')}</Text>
-            <TouchableOpacity onPress={openAdd} style={[s.emptyBtn, { flexDirection: dir.rowDir }]} activeOpacity={0.8}>
-              <Ionicons name="add" size={16} color={Colors.textInverse} />
-              <Text style={s.emptyBtnText}>{t('goals.add_first_goal')}</Text>
-            </TouchableOpacity>
-          </View>
+          goals.length === 0 ? (
+            /* First-time user: no goals at all */
+            <View style={s.emptyWrap}>
+              <View style={s.emptyIconWrap}>
+                <Ionicons name="flag" size={28} color={Colors.gold} />
+              </View>
+              <Text style={s.emptyTitle}>{t('goals.no_goals_title')}</Text>
+              <Text style={s.emptyText}>{t('goals.no_goals_text')}</Text>
+              <TouchableOpacity onPress={openAdd} style={[s.emptyBtn, { flexDirection: dir.rowDir }]} activeOpacity={0.8}>
+                <Ionicons name="add" size={16} color={Colors.textInverse} />
+                <Text style={s.emptyBtnText}>{t('goals.add_first_goal')}</Text>
+              </TouchableOpacity>
+            </View>
+          ) : (
+            /* Category filter is empty */
+            <View style={s.emptyWrap}>
+              <Ionicons name="filter-outline" size={32} color={Colors.textMuted} />
+              <Text style={s.emptyTitle}>No goals in this category</Text>
+              <Text style={s.emptyText}>Try a different filter, or add a goal to this category.</Text>
+              <TouchableOpacity onPress={openAdd} style={[s.emptyBtn, { flexDirection: dir.rowDir }]} activeOpacity={0.8}>
+                <Ionicons name="add" size={16} color={Colors.textInverse} />
+                <Text style={s.emptyBtnText}>Add goal here</Text>
+              </TouchableOpacity>
+            </View>
+          )
         ) : (
           <View style={s.goalList}>
             {filteredGoals.map((goal) => {
@@ -580,6 +596,7 @@ const s = StyleSheet.create({
 
   // Empty state
   emptyWrap:    { alignItems: 'center', gap: Spacing.md, paddingVertical: Spacing.xxl },
+  emptyIconWrap:{ width: 64, height: 64, borderRadius: Radius.full, backgroundColor: Colors.goldMuted, borderWidth: 1, borderColor: Colors.goldDim, alignItems: 'center', justifyContent: 'center' },
   emptyTitle:   { fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.textSecondary },
   emptyText:    { fontSize: FontSize.sm, color: Colors.textMuted, textAlign: 'center', lineHeight: 22 },
   emptyBtn:     { flexDirection: 'row', alignItems: 'center', gap: Spacing.xs, backgroundColor: Colors.gold, borderRadius: Radius.lg, paddingVertical: 12, paddingHorizontal: Spacing.lg, marginTop: Spacing.sm, ...Shadow.gold },

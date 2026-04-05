@@ -1187,6 +1187,23 @@ export default function HomeScreen() {
   const undoTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const undoAnim  = useRef(new Animated.Value(0)).current;
 
+  // Goal-group celebration — fires when all plan items for a goal are done
+  const [goalCelebTitle, setGoalCelebTitle] = useState<string | null>(null);
+  const celebTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const celebAnim = useRef(new Animated.Value(0)).current;
+
+  const showGoalCelebration = (goalTitle: string) => {
+    if (celebTimerRef.current) clearTimeout(celebTimerRef.current);
+    setGoalCelebTitle(goalTitle);
+    celebAnim.setValue(0);
+    Animated.spring(celebAnim, { toValue: 1, friction: 7, useNativeDriver: true }).start();
+    celebTimerRef.current = setTimeout(() => {
+      Animated.timing(celebAnim, { toValue: 0, duration: 200, useNativeDriver: true }).start(
+        () => setGoalCelebTitle(null),
+      );
+    }, 2500);
+  };
+
   const showUndoToast = (id: string, title: string) => {
     if (undoTimer.current) clearTimeout(undoTimer.current);
     setUndoItem({ id, title });
@@ -1288,6 +1305,20 @@ export default function HomeScreen() {
     }
     showFlash(isLastTask ? t('home.progress_ring_celebration') : t('home.flash_task_done'));
     showUndoToast(id, found.title);
+
+    // Detect goal-group completion: all goal-type items for the same goalId now done
+    if (found.goalId && (found.type === 'goal' || found.type === 'skill')) {
+      const siblingItems = enrichedItems.filter(
+        i => i.goalId === found.goalId && (i.type === 'goal' || i.type === 'skill'),
+      );
+      const allSiblingsDone = siblingItems.every(i => i.id === id || i.completed);
+      if (allSiblingsDone && siblingItems.length >= 1) {
+        const matchedGoal = goals.find(g => g.id === found.goalId);
+        if (matchedGoal) {
+          showGoalCelebration(matchedGoal.title);
+        }
+      }
+    }
   };
 
   const handleSkip = () => {
@@ -1538,6 +1569,30 @@ export default function HomeScreen() {
         </Animated.View>
       )}
 
+      {/* Goal-group celebration — auto-dismisses after 2.5s */}
+      {goalCelebTitle && (
+        <Modal transparent animationType="none" visible={!!goalCelebTitle} onRequestClose={() => setGoalCelebTitle(null)}>
+          <TouchableOpacity
+            style={s.celebOverlay}
+            activeOpacity={1}
+            onPress={() => {
+              if (celebTimerRef.current) clearTimeout(celebTimerRef.current);
+              setGoalCelebTitle(null);
+            }}
+          >
+            <Animated.View style={[s.celebCard, {
+              opacity: celebAnim,
+              transform: [{ scale: celebAnim.interpolate({ inputRange: [0, 1], outputRange: [0.8, 1] }) }],
+            }]}>
+              <Text style={s.celebIcon}>🏆</Text>
+              <Text style={s.celebTitle}>Goal done!</Text>
+              <Text style={s.celebGoalName} numberOfLines={2}>{goalCelebTitle}</Text>
+              <Text style={s.celebSub}>All tasks for this goal are complete today</Text>
+            </Animated.View>
+          </TouchableOpacity>
+        </Modal>
+      )}
+
     </SafeAreaView>
   );
 }
@@ -1574,6 +1629,19 @@ const s = StyleSheet.create({
   undoToastText: { flex: 1, fontSize: FontSize.sm, color: Colors.textPrimary, fontWeight: FontWeight.medium },
   undoBtn: { backgroundColor: Colors.gold, borderRadius: Radius.md, paddingHorizontal: 14, paddingVertical: 6 },
   undoBtnText: { fontSize: FontSize.xs, fontWeight: FontWeight.bold, color: Colors.textInverse },
+
+  // Goal-group celebration
+  celebOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.65)', alignItems: 'center', justifyContent: 'center', paddingHorizontal: Spacing.xl },
+  celebCard: {
+    backgroundColor: Colors.surfaceElevated, borderRadius: Radius.xl,
+    padding: Spacing.xl, alignItems: 'center', gap: Spacing.sm,
+    borderWidth: 1, borderColor: Colors.goldDim,
+    ...Shadow.gold,
+  },
+  celebIcon:     { fontSize: 48, lineHeight: 56 },
+  celebTitle:    { fontSize: FontSize.xxl, fontWeight: FontWeight.bold, color: Colors.gold },
+  celebGoalName: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.textPrimary, textAlign: 'center', maxWidth: 240 },
+  celebSub:      { fontSize: FontSize.sm, color: Colors.textMuted, textAlign: 'center' },
 
   // Dimmed secondary layers during focus
   dimmed: { opacity: 0.35, gap: Spacing.lg },
