@@ -1,5 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import {
+  Alert,
   View,
   Text,
   ScrollView,
@@ -174,11 +175,31 @@ export default function GoalsScreen() {
   const goals            = useAppStore((s) => s.goals);
   const weeklyPlan       = useAppStore((s) => s.weeklyPlan);
   const identityGoals    = useAppStore((s) => s.identityGoals);
+  const controlPlan      = useAppStore((s) => s.controlPlan);
   const addGoal          = useAppStore((s) => s.addGoal);
   const updateGoal       = useAppStore((s) => s.updateGoal);
   const deleteGoal       = useAppStore((s) => s.deleteGoal);
   const addIdentityGoal  = useAppStore((s) => s.addIdentityGoal);
   const removeIdentityGoal = useAppStore((s) => s.removeIdentityGoal);
+
+  // Safe-delete: warn if goal has active plan items today
+  const handleDeleteGoal = (goalId: string, goalTitle: string) => {
+    const activePlanItems = (controlPlan?.plan.items ?? []).filter(
+      (i) => i.goalId === goalId && !i.completed && i.type !== 'break' && i.type !== 'event',
+    );
+    const count = activePlanItems.length;
+
+    Alert.alert(
+      'Delete goal?',
+      count > 0
+        ? `"${goalTitle}" has ${count} task${count > 1 ? 's' : ''} in today's plan. They will be removed when you delete this goal.`
+        : `"${goalTitle}" will be permanently deleted.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Delete', style: 'destructive', onPress: () => deleteGoal(goalId) },
+      ],
+    );
+  };
 
   const [showIdentityPicker, setShowIdentityPicker] = useState(false);
   const [activeFilter, setActiveFilter] = useState<GoalCategory | 'all'>('all');
@@ -423,7 +444,7 @@ export default function GoalsScreen() {
                   goal={goal}
                   allocatedMins={alloc?.allocatedMins ?? 0}
                   onEdit={() => openEdit(goal)}
-                  onDelete={() => deleteGoal(goal.id)}
+                  onDelete={() => handleDeleteGoal(goal.id, goal.title)}
                 />
               );
             })}

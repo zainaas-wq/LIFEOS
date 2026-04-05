@@ -17,6 +17,7 @@
 
 import React, { useEffect, useState } from 'react';
 import {
+  ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
   ScrollView,
@@ -76,8 +77,12 @@ export default function ReviewScreen() {
     return `${m}m`;
   }
 
+  const [saved,   setSaved]   = useState(false);
+  const [saving,  setSaving]  = useState(false);
+
   const handleSave = async () => {
-    if (!review) { router.back(); return; }
+    if (!review || saving) return;
+    setSaving(true);
     const updated: DailyReview = {
       ...review,
       reflectionText: reflectionText.trim() || undefined,
@@ -87,7 +92,9 @@ export default function ReviewScreen() {
       savedAt:        new Date().toISOString(),
     };
     await saveDailyReviewAction(updated);
-    router.back();
+    setSaved(true);
+    setSaving(false);
+    setTimeout(() => router.back(), 900);
   };
 
   if (!review) {
@@ -213,11 +220,21 @@ export default function ReviewScreen() {
         {/* ── Save button ─────────────────────────────────────────────────── */}
         <View style={styles.footer}>
           <TouchableOpacity
-            style={styles.saveBtn}
+            style={[styles.saveBtn, saved && styles.saveBtnDone]}
             onPress={handleSave}
             activeOpacity={0.85}
+            disabled={saving || saved}
           >
-            <Text style={styles.saveBtnText}>Save Review</Text>
+            {saving ? (
+              <ActivityIndicator size="small" color={Colors.textInverse} />
+            ) : saved ? (
+              <>
+                <Ionicons name="checkmark-circle" size={18} color={Colors.textInverse} />
+                <Text style={styles.saveBtnText}>Saved!</Text>
+              </>
+            ) : (
+              <Text style={styles.saveBtnText}>Save Review</Text>
+            )}
           </TouchableOpacity>
         </View>
       </KeyboardAvoidingView>
@@ -405,6 +422,12 @@ const styles = StyleSheet.create({
     borderRadius: Radius.md,
     paddingVertical: Spacing.md,
     alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  saveBtnDone: {
+    backgroundColor: Colors.success,
   },
   saveBtnText: {
     color: Colors.textInverse,
