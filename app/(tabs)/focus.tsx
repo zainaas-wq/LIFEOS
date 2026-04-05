@@ -219,50 +219,68 @@ export default function FocusTab() {
           </View>
         )}
 
-        {/* Session list */}
+        {/* Session list or guide card */}
         {todaySessions.length > 0 ? (
-          <View style={s.sessionList}>
-            {[...todaySessions].reverse().map((session) => {
-              const goal = goals.find((g) => g.id === session.goalId);
-              const startTime = new Date(session.start).toLocaleTimeString([], {
-                hour: '2-digit',
-                minute: '2-digit',
-              });
-              return (
-                <View key={session.id} style={[s.sessionRow, { flexDirection: dir.rowDir }]}>
-                  <View style={s.sessionAccent} />
-                  <View style={s.sessionInfo}>
-                    <Text style={s.sessionGoal} numberOfLines={1}>
-                      {goal?.title ?? t('focus.default_title')}
-                    </Text>
-                    <Text style={s.sessionMeta}>
-                      {startTime} · {fmtMins(session.durationMinutes ?? 0)}
-                    </Text>
+          <>
+            <View style={s.sessionList}>
+              {[...todaySessions].reverse().map((session) => {
+                const goal = goals.find((g) => g.id === session.goalId);
+                const startTime = new Date(session.start).toLocaleTimeString([], {
+                  hour: '2-digit',
+                  minute: '2-digit',
+                });
+                return (
+                  <View key={session.id} style={[s.sessionRow, { flexDirection: dir.rowDir }]}>
+                    <View style={s.sessionAccent} />
+                    <View style={s.sessionInfo}>
+                      <Text style={s.sessionGoal} numberOfLines={1}>
+                        {goal?.title ?? t('focus.default_title')}
+                      </Text>
+                      <Text style={s.sessionMeta}>
+                        {startTime} · {fmtMins(session.durationMinutes ?? 0)}
+                      </Text>
+                    </View>
+                    <Ionicons name="checkmark-circle" size={18} color={Colors.success} />
                   </View>
-                  <Ionicons name="checkmark-circle" size={18} color={Colors.success} />
-                </View>
-              );
-            })}
-          </View>
-        ) : (
-          <View style={s.emptyWrap}>
-            <View style={s.emptyIcon}>
-              <Ionicons name="timer-outline" size={28} color={Colors.textMuted} />
+                );
+              })}
             </View>
-            <Text style={s.emptyTitle}>{t('focus.no_history')}</Text>
-            <Text style={s.emptySub}>{t('focus.empty_sub')}</Text>
+
+            {/* Add another session CTA */}
+            <TouchableOpacity
+              onPress={() => router.replace('/(tabs)/home' as any)}
+              style={[s.ctaBtn, { flexDirection: dir.rowDir }]}
+              activeOpacity={0.85}
+            >
+              <Text style={s.ctaBtnText}>{t('focus.cta')}</Text>
+              <Ionicons name="arrow-forward" size={16} color={Colors.textInverse} />
+            </TouchableOpacity>
+          </>
+        ) : (
+          /* No sessions yet — guide card */
+          <View style={s.guideCard}>
+            <View style={[s.guideIconRow, { flexDirection: dir.rowDir }]}>
+              <View style={s.guideIconWrap}>
+                <Ionicons name="flash" size={22} color={Colors.gold} />
+              </View>
+              <View style={s.guideBody}>
+                <Text style={s.guideTitle}>Ready to focus?</Text>
+                <Text style={s.guideSub}>
+                  Open the Home tab, find your current task in the Now card, and tap
+                  {' '}<Text style={s.guideAccent}>Start Session</Text> to begin.
+                </Text>
+              </View>
+            </View>
+            <TouchableOpacity
+              onPress={() => router.replace('/(tabs)/home' as any)}
+              style={[s.guideBtn, { flexDirection: dir.rowDir }]}
+              activeOpacity={0.85}
+            >
+              <Text style={s.guideBtnText}>Go to Home</Text>
+              <Ionicons name="arrow-forward" size={15} color={Colors.gold} />
+            </TouchableOpacity>
           </View>
         )}
-
-        {/* CTA back to plan */}
-        <TouchableOpacity
-          onPress={() => router.replace('/(tabs)/home' as any)}
-          style={[s.ctaBtn, { flexDirection: dir.rowDir }]}
-          activeOpacity={0.85}
-        >
-          <Text style={s.ctaBtnText}>{t('focus.cta')}</Text>
-          <Ionicons name="arrow-forward" size={16} color={Colors.textInverse} />
-        </TouchableOpacity>
 
       </ScrollView>
     </SafeAreaView>
@@ -459,33 +477,7 @@ const s = StyleSheet.create({
     color: Colors.textMuted,
   },
 
-  emptyWrap: {
-    alignItems: 'center',
-    gap: Spacing.md,
-    paddingVertical: Spacing.xxl,
-  },
-  emptyIcon: {
-    width: 60,
-    height: 60,
-    borderRadius: Radius.full,
-    backgroundColor: Colors.surfaceElevated,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: Colors.border,
-  },
-  emptyTitle: {
-    fontSize: FontSize.lg,
-    fontWeight: FontWeight.semibold,
-    color: Colors.textSecondary,
-  },
-  emptySub: {
-    fontSize: FontSize.sm,
-    color: Colors.textMuted,
-    textAlign: 'center',
-    lineHeight: 20,
-    maxWidth: 260,
-  },
+
 
   ctaBtn: {
     flexDirection: 'row',
@@ -501,5 +493,62 @@ const s = StyleSheet.create({
     fontSize: FontSize.md,
     fontWeight: FontWeight.bold,
     color: Colors.textInverse,
+  },
+
+  // ── Guide card (no-session empty state) ────────────────────────────────────
+  guideCard: {
+    backgroundColor: Colors.surfaceElevated,
+    borderRadius: Radius.xl,
+    borderWidth: 1,
+    borderColor: Colors.goldDim,
+    padding: Spacing.lg,
+    gap: Spacing.md,
+  },
+  guideIconRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: Spacing.md,
+  },
+  guideIconWrap: {
+    width: 44,
+    height: 44,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.goldMuted,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: Colors.goldDim,
+    flexShrink: 0,
+  },
+  guideBody: { flex: 1, gap: 4 },
+  guideTitle: {
+    fontSize: FontSize.md,
+    fontWeight: FontWeight.semibold,
+    color: Colors.textPrimary,
+  },
+  guideSub: {
+    fontSize: FontSize.sm,
+    color: Colors.textSecondary,
+    lineHeight: 20,
+  },
+  guideAccent: {
+    color: Colors.gold,
+    fontWeight: FontWeight.semibold,
+  },
+  guideBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: Spacing.xs,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Colors.goldDim,
+    paddingVertical: Spacing.sm,
+    backgroundColor: Colors.goldMuted,
+  },
+  guideBtnText: {
+    fontSize: FontSize.sm,
+    fontWeight: FontWeight.semibold,
+    color: Colors.gold,
   },
 });

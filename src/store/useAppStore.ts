@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { getIsOnline } from '../lib/networkUtils';
 import type { Session } from '@supabase/supabase-js';
 import i18n, { setAppLanguage } from '../i18n';
 import type {
@@ -175,6 +176,7 @@ interface AppStore {
   taskSkipCount: number;
   taskStreakCount: number;
   skippedPlanItemIds: string[];  // IDs of items the user explicitly skipped this day
+  pendingToggles: Array<{ itemId: string; completed: boolean; timestamp: string }>;
 
   // ── Seed loaded flag ──────────────────────────────────────────────────────
   seedLoaded: boolean;
@@ -341,6 +343,7 @@ interface AppStore {
   // Control engine
   generateControlPlanAction: (date: string) => void;
   toggleControlPlanItem: (itemId: string) => void;
+  flushPendingToggles: () => Promise<void>;
   reschedulePlan: (date: string) => void;
   logDistraction: (note?: string) => void;
   setActiveNudge: (nudge: NudgeItem | null) => void;
@@ -492,6 +495,7 @@ export const useAppStore = create<AppStore>()(
       taskSkipCount: 0,
       taskStreakCount: 0,
       skippedPlanItemIds: [],
+      pendingToggles: [],
       seedLoaded: false,
       trialStartDate: null,
       appLanguage: 'en',
@@ -1100,10 +1104,40 @@ export const useAppStore = create<AppStore>()(
           // Update single item — cheaper than re-saving the whole plan
           const item = updatedItems.find((i) => i.id === itemId);
           if (item) {
-            planService
-              .updatePlanItemCompletion(s.session.user.id, itemId, item.completed)
-              .catch(console.warn);
+            if (getIsOnline()) {
+              planService
+                .updatePlanItemCompletion(s.session.user.id, itemId, item.completed)
+                .catch(console.warn);
+            } else {
+              // Offline — queue for replay when connectivity returns
+              set((st) => ({
+                pendingToggles: [
+                  ...st.pendingToggles,
+                  { itemId, completed: item.completed, timestamp: new Date().toISOString() },
+                ],
+              }));
+            }
           }
+        }
+      },
+
+      flushPendingToggles: async () => {
+        const { session, isGuestMode, pendingToggles } = get();
+        if (!session || isGuestMode || pendingToggles.length === 0) return;
+        // Deduplicate: for each itemId keep only the latest state
+        const latestByItem = new Map<string, { itemId: string; completed: boolean; timestamp: string }>();
+        for (const t of pendingToggles) {
+          const existing = latestByItem.get(t.itemId);
+          if (!existing || t.timestamp > existing.timestamp) {
+            latestByItem.set(t.itemId, t);
+          }
+        }
+        // Clear queue before flush to avoid double-replay on concurrent calls
+        set({ pendingToggles: [] });
+        for (const toggle of Array.from(latestByItem.values())) {
+          planService
+            .updatePlanItemCompletion(session.user.id, toggle.itemId, toggle.completed)
+            .catch(console.warn);
         }
       },
 

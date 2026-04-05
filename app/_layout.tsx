@@ -5,6 +5,7 @@ import { StatusBar } from 'expo-status-bar';
 import { View } from 'react-native';
 import { Colors } from '../src/constants/theme';
 import OfflineBanner from '../src/components/OfflineBanner';
+import { onConnectivityChange } from '../src/lib/networkUtils';
 import { supabase } from '../src/lib/supabase';
 import { useAppStore } from '../src/store/useAppStore';
 import { initRevenueCat, logOutRevenueCat } from '../src/services/purchaseService';
@@ -16,12 +17,13 @@ import '../src/i18n';
 import { NOTIF_IDS } from '../src/ai/notificationPlanner';
 
 export default function RootLayout() {
-  const setSession        = useAppStore((s) => s.setSession);
-  const session           = useAppStore((s) => s.session);
-  const isGuestMode       = useAppStore((s) => s.isGuestMode);
-  const hydrateFromCloud  = useAppStore((s) => s.hydrateFromCloud);
-  const resetAllData      = useAppStore((s) => s.resetAllData);
-  const syncErrors        = useAppStore((s) => s.syncErrors);
+  const setSession           = useAppStore((s) => s.setSession);
+  const session              = useAppStore((s) => s.session);
+  const isGuestMode          = useAppStore((s) => s.isGuestMode);
+  const hydrateFromCloud     = useAppStore((s) => s.hydrateFromCloud);
+  const resetAllData         = useAppStore((s) => s.resetAllData);
+  const syncErrors           = useAppStore((s) => s.syncErrors);
+  const flushPendingToggles  = useAppStore((s) => s.flushPendingToggles);
 
   // ready: store has rehydrated from AsyncStorage (50 ms debounce)
   const [ready, setReady]               = useState(false);
@@ -157,7 +159,15 @@ export default function RootLayout() {
     }).catch(() => {});
   }, [ready, sessionChecked, session, isGuestMode]);
 
-  // ── 5. Route based on auth state (only once both checks pass) ─────────────
+  // ── 5. Flush offline toggle queue when connectivity returns ──────────────
+  useEffect(() => {
+    const unsub = onConnectivityChange((online) => {
+      if (online) flushPendingToggles().catch(console.warn);
+    });
+    return unsub;
+  }, [flushPendingToggles]);
+
+  // ── 7. Route based on auth state (only once both checks pass) ─────────────
   useEffect(() => {
     if (!ready || !sessionChecked) return;
 
