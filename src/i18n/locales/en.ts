@@ -864,6 +864,12 @@ const en = {
     error_password_required: 'Password is required.',
     error_password_min: 'Password must be at least 6 characters.',
     error_passwords_no_match: 'Passwords do not match.',
+    error_email_invalid: 'Please enter a valid email address.',
+    error_confirm_required: 'Please confirm your password.',
+    guest_warning_title: 'No account — data stays local',
+    guest_warning_body: 'Your data will not sync across devices and will be lost if you uninstall the app.',
+    guest_warning_confirm: 'Continue anyway',
+    guest_warning_cancel: 'Go back',
     // Legacy keys (preserved for backward compatibility)
     login_title: 'Welcome back',
     login_subtitle: 'Sign in to your LifeOS',

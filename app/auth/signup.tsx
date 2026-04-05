@@ -1,14 +1,26 @@
 /**
- * signup.tsx — Premium sign-up screen.
+ * signup.tsx — Sign-up screen.
  * Fully localised via react-i18next. Adapts layout for RTL languages.
  * OAuth (Apple / Google) first. Email registration revealed on demand.
+ *
+ * Batch 2 fixes:
+ *  - Email format validation (regex)
+ *  - Explicit "confirm password required" check with its own error message
+ *  - Real-time confirm password match indicator (hint / error on Input)
+ *  - Password visibility toggle on all password fields (handled in Input)
+ *  - textContentType + returnKeyType + onSubmitEditing on inputs
+ *  - autoFocus on email field when form revealed
+ *  - Guest mode warning modal before entering guest
+ *  - Error always rendered in the same place (inside form)
+ *  - OAuth loading state cleared on browser cancel (timeout fallback)
  */
 
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   Animated,
   ActivityIndicator,
   KeyboardAvoidingView,
+  Modal,
   Platform,
   ScrollView,
   StyleSheet,
@@ -29,10 +41,13 @@ import { Colors, FontSize, FontWeight, Radius, Shadow, Spacing } from '../../src
 
 type OAuthProvider = 'google' | 'apple';
 
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const OAUTH_TIMEOUT_MS = 90_000;
+
 export default function SignupScreen() {
-  const { t }          = useTranslation();
-  const dir            = useDirection();
-  const setGuestMode   = useAppStore((s) => s.setGuestMode);
+  const { t }        = useTranslation();
+  const dir          = useDirection();
+  const setGuestMode = useAppStore((s) => s.setGuestMode);
 
   const [email, setEmail]               = useState('');
   const [password, setPassword]         = useState('');
@@ -42,15 +57,18 @@ export default function SignupScreen() {
   const [confirmed, setConfirmed]       = useState(false);
   const [oauthLoading, setOauthLoading] = useState<OAuthProvider | null>(null);
   const [showEmail, setShowEmail]       = useState(false);
+  const [guestWarning, setGuestWarning] = useState(false);
 
-  const fadeAnim  = useRef(new Animated.Value(0)).current;
-  const slideAnim = useRef(new Animated.Value(20)).current;
+  const fadeAnim   = useRef(new Animated.Value(0)).current;
+  const slideAnim  = useRef(new Animated.Value(20)).current;
+  const oauthTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     Animated.parallel([
       Animated.timing(fadeAnim,  { toValue: 1, duration: 500, useNativeDriver: true }),
       Animated.timing(slideAnim, { toValue: 0, duration: 500, useNativeDriver: true }),
     ]).start();
+    return () => { if (oauthTimer.current) clearTimeout(oauthTimer.current); };
   }, []);
 
   // ── OAuth ──────────────────────────────────────────────────────────────────
@@ -58,11 +76,13 @@ export default function SignupScreen() {
   const handleOAuth = async (provider: OAuthProvider) => {
     setError('');
     setOauthLoading(provider);
+    oauthTimer.current = setTimeout(() => setOauthLoading(null), OAUTH_TIMEOUT_MS);
     try {
       await signInWithOAuthProvider(provider);
     } catch (e: any) {
       setError(e.message ?? t('auth.error_generic'));
     } finally {
+      if (oauthTimer.current) clearTimeout(oauthTimer.current);
       setOauthLoading(null);
     }
   };
@@ -71,12 +91,16 @@ export default function SignupScreen() {
 
   const handleSignUp = async () => {
     setError('');
-    if (!email.trim())        { setError(t('auth.error_email_required')); return; }
-    if (password.length < 6)  { setError(t('auth.error_password_min')); return; }
-    if (password !== confirm)  { setError(t('auth.error_passwords_no_match')); return; }
+    const trimmedEmail    = email.trim().toLowerCase();
+    const trimmedPassword = password.trim();
+    if (!trimmedEmail)                   { setError(t('auth.error_email_required'));   return; }
+    if (!EMAIL_REGEX.test(trimmedEmail)) { setError(t('auth.error_email_invalid'));    return; }
+    if (trimmedPassword.length < 6)      { setError(t('auth.error_password_min'));     return; }
+    if (!confirm.trim())                 { setError(t('auth.error_confirm_required')); return; }
+    if (trimmedPassword !== confirm.trim()) { setError(t('auth.error_passwords_no_match')); return; }
     setLoading(true);
     try {
-      const { needsConfirmation } = await signUp(email.trim().toLowerCase(), password);
+      const { needsConfirmation } = await signUp(trimmedEmail, trimmedPassword);
       if (needsConfirmation) setConfirmed(true);
     } catch (e: any) {
       setError(e.message ?? t('auth.error_generic'));
@@ -84,6 +108,19 @@ export default function SignupScreen() {
       setLoading(false);
     }
   };
+
+  const handleGuestPress = () => setGuestWarning(true);
+
+  const confirmGuest = () => {
+    setGuestWarning(false);
+    setGuestMode(true);
+    router.replace('/');
+  };
+
+  // Real-time confirm match: shown as hint when confirm has value and matches,
+  // or as error when confirm has value and doesn't match.
+  const confirmHint  = confirm.length > 0 && confirm.trim() === password.trim() ? '✓ Passwords match' : undefined;
+  const confirmError = confirm.length > 0 && confirm.trim() !== password.trim() ? ' ' : undefined; // red border only
 
   const isBusy = loading || !!oauthLoading;
 
@@ -116,10 +153,35 @@ export default function SignupScreen() {
     );
   }
 
+  // ── Guest warning modal ────────────────────────────────────────────────────
+
+  const GuestWarningModal = (
+    <Modal
+      visible={guestWarning}
+      transparent
+      animationType="fade"
+      onRequestClose={() => setGuestWarning(false)}
+    >
+      <View style={styles.modalOverlay}>
+        <View style={styles.modalCard}>
+          <Text style={styles.modalTitle}>{t('auth.guest_warning_title')}</Text>
+          <Text style={styles.modalBody}>{t('auth.guest_warning_body')}</Text>
+          <TouchableOpacity style={styles.modalConfirmBtn} onPress={confirmGuest} activeOpacity={0.85}>
+            <Text style={styles.modalConfirmText}>{t('auth.guest_warning_confirm')}</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.modalCancelBtn} onPress={() => setGuestWarning(false)} activeOpacity={0.7}>
+            <Text style={styles.modalCancelText}>{t('auth.guest_warning_cancel')}</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    </Modal>
+  );
+
   // ── Main screen ────────────────────────────────────────────────────────────
 
   return (
     <SafeAreaView style={styles.root}>
+      {GuestWarningModal}
       <KeyboardAvoidingView
         style={styles.flex}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
@@ -198,40 +260,58 @@ export default function SignupScreen() {
 
             {/* Email toggle / form */}
             {!showEmail ? (
-              <TouchableOpacity
-                style={[styles.emailToggle, { flexDirection: dir.rowDir }]}
-                onPress={() => setShowEmail(true)}
-                activeOpacity={0.7}
-              >
-                <Ionicons name="mail-outline" size={16} color={Colors.textMuted} />
-                <Text style={styles.emailToggleText}>{t('auth.signup_email')}</Text>
-              </TouchableOpacity>
+              <>
+                <TouchableOpacity
+                  style={[styles.emailToggle, { flexDirection: dir.rowDir }]}
+                  onPress={() => { setError(''); setShowEmail(true); }}
+                  activeOpacity={0.7}
+                >
+                  <Ionicons name="mail-outline" size={16} color={Colors.textMuted} />
+                  <Text style={styles.emailToggleText}>{t('auth.signup_email')}</Text>
+                </TouchableOpacity>
+                {!!error && (
+                  <Text style={[styles.errorText, { textAlign: dir.textAlign }]}>{error}</Text>
+                )}
+              </>
             ) : (
               <View style={styles.emailForm}>
                 <Input
                   label={t('auth.email_label')}
                   value={email}
-                  onChangeText={setEmail}
+                  onChangeText={(v) => { setEmail(v); setError(''); }}
                   keyboardType="email-address"
                   autoCapitalize="none"
                   autoCorrect={false}
+                  autoFocus
                   placeholder={t('auth.email_placeholder')}
+                  textContentType="emailAddress"
+                  returnKeyType="next"
                 />
                 <Input
                   label={t('auth.password_label')}
                   value={password}
-                  onChangeText={setPassword}
+                  onChangeText={(v) => { setPassword(v); setError(''); }}
                   secureTextEntry
                   placeholder="••••••••"
+                  textContentType="newPassword"
+                  returnKeyType="next"
+                  hint="Minimum 6 characters"
                 />
                 <Input
                   label={t('auth.confirm_password_label')}
                   value={confirm}
-                  onChangeText={setConfirm}
+                  onChangeText={(v) => { setConfirm(v); setError(''); }}
                   secureTextEntry
                   placeholder="••••••••"
+                  textContentType="newPassword"
+                  returnKeyType="go"
+                  onSubmitEditing={handleSignUp}
+                  hint={confirmHint}
+                  error={confirmError}
                 />
-                {!!error && <Text style={[styles.errorText, { textAlign: dir.textAlign }]}>{error}</Text>}
+                {!!error && (
+                  <Text style={[styles.errorText, { textAlign: dir.textAlign }]}>{error}</Text>
+                )}
                 <TouchableOpacity
                   style={[styles.createBtn, isBusy && styles.btnBusy]}
                   onPress={handleSignUp}
@@ -247,10 +327,6 @@ export default function SignupScreen() {
               </View>
             )}
 
-            {!!error && !showEmail && (
-              <Text style={[styles.errorText, { textAlign: dir.textAlign }]}>{error}</Text>
-            )}
-
             {/* Footer */}
             <View style={styles.footer}>
               <TouchableOpacity onPress={() => router.back()} activeOpacity={0.7} disabled={isBusy}>
@@ -259,11 +335,7 @@ export default function SignupScreen() {
                   <Text style={styles.footerAccent}>{t('auth.sign_in_cta')}</Text>
                 </Text>
               </TouchableOpacity>
-              <TouchableOpacity
-                onPress={() => { setGuestMode(true); router.replace('/'); }}
-                activeOpacity={0.7}
-                disabled={isBusy}
-              >
+              <TouchableOpacity onPress={handleGuestPress} activeOpacity={0.7} disabled={isBusy}>
                 <Text style={styles.guestText}>{t('auth.no_account')}</Text>
               </TouchableOpacity>
             </View>
@@ -356,4 +428,39 @@ const styles = StyleSheet.create({
   confirmTitle:   { fontSize: FontSize.xl, fontWeight: FontWeight.bold as any, color: Colors.textPrimary },
   confirmText:    { fontSize: FontSize.md, color: Colors.textSecondary, lineHeight: 24 },
   confirmSubtext: { fontSize: FontSize.sm, color: Colors.textMuted, lineHeight: 20 },
+
+  // ── Guest warning modal ──────────────────────────────────────────────────
+  modalOverlay: {
+    flex: 1, backgroundColor: 'rgba(0,0,0,0.7)',
+    justifyContent: 'center', paddingHorizontal: Spacing.xl,
+  },
+  modalCard: {
+    backgroundColor: Colors.surfaceElevated,
+    borderRadius: Radius.xl, padding: Spacing.xl,
+    borderWidth: 1, borderColor: Colors.borderLight,
+    gap: Spacing.md,
+  },
+  modalTitle: {
+    fontSize: FontSize.lg, fontWeight: FontWeight.bold as any,
+    color: Colors.textPrimary, textAlign: 'center',
+  },
+  modalBody: {
+    fontSize: FontSize.sm, color: Colors.textSecondary,
+    lineHeight: 22, textAlign: 'center',
+  },
+  modalConfirmBtn: {
+    backgroundColor: Colors.gold, borderRadius: Radius.lg,
+    paddingVertical: Spacing.md, alignItems: 'center',
+    marginTop: Spacing.xs,
+  },
+  modalConfirmText: {
+    fontSize: FontSize.md, fontWeight: FontWeight.semibold as any,
+    color: Colors.textInverse,
+  },
+  modalCancelBtn: {
+    paddingVertical: Spacing.sm, alignItems: 'center',
+  },
+  modalCancelText: {
+    fontSize: FontSize.sm, color: Colors.textMuted,
+  },
 });
