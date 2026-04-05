@@ -17,6 +17,7 @@ import {
   ActivityIndicator,
   View,
   Text,
+  Image,
   ScrollView,
   StyleSheet,
   TouchableOpacity,
@@ -24,6 +25,7 @@ import {
   Alert,
   Share,
 } from 'react-native';
+import * as ImagePicker from 'expo-image-picker';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -40,6 +42,7 @@ import { useMonthlyUsage } from '../../src/services/usageService';
 import type { UseMonthlyUsageResult } from '../../src/services/usageService';
 import { UpgradeModal } from '../../src/components/upgrade/UpgradeModal';
 import { computeSubscriptionState, getTrialDaysLeft } from '../../src/lib/trialUtils';
+import { supabase } from '../../src/lib/supabase';
 import type { LifeRole, EnergyStyle, WorkStyle, UserType, ScheduleType } from '../../src/types';
 
 // ─── Static data (no labels — labels built inside component) ──────────────────
@@ -225,7 +228,8 @@ export default function ProfileScreen() {
 
   const isAuthenticated = !!session && !isGuestMode;
   const usage = useMonthlyUsage();
-  const [showUpgradeModal, setShowUpgradeModal] = useState(false);
+  const [showUpgradeModal,   setShowUpgradeModal]   = useState(false);
+  const [avatarUploading,    setAvatarUploading]    = useState(false);
 
   // ── Subscription management state ────────────────────────────────────────
   type RestorePhase = 'idle' | 'loading' | 'success' | 'none' | 'error';
@@ -339,6 +343,51 @@ export default function ProfileScreen() {
     }
   };
 
+  const handleAvatarPress = async () => {
+    if (!isAuthenticated || !session?.user?.id) return;
+    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!perm.granted) {
+      Alert.alert('Permission needed', 'Allow photo access to update your profile picture.');
+      return;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      allowsEditing: true,
+      aspect: [1, 1],
+      quality: 0.6,
+      base64: false,
+    });
+    if (result.canceled || !result.assets?.[0]?.uri) return;
+
+    setAvatarUploading(true);
+    try {
+      const uri      = result.assets[0].uri;
+      const ext      = uri.split('.').pop()?.toLowerCase() ?? 'jpg';
+      const path     = `${session.user.id}/avatar.${ext}`;
+      const response = await fetch(uri);
+      const blob     = await response.blob();
+
+      const { error: uploadError } = await (supabase as any).storage
+        .from('avatars')
+        .upload(path, blob, { upsert: true, contentType: `image/${ext}` });
+
+      if (uploadError) {
+        Alert.alert('Upload failed', uploadError.message ?? 'Could not save profile photo.');
+        return;
+      }
+
+      const { data: urlData } = (supabase as any).storage.from('avatars').getPublicUrl(path);
+      const publicUrl: string = urlData?.publicUrl ?? '';
+      if (publicUrl) {
+        updateProfile({ avatarUrl: publicUrl });
+      }
+    } catch (e: any) {
+      Alert.alert('Upload failed', e?.message ?? 'Could not save profile photo.');
+    } finally {
+      setAvatarUploading(false);
+    }
+  };
+
   const handleSignOut = () => {
     Alert.alert(t('profile.sign_out'), t('profile.sign_out_confirm'), [
       { text: t('common.cancel'), style: 'cancel' },
@@ -418,9 +467,30 @@ export default function ProfileScreen() {
         {/* ── Profile header card ────────────────────────────────────────── */}
         <View style={styles.profileHeaderCard}>
           <View style={[styles.profileHeaderTop, { flexDirection: dir.rowDir }]}>
-            <View style={styles.avatar}>
-              <Text style={styles.avatarText}>{initials}</Text>
-            </View>
+            <TouchableOpacity
+              style={styles.avatarWrap}
+              onPress={handleAvatarPress}
+              activeOpacity={isAuthenticated ? 0.8 : 1}
+              disabled={!isAuthenticated}
+            >
+              {profile.avatarUrl ? (
+                <Image source={{ uri: profile.avatarUrl }} style={styles.avatar} />
+              ) : (
+                <View style={styles.avatar}>
+                  <Text style={styles.avatarText}>{initials}</Text>
+                </View>
+              )}
+              {avatarUploading && (
+                <View style={styles.avatarOverlay}>
+                  <ActivityIndicator size="small" color={Colors.gold} />
+                </View>
+              )}
+              {isAuthenticated && !avatarUploading && (
+                <View style={styles.avatarCameraBtn}>
+                  <Ionicons name="camera" size={10} color={Colors.textInverse} />
+                </View>
+              )}
+            </TouchableOpacity>
             <View style={styles.profileMeta}>
               <Text style={styles.profileName}>{profile.name || t('profile.name_fallback')}</Text>
               <Text style={styles.profileRole}>{roleLabel}</Text>
@@ -836,12 +906,25 @@ const styles = StyleSheet.create({
     borderColor: Colors.goldDim,
   },
   profileHeaderTop: { flexDirection: 'row', alignItems: 'center', gap: Spacing.md },
+  avatarWrap:   { position: 'relative' },
   avatar: {
     width: 56, height: 56, borderRadius: Radius.full,
     backgroundColor: Colors.goldMuted, borderWidth: 2, borderColor: Colors.gold,
     alignItems: 'center', justifyContent: 'center',
   },
-  avatarText:   { fontSize: FontSize.xxl, fontWeight: FontWeight.bold, color: Colors.gold },
+  avatarText:    { fontSize: FontSize.xxl, fontWeight: FontWeight.bold, color: Colors.gold },
+  avatarOverlay: {
+    position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
+    borderRadius: Radius.full,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  avatarCameraBtn: {
+    position: 'absolute', bottom: 0, right: 0,
+    width: 18, height: 18, borderRadius: 9,
+    backgroundColor: Colors.gold, alignItems: 'center', justifyContent: 'center',
+    borderWidth: 1.5, borderColor: Colors.surface,
+  },
   profileMeta:  { flex: 1, gap: 4 },
   profileName:  { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.textPrimary },
   profileRole:  { fontSize: FontSize.sm, color: Colors.textSecondary },

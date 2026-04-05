@@ -1128,7 +1128,8 @@ export const useAppStore = create<AppStore>()(
 
       logDistraction: (note) => {
         const log = { id: generateId(), timestamp: new Date().toISOString(), note };
-        set((s) => ({ distractionLogs: [log, ...s.distractionLogs] }));
+        // Prepend new entry and cap at 200 to prevent unbounded AsyncStorage growth
+        set((s) => ({ distractionLogs: [log, ...s.distractionLogs].slice(0, 200) }));
         const { session, isGuestMode } = get();
         if (session && !isGuestMode) {
           distractionService.insertDistractionLog(session.user.id, log).catch(console.warn);

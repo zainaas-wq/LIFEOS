@@ -126,6 +126,7 @@ export interface UserProfile {
   scheduleType?: ScheduleType;       // how the constraint schedule is known
   offDays?: number[];                // 0=Sun…6=Sat — rest/off days (e.g. [5,6] = Fri+Sat)
   skipTasksOnOffDays?: boolean;      // whether recurring tasks are suppressed on off days
+  avatarUrl?: string;                // Supabase Storage public URL for profile photo
 }
 
 // ─── Schedule ─────────────────────────────────────────────────────────────────
