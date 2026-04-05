@@ -53,6 +53,20 @@ export async function requestPermissions(): Promise<boolean> {
   }
 }
 
+/**
+ * Checks whether notification permission is currently granted.
+ * Does NOT prompt the user. Returns false on web.
+ */
+export async function checkPermissionGranted(): Promise<boolean> {
+  if (Platform.OS === 'web') return false;
+  try {
+    const { status } = await Notifications.getPermissionsAsync();
+    return status === 'granted';
+  } catch {
+    return false;
+  }
+}
+
 // ─── Schedule ─────────────────────────────────────────────────────────────────
 
 /**

@@ -33,6 +33,7 @@ import { StreakBadge } from '../../src/components/StreakBadge';
 import { ReentryBanner } from '../../src/components/ReentryBanner';
 import { track } from '../../src/services/analyticsService';
 import { useHomeState } from '../../src/hooks/useHomeState';
+import { useNotifPermission } from '../../src/hooks/useNotifPermission';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -1172,6 +1173,11 @@ export default function HomeScreen() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // ── Notification permission soft prompt ──────────────────────────────────
+  const notifPerm = useNotifPermission();
+  const [notifPromptDismissed, setNotifPromptDismissed] = React.useState(false);
+  const showNotifPrompt = notifPerm.checked && !notifPerm.granted && !notifPromptDismissed;
+
   // ── Local UI state ────────────────────────────────────────────────────────
   const [reentryDismissed, setReentryDismissed] = React.useState(false);
   const [dismissedRisk, setDismissedRisk]       = React.useState<string | null>(null);
@@ -1383,6 +1389,31 @@ export default function HomeScreen() {
             focusMins={todayFocusMins}
             pct={progress.pct}
           />
+        )}
+
+        {/* ── Notification permission soft prompt ──────────────────────────── */}
+        {showNotifPrompt && (
+          <View style={s.notifPromptCard}>
+            <View style={s.notifPromptLeft}>
+              <Ionicons name="notifications-off-outline" size={18} color={Colors.warning} />
+              <View style={s.notifPromptText}>
+                <Text style={s.notifPromptTitle}>Notifications are off</Text>
+                <Text style={s.notifPromptSub}>Enable to get task nudges and reminders</Text>
+              </View>
+            </View>
+            <View style={s.notifPromptActions}>
+              <TouchableOpacity
+                onPress={() => { notifPerm.request(); setNotifPromptDismissed(true); }}
+                style={s.notifPromptBtn}
+                activeOpacity={0.8}
+              >
+                <Text style={s.notifPromptBtnText}>Enable</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={() => setNotifPromptDismissed(true)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                <Ionicons name="close" size={16} color={Colors.textMuted} />
+              </TouchableOpacity>
+            </View>
+          </View>
         )}
 
         {/* ── Re-entry banner — shown when user missed ≥ 1 day ────────────────
@@ -1645,6 +1676,20 @@ const s = StyleSheet.create({
 
   // Dimmed secondary layers during focus
   dimmed: { opacity: 0.35, gap: Spacing.lg },
+
+  // Notification permission prompt
+  notifPromptCard: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    backgroundColor: Colors.surface, borderRadius: Radius.lg,
+    padding: Spacing.md, borderWidth: 1, borderColor: 'rgba(251,191,36,0.2)', gap: Spacing.sm,
+  },
+  notifPromptLeft:    { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm, flex: 1 },
+  notifPromptText:    { flex: 1, gap: 2 },
+  notifPromptTitle:   { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.textPrimary },
+  notifPromptSub:     { fontSize: FontSize.xs, color: Colors.textMuted },
+  notifPromptActions: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
+  notifPromptBtn:     { backgroundColor: Colors.warning + '22', borderRadius: Radius.md, paddingHorizontal: 12, paddingVertical: 6, borderWidth: 1, borderColor: Colors.warning + '44' },
+  notifPromptBtnText: { fontSize: FontSize.xs, fontWeight: FontWeight.semibold, color: Colors.warning },
 
   // Awaiting shell — shown below schedule prompt
   awaitingShell: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: Spacing.sm, paddingVertical: Spacing.xl, opacity: 0.5 },

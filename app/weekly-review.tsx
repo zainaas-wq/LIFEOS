@@ -12,8 +12,9 @@
  *   - One-line interpretation
  */
 
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Animated,
   View,
   Text,
   ScrollView,
@@ -144,8 +145,32 @@ const sc = StyleSheet.create({
 
 // ─── Main Screen ──────────────────────────────────────────────────────────────
 
+// ─── Skeleton placeholder ─────────────────────────────────────────────────────
+
+function SkeletonBlock({ height = 20, width = '100%' as any, style }: { height?: number; width?: number | string; style?: any }) {
+  const anim = useRef(new Animated.Value(0.4)).current;
+  useEffect(() => {
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(anim, { toValue: 1, duration: 700, useNativeDriver: true }),
+        Animated.timing(anim, { toValue: 0.4, duration: 700, useNativeDriver: true }),
+      ]),
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [anim]);
+  return (
+    <Animated.View
+      style={[{ height, width, borderRadius: 8, backgroundColor: Colors.surfaceHigh, opacity: anim }, style]}
+    />
+  );
+}
+
+// ─── Main Screen ──────────────────────────────────────────────────────────────
+
 export default function WeeklyReviewScreen() {
   const dailyReviews  = useAppStore((s) => s.dailyReviews);
+  const isSyncing     = useAppStore((s) => s.isSyncing);
   const today         = getTodayDate();
   const weekStart     = getWeekStart(today);
   const { isPro }     = useEntitlements();
@@ -184,7 +209,26 @@ export default function WeeklyReviewScreen() {
         contentContainerStyle={s.content}
         showsVerticalScrollIndicator={false}
       >
-        {!hasData ? (
+        {!hasData && isSyncing ? (
+          /* Skeleton — shown while cloud data is loading */
+          <View style={s.skeletonWrap}>
+            <SkeletonBlock height={16} width="40%" />
+            <View style={s.skeletonDots}>
+              {Array.from({ length: 7 }).map((_, i) => (
+                <SkeletonBlock key={i} height={28} width={28} style={{ borderRadius: 14 }} />
+              ))}
+            </View>
+            <View style={s.skeletonRow}>
+              <SkeletonBlock height={80} width="48%" />
+              <SkeletonBlock height={80} width="48%" />
+            </View>
+            <View style={s.skeletonRow}>
+              <SkeletonBlock height={80} width="48%" />
+              <SkeletonBlock height={80} width="48%" />
+            </View>
+            <SkeletonBlock height={72} />
+          </View>
+        ) : !hasData ? (
           <View style={s.empty}>
             <Ionicons name="calendar-outline" size={40} color={Colors.textMuted} />
             <Text style={s.emptyTitle}>No reviews yet this week</Text>
@@ -346,4 +390,9 @@ const s = StyleSheet.create({
   empty:      { alignItems: 'center', justifyContent: 'center', paddingVertical: Spacing.xxl, gap: Spacing.md },
   emptyTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.textPrimary, textAlign: 'center' },
   emptySub:   { fontSize: FontSize.sm, color: Colors.textSecondary, textAlign: 'center', lineHeight: 20 },
+
+  // Skeleton
+  skeletonWrap: { gap: Spacing.lg },
+  skeletonDots: { flexDirection: 'row', justifyContent: 'space-between' },
+  skeletonRow:  { flexDirection: 'row', gap: Spacing.md },
 });
