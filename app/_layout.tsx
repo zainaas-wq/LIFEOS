@@ -133,10 +133,14 @@ export default function RootLayout() {
   // ── 4. Cold-start notification tap → post-auth navigation ────────────────
   // Handles the case where the app was killed and the user tapped a notification.
   // We wait until the app is ready + session is checked before navigating.
+  // Guard: skip navigation entirely if there is no active session — the route
+  // guard in step 5 will redirect to login, avoiding a flash of a protected screen.
   // Warm-start taps are handled by useNotificationSync's live listener.
   useEffect(() => {
     if (!ready || !sessionChecked) return;
     if (Platform.OS === 'web') return;
+    // No session → don't navigate to any protected screen; let step 5 handle routing
+    if (!session && !isGuestMode) return;
 
     // Dynamically import to avoid bundling expo-notifications on web
     import('expo-notifications').then((Notifications) => {
@@ -151,7 +155,7 @@ export default function RootLayout() {
         // task-start / task-missed / drift → home tab (default landing after auth)
       }).catch(() => {});
     }).catch(() => {});
-  }, [ready, sessionChecked]);
+  }, [ready, sessionChecked, session, isGuestMode]);
 
   // ── 5. Route based on auth state (only once both checks pass) ─────────────
   useEffect(() => {
@@ -181,7 +185,7 @@ export default function RootLayout() {
         <Stack.Screen name="index" />
         <Stack.Screen name="language" />
         <Stack.Screen name="auth" />
-        <Stack.Screen name="onboarding/index" />
+        <Stack.Screen name="onboarding/index" options={{ gestureEnabled: false }} />
         <Stack.Screen name="paywall" />
         <Stack.Screen name="upgrade" />
         <Stack.Screen name="(tabs)" />

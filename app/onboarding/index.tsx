@@ -19,8 +19,10 @@
  *   - generateControlPlanAction() generates today's plan
  */
 
-import React, { useEffect, useRef, useState, useMemo } from 'react';
+import React, { useCallback, useEffect, useRef, useState, useMemo } from 'react';
 import {
+  Alert,
+  BackHandler,
   View,
   Text,
   StyleSheet,
@@ -180,7 +182,29 @@ export default function OnboardingScreen() {
 
   // ── Navigation ───────────────────────────────────────────────────────────────
 
-  const handleBack = () => setStep((s) => Math.max(0, s - 1));
+  const handleBack = useCallback(() => setStep((s) => Math.max(0, s - 1)), []);
+
+  // Android hardware back — intercept to prevent navigating out of onboarding
+  useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    const onBack = () => {
+      if (step === 0) {
+        Alert.alert(
+          'Leave setup?',
+          'Your progress will be lost. Are you sure?',
+          [
+            { text: 'Stay', style: 'cancel' },
+            { text: 'Leave', style: 'destructive', onPress: () => router.replace('/auth/login' as any) },
+          ],
+        );
+      } else {
+        handleBack();
+      }
+      return true; // prevent default back behaviour
+    };
+    const sub = BackHandler.addEventListener('hardwareBackPress', onBack);
+    return () => sub.remove();
+  }, [step, handleBack]);
 
   const handleNext = () => {
     setTimeError('');
