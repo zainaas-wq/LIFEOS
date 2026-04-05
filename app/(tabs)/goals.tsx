@@ -438,7 +438,7 @@ export default function GoalsScreen() {
         presentationStyle="pageSheet"
         onRequestClose={() => setModalVisible(false)}
       >
-        <KeyboardAvoidingView style={s.modalRoot} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+        <KeyboardAvoidingView style={s.modalRoot} behavior="padding" keyboardVerticalOffset={0}>
           <View style={s.modal}>
             {/* Modal header */}
             <View style={[s.modalHeader, { flexDirection: dir.rowDir }]}>

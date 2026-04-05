@@ -445,7 +445,7 @@ export default function RoutinesScreen() {
         presentationStyle="pageSheet"
         onRequestClose={() => setModalVisible(false)}
       >
-        <KeyboardAvoidingView style={s.flex} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+        <KeyboardAvoidingView style={s.flex} behavior="padding" keyboardVerticalOffset={0}>
           <View style={s.modal}>
             <View style={[s.modalHeader, { flexDirection: dir.rowDir }]}>
               <Text style={s.modalTitle}>{t('routines.add_modal_title')}</Text>

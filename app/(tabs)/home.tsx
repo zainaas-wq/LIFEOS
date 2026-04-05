@@ -5,6 +5,7 @@ import {
   TouchableOpacity,
   TextInput,
   ScrollView,
+  RefreshControl,
   StyleSheet,
   Animated,
   ActivityIndicator,
@@ -1173,6 +1174,18 @@ export default function HomeScreen() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // ── Pull-to-refresh ───────────────────────────────────────────────────────
+  const session          = useAppStore((s) => s.session);
+  const isGuestMode      = useAppStore((s) => s.isGuestMode);
+  const isSyncing        = useAppStore((s) => s.isSyncing);
+  const hydrateFromCloud = useAppStore((s) => s.hydrateFromCloud);
+
+  const handleRefresh = React.useCallback(() => {
+    if (session?.user?.id && !isGuestMode) {
+      hydrateFromCloud(session.user.id).catch(console.warn);
+    }
+  }, [session?.user?.id, isGuestMode, hydrateFromCloud]);
+
   // ── Notification permission soft prompt ──────────────────────────────────
   const notifPerm = useNotifPermission();
   const [notifPromptDismissed, setNotifPromptDismissed] = React.useState(false);
@@ -1344,6 +1357,14 @@ export default function HomeScreen() {
         style={s.scroll}
         contentContainerStyle={s.content}
         showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={isSyncing}
+            onRefresh={handleRefresh}
+            tintColor={Colors.gold}
+            colors={[Colors.gold]}
+          />
+        }
       >
         {/* ── Header ──────────────────────────────────────────────────────── */}
         <View style={[s.header, { flexDirection: dir.rowDir }]}>
