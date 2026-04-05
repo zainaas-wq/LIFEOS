@@ -134,6 +134,10 @@ function NowAction({
     Animated.spring(cardScaleAnim, { toValue: isActiveHere ? 1.01 : 1, useNativeDriver: true, friction: 7 }).start();
   }, [isActiveHere]);
 
+  // Expandable title
+  const [titleExpanded, setTitleExpanded] = useState(false);
+  const [titleOverflows, setTitleOverflows] = useState(false);
+
   // ── Building ─────────────────────────────────────────────────────────────
   if (isBuilding) {
     return (
@@ -300,8 +304,24 @@ function NowAction({
         </Animated.Text>
       )}
 
-      {/* Task title — hero text */}
-      <Text style={now.itemTitle} numberOfLines={3}>{item.title}</Text>
+      {/* Task title — hero text, tappable to expand when truncated */}
+      <TouchableOpacity
+        onPress={() => titleOverflows && setTitleExpanded((v) => !v)}
+        activeOpacity={titleOverflows ? 0.7 : 1}
+      >
+        <Text
+          style={now.itemTitle}
+          numberOfLines={titleExpanded ? 0 : 3}
+          onTextLayout={(e) => {
+            if (!titleExpanded) setTitleOverflows(e.nativeEvent.lines.length >= 3);
+          }}
+        >
+          {item.title}
+        </Text>
+        {titleOverflows && !titleExpanded && (
+          <Text style={now.titleExpandHint}>tap to expand</Text>
+        )}
+      </TouchableOpacity>
 
       {/* Commitment signal — historical context, never guilt-inducing */}
       {commitmentText && (
@@ -400,8 +420,9 @@ const now = StyleSheet.create({
   topRow:       { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm, flexWrap: 'wrap' },
   pressureDot:  { width: 8, height: 8, borderRadius: 4 },
   pressureText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold },
-  itemTitle:      { fontSize: FontSize.xxl, fontWeight: FontWeight.bold, color: Colors.textPrimary, letterSpacing: -0.5, lineHeight: 32 },
-  commitmentText: { fontSize: FontSize.xs, color: Colors.textMuted, lineHeight: 16, fontStyle: 'italic' },
+  itemTitle:       { fontSize: FontSize.xxl, fontWeight: FontWeight.bold, color: Colors.textPrimary, letterSpacing: -0.5, lineHeight: 32 },
+  titleExpandHint: { fontSize: FontSize.xs, color: Colors.textMuted, marginTop: 2 },
+  commitmentText:  { fontSize: FontSize.xs, color: Colors.textMuted, lineHeight: 16, fontStyle: 'italic' },
   subText:        { fontSize: FontSize.sm, color: Colors.textMuted, lineHeight: 20 },
   metaRow:      { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm, flexWrap: 'wrap' },
   chip:         { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: Colors.surface, borderRadius: Radius.sm, paddingHorizontal: Spacing.sm, paddingVertical: 4, borderWidth: 1, borderColor: Colors.border },
@@ -1263,6 +1284,13 @@ export default function HomeScreen() {
   const handleStart = () => {
     const item = effectiveItem;
     if (!item || activeFocus || isStarting) return;
+
+    // Guard: item's time slot is already over — don't create a 0-min session
+    if (nowMins >= timeToMins(item.endTime)) {
+      showFlash(t('home.flash_task_done')); // reuse existing "done" flash as stand-in
+      return;
+    }
+
     setIsStarting(true);
     recordInteraction();
     const goal = goals.find(g => g.id === item.goalId);
@@ -1271,7 +1299,7 @@ export default function HomeScreen() {
         id:              generateId(),
         goalId:          item.goalId,
         goalTitle:       goal?.title ?? item.title,
-        durationMinutes: Math.max(1, timeToMins(item.endTime) - timeToMins(item.startTime)),
+        durationMinutes: Math.max(1, timeToMins(item.endTime) - nowMins),
         startedAt:       new Date().toISOString(),
       });
       setIsStarting(false);
