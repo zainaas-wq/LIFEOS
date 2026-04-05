@@ -300,6 +300,10 @@ export interface ActiveFocusSession {
   goalTitle: string;
   startedAt: string;       // ISO
   durationMinutes: number;
+  /** Updated every 5 minutes while the session is active. Used to recover
+   *  partial sessions after an app kill — actual elapsed time = now - startedAt,
+   *  capped to lastCheckpointAt so we don't log time that was never tracked. */
+  lastCheckpointAt?: string; // ISO
 }
 
 // ─── Plans ────────────────────────────────────────────────────────────────────

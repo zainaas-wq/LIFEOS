@@ -50,7 +50,15 @@ export default function FocusTab() {
   const goals                 = useAppStore((s) => s.goals);
   const controlPlan           = useAppStore((s) => s.controlPlan);
   const endFocus              = useAppStore((s) => s.endFocus);
+  const checkpointFocus       = useAppStore((s) => s.checkpointFocus);
   const toggleControlPlanItem = useAppStore((s) => s.toggleControlPlanItem);
+
+  // ── Checkpoint every 5 min so recovery can log accurate partial duration ──
+  useEffect(() => {
+    if (!activeFocus) return;
+    const id = setInterval(checkpointFocus, 5 * 60_000);
+    return () => clearInterval(id);
+  }, [activeFocus?.id]);
 
   // ── Elapsed timer ─────────────────────────────────────────────────────────
   const [elapsedSecs, setElapsedSecs] = useState(0);

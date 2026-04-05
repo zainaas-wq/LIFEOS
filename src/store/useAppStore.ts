@@ -299,6 +299,10 @@ interface AppStore {
   // Focus
   startFocus: (session: ActiveFocusSession) => void;
   endFocus: (notes?: string) => void;
+  /** Save a checkpoint timestamp so partial sessions can be recovered after an app kill. */
+  checkpointFocus: () => void;
+  /** Silently discard an active session without logging it (used for abandoned/stale sessions). */
+  discardFocus: () => void;
 
   // Plans (new)
   setCurrentPlan: (plan: Plan) => void;
@@ -790,20 +794,35 @@ export const useAppStore = create<AppStore>()(
 
       startFocus: (session) => set({ activeFocus: session }),
 
+      checkpointFocus: () => {
+        const { activeFocus } = get();
+        if (!activeFocus) return;
+        set({ activeFocus: { ...activeFocus, lastCheckpointAt: new Date().toISOString() } });
+      },
+
+      discardFocus: () => set({ activeFocus: null }),
+
       endFocus: (notes) => {
         const { activeFocus, session, isGuestMode, goals } = get();
         if (!activeFocus) return;
         const linkedGoal = goals.find((g) => g.id === activeFocus.goalId);
+        // Use lastCheckpointAt as the effective end time if available, so we never
+        // log time that wasn't actually tracked (e.g. app was killed for 2 hours mid-session).
+        const effectiveEndMs = activeFocus.lastCheckpointAt
+          ? new Date(activeFocus.lastCheckpointAt).getTime()
+          : Date.now();
+        const durationMinutes = Math.max(
+          1,
+          Math.round((effectiveEndMs - new Date(activeFocus.startedAt).getTime()) / 60000),
+        );
         const ended: FocusSession = {
           id: activeFocus.id,
           start: activeFocus.startedAt,
-          end: new Date().toISOString(),
+          end: new Date(effectiveEndMs).toISOString(),
           goalId: activeFocus.goalId,
           skillPlanId: linkedGoal?.linkedSkillPlanId,
           notes,
-          durationMinutes: Math.round(
-            (Date.now() - new Date(activeFocus.startedAt).getTime()) / 60000,
-          ),
+          durationMinutes,
         };
         set((s) => ({ activeFocus: null, focusSessions: [ended, ...s.focusSessions] }));
         if (session && !isGuestMode) {
