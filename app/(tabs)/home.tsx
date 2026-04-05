@@ -33,6 +33,7 @@ import { ProContextCard } from '../../src/components/ProContextCard';
 import { StreakBadge } from '../../src/components/StreakBadge';
 import { ReentryBanner } from '../../src/components/ReentryBanner';
 import { track } from '../../src/services/analyticsService';
+import * as Haptics from 'expo-haptics';
 import { useHomeState } from '../../src/hooks/useHomeState';
 import { useNotifPermission } from '../../src/hooks/useNotifPermission';
 
@@ -1318,6 +1319,11 @@ export default function HomeScreen() {
     const found = enrichedItems.find(i => i.id === id);
     if (!found || found.completed) { toggleControlPlanItem(id); return; }
     const isLastTask = progress.total > 0 && progress.completed + 1 >= progress.total;
+    Haptics.notificationAsync(
+      isLastTask
+        ? Haptics.NotificationFeedbackType.Success
+        : Haptics.NotificationFeedbackType.Success,
+    ).catch(() => {});
     toggleControlPlanItem(id);
     if (found.source === 'habit' && found.goalId) {
       completeHabitToday(found.goalId, today);
@@ -1342,6 +1348,7 @@ export default function HomeScreen() {
 
   const handleSkip = () => {
     recordInteraction();
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
     if (!nextBestAction && lateStartItem) {
       skipItem(lateStartItem.id);
     } else {

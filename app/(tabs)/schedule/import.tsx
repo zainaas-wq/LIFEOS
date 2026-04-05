@@ -259,7 +259,7 @@ export default function ImportScheduleScreen() {
                   </View>
                   <Button
                     label="Go to Settings"
-                    onPress={() => router.push('/(tabs)/settings' as any)}
+                    onPress={() => router.push('/(tabs)/profile' as any)}
                     variant="ghost"
                     size="sm"
                     style={styles.noKeyBtn}
