@@ -81,13 +81,14 @@ interface NowActionProps {
   onGenerate: () => void;
   onRestart: () => void;
   onAcknowledgeRecovery: () => void;
+  onExtend: () => void;
 }
 
 function NowAction({
   item, activeFocus, pressure, pressureGrade, isBuilding, isRecovery, isConstraint,
   nowMins, nextItem, total, isAiPlan,
   isLateStart, isStarting, allSkipped, commitmentText,
-  onStart, onEnd, onSkip, onGenerate, onRestart, onAcknowledgeRecovery,
+  onStart, onEnd, onSkip, onGenerate, onRestart, onAcknowledgeRecovery, onExtend,
 }: NowActionProps) {
   const { t } = useTranslation();
   const dir = useDirection();
@@ -311,6 +312,9 @@ function NowAction({
           <Text style={now.chipText}>{formatDuration(item.startTime, item.endTime)}</Text>
         </View>
         <Text style={now.timeLabel}>{item.startTime} – {item.endTime}</Text>
+        <TouchableOpacity onPress={onExtend} style={now.extendChip} activeOpacity={0.7}>
+          <Text style={now.extendText}>+10m</Text>
+        </TouchableOpacity>
         {item.energyRequired && (
           <View style={[
             now.energyChip,
@@ -400,6 +404,8 @@ const now = StyleSheet.create({
   chip:         { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: Colors.surface, borderRadius: Radius.sm, paddingHorizontal: Spacing.sm, paddingVertical: 4, borderWidth: 1, borderColor: Colors.border },
   chipText:     { fontSize: FontSize.xs, color: Colors.textSecondary },
   timeLabel:    { fontSize: FontSize.xs, color: Colors.textMuted },
+  extendChip:   { flexDirection: 'row', alignItems: 'center', backgroundColor: Colors.surface, borderRadius: Radius.sm, paddingHorizontal: Spacing.sm, paddingVertical: 4, borderWidth: 1, borderColor: Colors.border },
+  extendText:   { fontSize: FontSize.xs, color: Colors.textSecondary, fontWeight: FontWeight.medium },
   energyChip:   { borderRadius: Radius.sm, paddingHorizontal: Spacing.sm, paddingVertical: 3 },
   energyText:   { fontSize: FontSize.xs, textTransform: 'capitalize' },
   activeRow:    { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingTop: Spacing.xs },
@@ -1145,7 +1151,7 @@ export default function HomeScreen() {
     setTodayScheduleEntry, endRecoveryEarly, recordInteraction,
     startFocus, endFocus, toggleControlPlanItem, skipNowAction, skipItem,
     generateControlPlanAction, completeHabitToday, restartDay,
-    dismissActiveDrift, applyRecoveryAction,
+    dismissActiveDrift, applyRecoveryAction, extendPlanItem,
     today, nowMins, subState, isProUser,
     planItems, enrichedItems, progress, todayFocusMins,
     pressure, pressureGrade, isBuilding, nextBestAction, isAiPlan,
@@ -1175,6 +1181,30 @@ export default function HomeScreen() {
   const [flashMsg, setFlashMsg] = useState<string | null>(null);
   const flashAnim  = useRef(new Animated.Value(0)).current;
   const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Undo toast — shown 3s after task completion
+  const [undoItem, setUndoItem] = useState<{ id: string; title: string } | null>(null);
+  const undoTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const undoAnim  = useRef(new Animated.Value(0)).current;
+
+  const showUndoToast = (id: string, title: string) => {
+    if (undoTimer.current) clearTimeout(undoTimer.current);
+    setUndoItem({ id, title });
+    undoAnim.setValue(0);
+    Animated.timing(undoAnim, { toValue: 1, duration: 200, useNativeDriver: true }).start();
+    undoTimer.current = setTimeout(() => {
+      Animated.timing(undoAnim, { toValue: 0, duration: 250, useNativeDriver: true }).start(
+        () => setUndoItem(null),
+      );
+    }, 3000);
+  };
+
+  const handleUndo = () => {
+    if (!undoItem) return;
+    if (undoTimer.current) clearTimeout(undoTimer.current);
+    toggleControlPlanItem(undoItem.id);
+    setUndoItem(null);
+  };
 
   // activeWarning: filter topPrediction by locally-dismissed risk type
   const activeWarning = topPrediction && topPrediction.riskType !== dismissedRisk
@@ -1257,6 +1287,7 @@ export default function HomeScreen() {
       completeHabitToday(found.goalId, today);
     }
     showFlash(isLastTask ? t('home.progress_ring_celebration') : t('home.flash_task_done'));
+    showUndoToast(id, found.title);
   };
 
   const handleSkip = () => {
@@ -1399,6 +1430,7 @@ export default function HomeScreen() {
               onGenerate={() => generateControlPlanAction(today)}
               onRestart={restartDay}
               onAcknowledgeRecovery={handleAcknowledgeRecovery}
+              onExtend={() => effectiveItem && extendPlanItem(effectiveItem.id, 10)}
             />
 
             {/* ── Why-This-Now explanation — shown when a task is active ───── */}
@@ -1494,6 +1526,18 @@ export default function HomeScreen() {
         )}
       </ScrollView>
 
+      {/* Undo toast — slides up for 3 seconds after task completion */}
+      {undoItem && (
+        <Animated.View style={[s.undoToast, { opacity: undoAnim, transform: [{ translateY: undoAnim.interpolate({ inputRange: [0, 1], outputRange: [20, 0] }) }] }]}>
+          <Text style={s.undoToastText} numberOfLines={1}>
+            ✓ {undoItem.title}
+          </Text>
+          <TouchableOpacity onPress={handleUndo} style={s.undoBtn} activeOpacity={0.8}>
+            <Text style={s.undoBtnText}>Undo</Text>
+          </TouchableOpacity>
+        </Animated.View>
+      )}
+
     </SafeAreaView>
   );
 }
@@ -1524,6 +1568,12 @@ const s = StyleSheet.create({
   // Flash
   flashPill: { alignSelf: 'center', backgroundColor: Colors.surfaceElevated, borderRadius: Radius.full, paddingHorizontal: Spacing.lg, paddingVertical: Spacing.sm, borderWidth: 1, borderColor: Colors.border },
   flashText: { fontSize: FontSize.sm, color: Colors.textPrimary, fontWeight: FontWeight.medium },
+
+  // Undo toast
+  undoToast: { position: 'absolute', bottom: 12, left: 16, right: 16, flexDirection: 'row', alignItems: 'center', backgroundColor: Colors.surfaceHigh, borderRadius: Radius.lg, paddingVertical: 12, paddingLeft: 16, paddingRight: 8, borderWidth: 1, borderColor: Colors.borderLight, gap: Spacing.sm },
+  undoToastText: { flex: 1, fontSize: FontSize.sm, color: Colors.textPrimary, fontWeight: FontWeight.medium },
+  undoBtn: { backgroundColor: Colors.gold, borderRadius: Radius.md, paddingHorizontal: 14, paddingVertical: 6 },
+  undoBtnText: { fontSize: FontSize.xs, fontWeight: FontWeight.bold, color: Colors.textInverse },
 
   // Dimmed secondary layers during focus
   dimmed: { opacity: 0.35, gap: Spacing.lg },

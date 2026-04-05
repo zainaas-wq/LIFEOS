@@ -361,6 +361,8 @@ interface AppStore {
   resetStreakCounters: () => void;
   restartDay: () => void;
   loadStarterDay: (date: string) => void;
+  /** Extend an active plan item's end time by `minutes`. Local only — no persist. */
+  extendPlanItem: (itemId: string, minutes: number) => void;
 
   // Cloud sync
   hydrateFromCloud: (userId: string) => Promise<void>;
@@ -1319,7 +1321,38 @@ export const useAppStore = create<AppStore>()(
 
       autoGeneratePlanIfNeeded: (date) => {
         const { controlPlan } = get();
-        if (!controlPlan || controlPlan.date !== date) get().generateControlPlanAction(date);
+        // Only regenerate if: no plan, plan is for a different date, OR plan has no items
+        // (three conditions prevent overwriting a user-edited plan on the same day)
+        const needsGeneration =
+          !controlPlan ||
+          controlPlan.date !== date ||
+          controlPlan.plan.items.length === 0;
+        if (needsGeneration) get().generateControlPlanAction(date);
+      },
+
+      extendPlanItem: (itemId, minutes) => {
+        const { controlPlan, skippedPlanItemIds } = get();
+        if (!controlPlan) return;
+        const updatedItems = controlPlan.plan.items.map((item) => {
+          if (item.id !== itemId) return item;
+          const [h, m] = item.endTime.split(':').map(Number);
+          const totalMins = h * 60 + m + minutes;
+          const newH = Math.floor(totalMins / 60) % 24;
+          const newM = totalMins % 60;
+          return {
+            ...item,
+            endTime: `${String(newH).padStart(2, '0')}:${String(newM).padStart(2, '0')}`,
+          };
+        });
+        const skipped = new Set(skippedPlanItemIds ?? []);
+        const nextBestAction = computeNextBestAction(updatedItems.filter((i) => !skipped.has(i.id)));
+        set({
+          controlPlan: {
+            ...controlPlan,
+            plan: { ...controlPlan.plan, items: updatedItems },
+            nextBestAction,
+          },
+        });
       },
 
       resetStreakCounters: () => set({ taskSkipCount: 0, taskStreakCount: 0 }),
@@ -1674,6 +1707,25 @@ export const useAppStore = create<AppStore>()(
           const ranked = rankRecoveryModes(rawDrift.recoveryOptions, recoveryStats, topPrediction);
           return { ...rawDrift, recoveryOptions: ranked };
         })();
+
+        // ── Recovery mode auto-exit ──────────────────────────────────────────
+        // If recovery mode was applied, exit it automatically when either:
+        //   a) 24 hours have passed since it was applied (stale), or
+        //   b) user has completed ≥ 70% of non-constraint, non-recovery tasks.
+        // This prevents users getting stuck in RECOVERY all day.
+        const { lastRecoveryAppliedAt, dailyDecision: ddForRecovery } = get();
+        if (ddForRecovery?.isInRecoveryMode && lastRecoveryAppliedAt) {
+          const hoursSince =
+            (Date.now() - new Date(lastRecoveryAppliedAt).getTime()) / 3_600_000;
+          const taskItems = items.filter(
+            (i) => i.blockKind !== 'constraint' && i.blockKind !== 'recovery',
+          );
+          const completedCount = taskItems.filter((i) => i.completed).length;
+          const completionPct  = taskItems.length > 0 ? completedCount / taskItems.length : 0;
+          if (hoursSince >= 24 || completionPct >= 0.7) {
+            set({ dailyDecision: { ...ddForRecovery, isInRecoveryMode: false } });
+          }
+        }
 
         set((s) => ({
           behaviorState: newBehaviorState,

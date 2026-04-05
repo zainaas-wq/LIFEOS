@@ -87,6 +87,7 @@ export interface HomeState {
   restartDay:               () => void;
   dismissActiveDrift:       () => void;
   applyRecoveryAction:      (mode: RecoveryMode) => void;
+  extendPlanItem:           (itemId: string, minutes: number) => void;
 
   // ── Time ──────────────────────────────────────────────────────────────────
   today:                  string;
@@ -187,6 +188,7 @@ export function useHomeState(): HomeState {
       restartDay:               s.restartDay,
       dismissActiveDrift:       s.dismissActiveDrift,
       applyRecoveryAction:      s.applyRecoveryAction,
+      extendPlanItem:           s.extendPlanItem,
     }),
     shallow,
   );
@@ -360,6 +362,7 @@ export function useHomeState(): HomeState {
     restartDay:               slice.restartDay,
     dismissActiveDrift:       slice.dismissActiveDrift,
     applyRecoveryAction:      slice.applyRecoveryAction,
+    extendPlanItem:           slice.extendPlanItem,
     // time
     today,
     nowMins,
