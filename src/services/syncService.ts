@@ -32,10 +32,17 @@ export interface CloudData {
   reflections: DailyReflection[];
   /** Server-authoritative trial start date from ai_user_tier.trial_started_at */
   trialStartDate: string | null;
+  /** Names of services that failed to load — non-empty means partial data */
+  syncErrors: string[];
 }
 
 /**
  * Fetch all user data from Supabase in parallel.
+ *
+ * Uses Promise.allSettled so a single failing service (e.g. network blip on
+ * one table) never kills the entire hydration. Each rejected promise is logged
+ * and a sensible default (null / []) is used instead.
+ *
  * Focus sessions and distraction logs are limited to the last 30 days.
  * controlPlan is today's plan only.
  */
@@ -47,29 +54,48 @@ export async function hydrateFromCloud(
   thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
   const since = thirtyDaysAgo.toISOString();
 
-  const [
-    dbProfile,
-    goals,
-    skillPlans,
-    scheduleEvents,
-    rules,
-    focusSessions,
-    controlPlan,
-    distractionLogs,
-    reflections,
-    trialStartDate,
-  ] = await Promise.all([
-    getProfile(userId),
-    getGoals(userId),
-    getSkillPlans(userId),
-    getScheduleEvents(userId),
-    getRules(userId),
-    getFocusSessions(userId, since),
-    getDailyPlan(userId, todayDate),
-    getDistractionLogs(userId, since),
-    getReflections(userId),
-    getTrialStartedAt(userId),
+  const results = await Promise.allSettled([
+    getProfile(userId),                    // 0
+    getGoals(userId),                      // 1
+    getSkillPlans(userId),                 // 2
+    getScheduleEvents(userId),             // 3
+    getRules(userId),                      // 4
+    getFocusSessions(userId, since),       // 5
+    getDailyPlan(userId, todayDate),       // 6
+    getDistractionLogs(userId, since),     // 7
+    getReflections(userId),                // 8
+    getTrialStartedAt(userId),             // 9
   ]);
+
+  const serviceNames = [
+    'profile', 'goals', 'skillPlans', 'scheduleEvents',
+    'rules', 'focusSessions', 'controlPlan', 'distractionLogs',
+    'reflections', 'trialStartDate',
+  ];
+
+  const syncErrors: string[] = [];
+
+  function unwrap<T>(result: PromiseSettledResult<T>, name: string, fallback: T): T {
+    if (result.status === 'fulfilled') return result.value;
+    console.warn(`[syncService] ${name} failed:`, (result as PromiseRejectedResult).reason);
+    syncErrors.push(name);
+    return fallback;
+  }
+
+  const dbProfile      = unwrap(results[0], serviceNames[0], null);
+  const goals          = unwrap(results[1], serviceNames[1], [] as Goal[]);
+  const skillPlans     = unwrap(results[2], serviceNames[2], [] as SkillPlan[]);
+  const scheduleEvents = unwrap(results[3], serviceNames[3], [] as ScheduleEvent[]);
+  const rules          = unwrap(results[4], serviceNames[4], [] as Rule[]);
+  const focusSessions  = unwrap(results[5], serviceNames[5], [] as FocusSession[]);
+  const controlPlan    = unwrap(results[6], serviceNames[6], null as ControlDailyPlan | null);
+  const distractionLogs= unwrap(results[7], serviceNames[7], [] as DistractionLog[]);
+  const reflections    = unwrap(results[8], serviceNames[8], [] as DailyReflection[]);
+  const trialStartDate = unwrap(results[9], serviceNames[9], null as string | null);
+
+  if (syncErrors.length > 0) {
+    console.warn('[syncService] partial sync — failed services:', syncErrors.join(', '));
+  }
 
   return {
     profile: dbProfile ? dbProfileToLocal(dbProfile) : null,
@@ -82,5 +108,6 @@ export async function hydrateFromCloud(
     distractionLogs,
     reflections,
     trialStartDate,
+    syncErrors,
   };
 }

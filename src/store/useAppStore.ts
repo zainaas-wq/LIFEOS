@@ -245,6 +245,11 @@ interface AppStore {
    */
   pendingReview: DailyReview | null;
 
+  /** Names of services that failed on the last cloud sync (empty = all good). */
+  syncErrors: string[];
+  /** True while hydrateFromCloud is in flight. */
+  isSyncing: boolean;
+
   // ── Actions ───────────────────────────────────────────────────────────────
 
   // AI credits (Batch 11)
@@ -495,6 +500,8 @@ export const useAppStore = create<AppStore>()(
       driftHistory: [],
       dailyReviews: [],
       pendingReview: null,
+      syncErrors: [],
+      isSyncing: false,
 
       // ── AI credits ──────────────────────────────────────────────────────────
       aiBalance: null,
@@ -1816,6 +1823,7 @@ export const useAppStore = create<AppStore>()(
       // ── Cloud sync ───────────────────────────────────────────────────────────
 
       hydrateFromCloud: async (userId) => {
+        set({ isSyncing: true, syncErrors: [] });
         try {
           const today = getTodayDate();
           const data = await cloudHydrate(userId, today);
@@ -1827,6 +1835,8 @@ export const useAppStore = create<AppStore>()(
             focusSessions: data.focusSessions,
             distractionLogs: data.distractionLogs,
             reflections: data.reflections,
+            syncErrors: data.syncErrors,
+            isSyncing: false,
           };
           if (data.profile) patch.profile = data.profile;
           // Prefer server-authoritative trial start date over local AsyncStorage value.
@@ -1846,6 +1856,7 @@ export const useAppStore = create<AppStore>()(
           set(patch);
         } catch (e) {
           console.warn('[store] hydrateFromCloud:', e);
+          set({ isSyncing: false, syncErrors: ['sync'] });
         }
       },
 

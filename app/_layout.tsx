@@ -4,6 +4,7 @@ import { Stack, useRouter, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { View } from 'react-native';
 import { Colors } from '../src/constants/theme';
+import OfflineBanner from '../src/components/OfflineBanner';
 import { supabase } from '../src/lib/supabase';
 import { useAppStore } from '../src/store/useAppStore';
 import { initRevenueCat, logOutRevenueCat } from '../src/services/purchaseService';
@@ -20,6 +21,7 @@ export default function RootLayout() {
   const isGuestMode       = useAppStore((s) => s.isGuestMode);
   const hydrateFromCloud  = useAppStore((s) => s.hydrateFromCloud);
   const resetAllData      = useAppStore((s) => s.resetAllData);
+  const syncErrors        = useAppStore((s) => s.syncErrors);
 
   // ready: store has rehydrated from AsyncStorage (50 ms debounce)
   const [ready, setReady]               = useState(false);
@@ -186,6 +188,7 @@ export default function RootLayout() {
         <Stack.Screen name="legal/terms"   options={{ animation: 'slide_from_right' }} />
         <Stack.Screen name="legal/privacy" options={{ animation: 'slide_from_right' }} />
       </Stack>
+      <OfflineBanner syncErrors={syncErrors} />
     </>
   );
 }
