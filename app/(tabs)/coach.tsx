@@ -55,6 +55,12 @@ import { buildVoicePayload } from '../../src/ai/voiceHelpers';
 import { getLowCreditState, shouldShowUpgradeNudge } from '../../src/ai/creditUX';
 import { canAfford, CREDIT_COSTS } from '../../src/ai/creditRules';
 import {
+  saveChatMessage,
+  loadChatHistory,
+  clearChatHistory as clearChatHistoryRemote,
+  pruneChatHistory,
+} from '../../src/services/chatHistoryService';
+import {
   deriveAIRequestMode,
   selectContextDepth,
   historyDepthForMode,
@@ -397,6 +403,22 @@ export default function CoachScreen() {
     };
   }, []);
 
+  // ── Load persisted chat history on first authenticated mount ─────────────
+  const historyLoadedRef = useRef(false);
+  useEffect(() => {
+    if (historyLoadedRef.current) return;
+    if (!session?.user?.id || isGuestMode) return;
+    // Only hydrate from cloud if local history is empty — don't clobber an
+    // in-progress session that the user hasn't cleared yet.
+    if (chatHistory.length > 0) { historyLoadedRef.current = true; return; }
+
+    historyLoadedRef.current = true;
+    loadChatHistory(session.user.id).then((msgs) => {
+      if (!mountedRef.current || msgs.length === 0) return;
+      msgs.forEach((m) => addChatMessage(m));
+    }).catch(console.warn);
+  }, [session?.user?.id, isGuestMode]);
+
   // ── Orchestration helper ──────────────────────────────────────────────────
   const getOrchestration = useCallback((msg: string) => {
     const balance = aiCredits.balance?.currentBalance ?? null;
@@ -476,6 +498,11 @@ export default function CoachScreen() {
       setSessionRequestCount((c) => c + 1);
       setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 50);
 
+      // Persist user message immediately (best-effort, non-blocking)
+      if (session?.user?.id && !isGuestMode) {
+        saveChatMessage(session.user.id, userMsg).catch(console.warn);
+      }
+
       // Attach orchestration metadata to context before call
       const orchestratedContext = {
         ...aiContext,
@@ -493,8 +520,14 @@ export default function CoachScreen() {
         // Guard: skip state mutation if the component unmounted while we were
         // awaiting (BackendAIClient already handles fallback/timeout internally).
         if (!mountedRef.current) return;
-        addChatMessage({ ...reply, creditCost: CREDIT_COSTS.text, requestMode: 'text' });
+        const aiMsg = { ...reply, creditCost: CREDIT_COSTS.text, requestMode: 'text' as const };
+        addChatMessage(aiMsg);
         if (reply.plan) setCurrentPlan(reply.plan);
+        // Persist AI reply + prune old messages
+        if (session?.user?.id && !isGuestMode) {
+          saveChatMessage(session.user.id, aiMsg).catch(console.warn);
+          pruneChatHistory(session.user.id).catch(console.warn);
+        }
       } catch (err: any) {
         if (!mountedRef.current) return;
         // Do not surface raw err.message — BackendAIClient maps auth/quota/timeout
@@ -562,6 +595,9 @@ export default function CoachScreen() {
 
     const userMsg: ChatMessage = makeUserMsg('[Voice message — processing…]');
     addChatMessage(userMsg);
+    if (session?.user?.id && !isGuestMode) {
+      saveChatMessage(session.user.id, userMsg).catch(console.warn);
+    }
     setLoading(true);
     setSessionRequestCount((c) => c + 1);
     setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 50);
@@ -607,13 +643,18 @@ export default function CoachScreen() {
         }
       } else {
         track('ai_request_succeeded', { mode: 'voice' } as any);
-        addChatMessage({
+        const voiceAiMsg: ChatMessage = {
           id: generateId(), role: 'assistant',
           content: data.content,
           createdAt: data.createdAt ?? new Date().toISOString(),
           creditCost: CREDIT_COSTS.voice,
           requestMode: 'voice',
-        });
+        };
+        addChatMessage(voiceAiMsg);
+        if (session?.user?.id && !isGuestMode) {
+          saveChatMessage(session.user.id, voiceAiMsg).catch(console.warn);
+          pruneChatHistory(session.user.id).catch(console.warn);
+        }
       }
     } catch (err: any) {
       if (!mountedRef.current) return;
@@ -675,6 +716,9 @@ export default function CoachScreen() {
 
       const userMsg: ChatMessage = makeUserMsg('[Image uploaded — analyzing…]');
       addChatMessage(userMsg);
+      if (session?.user?.id && !isGuestMode) {
+        saveChatMessage(session.user.id, userMsg).catch(console.warn);
+      }
       setLoading(true);
       setSessionRequestCount((c) => c + 1);
       setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 50);
@@ -717,7 +761,18 @@ export default function CoachScreen() {
           }
         } else {
           track('ai_request_succeeded', { mode: 'image' } as any);
-          addChatMessage({ id: generateId(), role: 'assistant', content: data.content, createdAt: data.createdAt ?? new Date().toISOString(), creditCost: CREDIT_COSTS.image, requestMode: 'image' });
+          const imageAiMsg: ChatMessage = {
+            id: generateId(), role: 'assistant',
+            content: data.content,
+            createdAt: data.createdAt ?? new Date().toISOString(),
+            creditCost: CREDIT_COSTS.image,
+            requestMode: 'image',
+          };
+          addChatMessage(imageAiMsg);
+          if (session?.user?.id && !isGuestMode) {
+            saveChatMessage(session.user.id, imageAiMsg).catch(console.warn);
+            pruneChatHistory(session.user.id).catch(console.warn);
+          }
         }
       } catch (err: any) {
         if (!mountedRef.current) return;
@@ -763,7 +818,12 @@ export default function CoachScreen() {
             </View>
           </View>
           <TouchableOpacity
-            onPress={() => { clearHistory(); }}
+            onPress={() => {
+              clearHistory();
+              if (session?.user?.id && !isGuestMode) {
+                clearChatHistoryRemote(session.user.id).catch(console.warn);
+              }
+            }}
             style={s.clearBtn}
             activeOpacity={0.7}
           >
