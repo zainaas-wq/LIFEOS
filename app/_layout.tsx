@@ -3,8 +3,10 @@ import { Linking, Platform } from 'react-native';
 import { Stack, useRouter, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { View } from 'react-native';
+import * as SplashScreen from 'expo-splash-screen';
 import { Colors } from '../src/constants/theme';
 import OfflineBanner from '../src/components/OfflineBanner';
+import { ErrorBoundary } from '../src/components/ErrorBoundary';
 import { onConnectivityChange } from '../src/lib/networkUtils';
 import { supabase } from '../src/lib/supabase';
 import { useAppStore } from '../src/store/useAppStore';
@@ -14,7 +16,11 @@ import { setAppLanguage } from '../src/i18n';
 import type { SupportedLanguage } from '../src/i18n';
 // Initialise i18next before any component renders (side-effectful import)
 import '../src/i18n';
-import { NOTIF_IDS } from '../src/ai/notificationPlanner';
+import { NOTIF_IDS, NOTIF_ACTIONS } from '../src/ai/notificationPlanner';
+
+// Keep the native splash screen visible until we explicitly hide it.
+// This prevents the blank black screen flash while the store rehydrates.
+SplashScreen.preventAutoHideAsync().catch(() => {});
 
 export default function RootLayout() {
   const setSession           = useAppStore((s) => s.setSession);
@@ -78,12 +84,17 @@ export default function RootLayout() {
       setSessionChecked(true);
     });
 
-    // Live listener — fires on sign in, sign out, token refresh
+    // Live listener — fires on sign in, sign out, token refresh, password recovery
     const { data } = supabase.auth.onAuthStateChange((event, newSession) => {
       setSession(newSession);
       if (event === 'SIGNED_IN' && newSession) {
         hydrateFromCloud(newSession.user.id).catch(console.warn);
         initRevenueCat(newSession.user.id);
+      }
+      if (event === 'PASSWORD_RECOVERY') {
+        // User arrived via a password-reset email link.
+        // Session is temporarily valid for password update only.
+        router.push('/auth/update-password' as any);
       }
       if (event === 'SIGNED_OUT') {
         resetAllData();
@@ -105,13 +116,40 @@ export default function RootLayout() {
         (__DEV__ && url.startsWith('exp://') && url.includes('/auth/callback'));
       if (!isValidCallback) return;
 
-      // Exchange authorization code for a Supabase session
+      // Detect password recovery from URL (covers both PKCE and implicit flows)
+      const isRecovery = url.includes('type=recovery');
+
       try {
+        if (isRecovery && url.includes('#')) {
+          // Implicit flow: Supabase puts tokens in the URL fragment
+          // e.g. lifeos://auth/callback#access_token=...&refresh_token=...&type=recovery
+          const fragment = url.split('#')[1] ?? '';
+          const params = new URLSearchParams(fragment);
+          const accessToken  = params.get('access_token');
+          const refreshToken = params.get('refresh_token');
+          if (accessToken && refreshToken) {
+            const { data: sd } = await supabase.auth.setSession({
+              access_token:  accessToken,
+              refresh_token: refreshToken,
+            });
+            if (sd.session) {
+              setSession(sd.session);
+              // PASSWORD_RECOVERY event from onAuthStateChange handles navigation
+            }
+          }
+          return;
+        }
+
+        // PKCE flow: URL contains ?code= (OAuth sign-in OR PKCE password recovery)
         const { data, error } = await supabase.auth.exchangeCodeForSession(url);
         if (!error && data.session) {
           setSession(data.session);
-          hydrateFromCloud(data.session.user.id).catch(console.warn);
-          initRevenueCat(data.session.user.id);
+          if (!isRecovery) {
+            // Normal OAuth sign-in — hydrate data
+            hydrateFromCloud(data.session.user.id).catch(console.warn);
+            initRevenueCat(data.session.user.id);
+          }
+          // If isRecovery, PASSWORD_RECOVERY event from onAuthStateChange handles navigation
         }
       } catch {
         // Fallback: getSession() may already have the session from the redirect
@@ -133,28 +171,45 @@ export default function RootLayout() {
   }, []);
 
   // ── 4. Cold-start notification tap → post-auth navigation ────────────────
-  // Handles the case where the app was killed and the user tapped a notification.
-  // We wait until the app is ready + session is checked before navigating.
-  // Guard: skip navigation entirely if there is no active session — the route
-  // guard in step 5 will redirect to login, avoiding a flash of a protected screen.
+  // Handles the case where the app was killed and the user tapped a notification
+  // or pressed an action button. We wait until the app is ready + session is
+  // checked before navigating.
+  //
+  // Guard: skip navigation if there is no active session — the route guard in
+  // step 5 will redirect to login, avoiding a flash of a protected screen.
   // Warm-start taps are handled by useNotificationSync's live listener.
+  //
+  // Routing table (mirrors useNotificationSync warm-start handler):
+  //   review-reminder tap / review_now action   → /review
+  //   task-start / task-missed / drift tap
+  //     or start_now / open action               → /(tabs)/home
+  //   snooze / later actions                     → no navigation
   useEffect(() => {
     if (!ready || !sessionChecked) return;
     if (Platform.OS === 'web') return;
-    // No session → don't navigate to any protected screen; let step 5 handle routing
     if (!session && !isGuestMode) return;
 
-    // Dynamically import to avoid bundling expo-notifications on web
     import('expo-notifications').then((Notifications) => {
       Notifications.getLastNotificationResponseAsync().then((response) => {
         if (!response) return;
-        const data = response.notification.request.content.data as Record<string, string>;
-        const id   = data?.notificationId ?? '';
 
-        if (id === NOTIF_IDS.review) {
+        const data     = response.notification.request.content.data as Record<string, string>;
+        const id       = data?.notificationId ?? '';
+        const actionId = response.actionIdentifier;
+
+        // Silent dismiss actions — user chose not to open the app
+        if (actionId === NOTIF_ACTIONS.snooze || actionId === NOTIF_ACTIONS.later) return;
+
+        if (id === NOTIF_IDS.review || actionId === NOTIF_ACTIONS.reviewNow) {
           router.push('/review' as any);
+        } else if (
+          id === NOTIF_IDS.drift      ||
+          id === NOTIF_IDS.retention  ||
+          id.startsWith('task-start-') ||
+          id.startsWith('task-missed-')
+        ) {
+          router.push('/(tabs)/home' as any);
         }
-        // task-start / task-missed / drift → home tab (default landing after auth)
       }).catch(() => {});
     }).catch(() => {});
   }, [ready, sessionChecked, session, isGuestMode]);
@@ -166,6 +221,13 @@ export default function RootLayout() {
     });
     return unsub;
   }, [flushPendingToggles]);
+
+  // ── 6. Hide native splash once store + session are both resolved ────────────
+  useEffect(() => {
+    if (ready && sessionChecked) {
+      SplashScreen.hideAsync().catch(() => {});
+    }
+  }, [ready, sessionChecked]);
 
   // ── 7. Route based on auth state (only once both checks pass) ─────────────
   useEffect(() => {
@@ -189,7 +251,7 @@ export default function RootLayout() {
   }
 
   return (
-    <>
+    <ErrorBoundary>
       <StatusBar style="light" backgroundColor={Colors.background} />
       <Stack screenOptions={{ headerShown: false, animation: 'fade' }}>
         <Stack.Screen name="index" />
@@ -203,6 +265,6 @@ export default function RootLayout() {
         <Stack.Screen name="legal/privacy" options={{ animation: 'slide_from_right' }} />
       </Stack>
       <OfflineBanner syncErrors={syncErrors} />
-    </>
+    </ErrorBoundary>
   );
 }

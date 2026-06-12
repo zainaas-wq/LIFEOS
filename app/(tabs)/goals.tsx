@@ -20,7 +20,8 @@ import { Button } from '../../src/components/ui/Button';
 import { Badge } from '../../src/components/ui/Badge';
 import { getGoalAllocation } from '../../src/lib/weeklyPlanner';
 import { Colors, FontSize, FontWeight, Radius, Spacing, Shadow } from '../../src/constants/theme';
-import type { Goal, GoalCategory, IdentityGoal, IdentityGoalType } from '../../src/types';
+import type { Goal, GoalCategory, IdentityGoal, IdentityGoalType, FocusSession } from '../../src/types';
+import { getTodayDate } from '../../src/lib/utils';
 
 // ─── Category config ──────────────────────────────────────────────────────────
 
@@ -59,6 +60,38 @@ const IDENTITY_ICONS: Record<IdentityGoalType, keyof typeof Ionicons.glyphMap> =
   social:           'people-outline',
 };
 
+// ─── Deadline + focus helpers ─────────────────────────────────────────────────
+
+/** Returns days until deadline. Negative = overdue. null = no deadline. */
+function daysUntilDeadline(deadline: string | undefined, today: string): number | null {
+  if (!deadline) return null;
+  const diff = Math.round(
+    (new Date(deadline + 'T12:00:00').getTime() - new Date(today + 'T12:00:00').getTime())
+    / 86_400_000,
+  );
+  return diff;
+}
+
+function getWeekStart(today: string): Date {
+  const base = new Date(today + 'T12:00:00');
+  base.setDate(base.getDate() - base.getDay()); // back to Sunday
+  base.setHours(0, 0, 0, 0);
+  return base;
+}
+
+/** Actual completed focus minutes for a goal in the current week. */
+function weeklyFocusMins(sessions: FocusSession[], goalId: string, today: string): number {
+  const weekStart = getWeekStart(today);
+  return sessions
+    .filter((s) => s.goalId === goalId && !!s.end && new Date(s.start) >= weekStart)
+    .reduce((sum, s) => {
+      if (s.durationMinutes) return sum + s.durationMinutes;
+      return sum + Math.round(
+        (new Date(s.end!).getTime() - new Date(s.start).getTime()) / 60_000,
+      );
+    }, 0);
+}
+
 // ─── Identity Chip ────────────────────────────────────────────────────────────
 
 function IdentityChip({
@@ -84,19 +117,73 @@ const ic = StyleSheet.create({
 
 // ─── Goal Card ────────────────────────────────────────────────────────────────
 
+function DeadlineChip({ days }: { days: number }) {
+  const { t } = useTranslation();
+  const dir = useDirection();
+  let icon: keyof typeof Ionicons.glyphMap;
+  let label: string;
+  let chipColor: string;
+  let bgColor: string;
+
+  if (days < 0) {
+    icon      = 'close-circle-outline';
+    label     = (t('goals.deadline_overdue') as string).replace('{{n}}', String(Math.abs(days)));
+    chipColor = '#EF4444';
+    bgColor   = 'rgba(239,68,68,0.12)';
+  } else if (days === 0) {
+    icon      = 'alert-circle-outline';
+    label     = t('goals.deadline_due_today') as string;
+    chipColor = '#EF4444';
+    bgColor   = 'rgba(239,68,68,0.12)';
+  } else if (days === 1) {
+    icon      = 'alert-circle-outline';
+    label     = t('goals.deadline_tomorrow') as string;
+    chipColor = '#F59E0B';
+    bgColor   = 'rgba(245,158,11,0.12)';
+  } else if (days <= 7) {
+    icon      = 'warning-outline';
+    label     = (t('goals.deadline_days_left') as string).replace('{{n}}', String(days));
+    chipColor = '#F59E0B';
+    bgColor   = 'rgba(245,158,11,0.12)';
+  } else {
+    icon      = 'calendar-outline';
+    label     = (t('goals.deadline_days_left') as string).replace('{{n}}', String(days));
+    chipColor = Colors.textMuted;
+    bgColor   = 'transparent';
+  }
+
+  return (
+    <View style={[gc.deadlineChip, { backgroundColor: bgColor, flexDirection: dir.rowDir }]}>
+      <Ionicons name={icon} size={10} color={chipColor} />
+      <Text style={[gc.deadlineText, { color: chipColor }]}>{label}</Text>
+    </View>
+  );
+}
+
 function GoalRow({
-  goal, allocatedMins, onEdit, onDelete,
-}: { goal: Goal; allocatedMins: number; onEdit: () => void; onDelete: () => void }) {
+  goal, allocatedMins, focusedMins, today, onEdit, onDelete,
+}: {
+  goal: Goal;
+  allocatedMins: number;
+  focusedMins: number;
+  today: string;
+  onEdit: () => void;
+  onDelete: () => void;
+}) {
+  const { t } = useTranslation();
   const dir        = useDirection();
   const color      = CATEGORY_COLOR[goal.category];
   const neededMins = Math.round(goal.weeklyHoursTarget * 60);
   const pct        = neededMins > 0 ? Math.min(100, Math.round((allocatedMins / neededMins) * 100)) : 0;
   const covered    = pct >= 100;
+  const days       = daysUntilDeadline(goal.deadline, today);
+  const isOverdue  = days !== null && days < 0;
+  const focusedHrs = focusedMins > 0 ? (focusedMins / 60).toFixed(1) : null;
 
   return (
-    <View style={[gc.wrap, { flexDirection: dir.rowDir }]}>
+    <View style={[gc.wrap, { flexDirection: dir.rowDir }, isOverdue && gc.wrapOverdue]}>
       {/* Left accent */}
-      <View style={[gc.accent, { backgroundColor: color }]} />
+      <View style={[gc.accent, { backgroundColor: isOverdue ? '#EF4444' : color }]} />
 
       <View style={gc.body}>
         {/* Header */}
@@ -118,12 +205,7 @@ function GoalRow({
           <Text style={[gc.priorityTag, { color }]}>
             P{goal.priority} · {PRIORITY_LABEL[goal.priority] ?? ''}
           </Text>
-          {goal.deadline && (
-            <View style={[gc.deadlineChip, { flexDirection: dir.rowDir }]}>
-              <Ionicons name="calendar-outline" size={10} color={Colors.textMuted} />
-              <Text style={gc.deadlineText}>{goal.deadline}</Text>
-            </View>
-          )}
+          {days !== null && <DeadlineChip days={days} />}
         </View>
 
         {/* Progress bar */}
@@ -135,27 +217,40 @@ function GoalRow({
             {(allocatedMins / 60).toFixed(1)}/{goal.weeklyHoursTarget.toFixed(1)}h
           </Text>
         </View>
+
+        {/* Actual focus this week */}
+        {focusedHrs !== null && (
+          <View style={[gc.focusRow, { flexDirection: dir.rowDir }]}>
+            <Ionicons name="checkmark-circle-outline" size={10} color={Colors.success} />
+            <Text style={gc.focusLabel}>
+              {(t('goals.focus_done_this_week') as string).replace('{{h}}', focusedHrs)}
+            </Text>
+          </View>
+        )}
       </View>
     </View>
   );
 }
 
 const gc = StyleSheet.create({
-  wrap:        { flexDirection: 'row', backgroundColor: Colors.surfaceElevated, borderRadius: Radius.lg, overflow: 'hidden', borderWidth: 1, borderColor: 'rgba(255,255,255,0.05)' },
-  accent:      { width: 3 },
-  body:        { flex: 1, padding: Spacing.md, gap: 8 },
-  headerRow:   { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
-  iconWrap:    { width: 28, height: 28, borderRadius: Radius.sm, alignItems: 'center', justifyContent: 'center' },
-  title:       { flex: 1, fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.textPrimary },
-  actionBtn:   { padding: 3 },
-  tagRow:      { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
-  priorityTag: { fontSize: FontSize.xs, fontWeight: FontWeight.semibold, textTransform: 'uppercase', letterSpacing: 0.5 },
-  deadlineChip:{ flexDirection: 'row', alignItems: 'center', gap: 3 },
-  deadlineText:{ fontSize: FontSize.xs, color: Colors.textMuted },
-  progressRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
-  track:       { flex: 1, height: 4, backgroundColor: Colors.surfaceHigh, borderRadius: Radius.full, overflow: 'hidden' },
-  fill:        { height: '100%', borderRadius: Radius.full },
+  wrap:         { flexDirection: 'row', backgroundColor: Colors.surfaceElevated, borderRadius: Radius.lg, overflow: 'hidden', borderWidth: 1, borderColor: 'rgba(255,255,255,0.05)' },
+  wrapOverdue:  { borderColor: 'rgba(239,68,68,0.25)' },
+  accent:       { width: 3 },
+  body:         { flex: 1, padding: Spacing.md, gap: 8 },
+  headerRow:    { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
+  iconWrap:     { width: 28, height: 28, borderRadius: Radius.sm, alignItems: 'center', justifyContent: 'center' },
+  title:        { flex: 1, fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.textPrimary },
+  actionBtn:    { padding: 3 },
+  tagRow:       { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
+  priorityTag:  { fontSize: FontSize.xs, fontWeight: FontWeight.semibold, textTransform: 'uppercase', letterSpacing: 0.5 },
+  deadlineChip: { flexDirection: 'row', alignItems: 'center', gap: 3, paddingHorizontal: 6, paddingVertical: 3, borderRadius: Radius.full },
+  deadlineText: { fontSize: FontSize.xs, fontWeight: FontWeight.semibold },
+  progressRow:  { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
+  track:        { flex: 1, height: 4, backgroundColor: Colors.surfaceHigh, borderRadius: Radius.full, overflow: 'hidden' },
+  fill:         { height: '100%', borderRadius: Radius.full },
   progressLabel:{ fontSize: FontSize.xs, color: Colors.textMuted, minWidth: 64, textAlign: 'right' },
+  focusRow:     { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  focusLabel:   { fontSize: FontSize.xs, color: Colors.success },
 });
 
 // ─── Screen ───────────────────────────────────────────────────────────────────
@@ -172,8 +267,10 @@ export default function GoalsScreen() {
     { value: 'career' as GoalCategory, label: t('goalCategories.career'), icon: CATEGORY_ICONS.career },
   ], [t]);
 
+  const today            = getTodayDate();
   const goals            = useAppStore((s) => s.goals);
   const weeklyPlan       = useAppStore((s) => s.weeklyPlan);
+  const focusSessions    = useAppStore((s) => s.focusSessions);
   const identityGoals    = useAppStore((s) => s.identityGoals);
   const controlPlan      = useAppStore((s) => s.controlPlan);
   const addGoal          = useAppStore((s) => s.addGoal);
@@ -437,12 +534,15 @@ export default function GoalsScreen() {
         ) : (
           <View style={s.goalList}>
             {filteredGoals.map((goal) => {
-              const alloc = allocation.find((x) => x.goal.id === goal.id);
+              const alloc      = allocation.find((x) => x.goal.id === goal.id);
+              const focusedMins = weeklyFocusMins(focusSessions, goal.id, today);
               return (
                 <GoalRow
                   key={goal.id}
                   goal={goal}
                   allocatedMins={alloc?.allocatedMins ?? 0}
+                  focusedMins={focusedMins}
+                  today={today}
                   onEdit={() => openEdit(goal)}
                   onDelete={() => handleDeleteGoal(goal.id, goal.title)}
                 />

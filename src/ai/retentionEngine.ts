@@ -22,8 +22,7 @@
  *   - store/useAppStore (track streak_continued / streak_recovered events)
  */
 
-import type { DailyReview } from '../types';
-import type { AdaptationHints } from './adaptationEngine';
+import type { DailyReview, AdaptationHints } from '../types';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -263,11 +262,6 @@ export function buildCommitmentSignal(
 
   // Adaptation signal: light load mode
   if (hints.capMultiplier <= 0.62) return 'Light day by design — your best work starts easy.';
-
-  // Adaptation signal: improving execution
-  if (hints.executionTrend === 'improving') {
-    return 'Execution improving — your recent consistency is paying off.';
-  }
 
   // No meaningful signal
   return null;

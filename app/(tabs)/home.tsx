@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -17,11 +17,11 @@ import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '../../src/constants/theme';
-import { formatDate, generateId } from '../../src/lib/utils';
+import { formatDate, generateId, getTodayDate } from '../../src/lib/utils';
 import { MorningLaunchCard } from '../../src/components/MorningLaunchCard';
 import { NightShutdownCard } from '../../src/components/NightShutdownCard';
 import { PredictiveWarningCard } from '../../src/components/PredictiveWarningCard';
-import type { PlanItem, ActiveFocusSession, DailyScheduleEntry, DayMode, DriftEvent, RecoveryMode } from '../../src/types';
+import type { PlanItem, ActiveFocusSession, DailyScheduleEntry, DayMode, DriftEvent, RecoveryMode, PressureLevel, PressureGrade } from '../../src/types';
 import { isRecoveryBlock } from '../../src/ai/recoveryEngine';
 import { computeWhyThisNow } from '../../src/ai/driftEngine';
 import { useDirection } from '../../src/hooks/useDirection';
@@ -36,6 +36,7 @@ import { track } from '../../src/services/analyticsService';
 import * as Haptics from 'expo-haptics';
 import { useHomeState } from '../../src/hooks/useHomeState';
 import { useNotifPermission } from '../../src/hooks/useNotifPermission';
+import { useAppStore } from '../../src/store/useAppStore';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -1178,7 +1179,7 @@ export default function HomeScreen() {
     dismissActiveDrift, applyRecoveryAction, extendPlanItem,
     today, nowMins, subState, isProUser,
     planItems, enrichedItems, progress, todayFocusMins,
-    pressure, pressureGrade, isBuilding, nextBestAction, isAiPlan,
+    pressureInfo, pressure, pressureGrade, isBuilding, nextBestAction, isAiPlan,
     morningLaunch, nightShutdown, topPrediction,
     outcomeTrend, streakData, reentryMessage, commitmentSignal,
     lateStartItem, effectiveItem, isCurrentConstraint, nextItem, allSkipped,
@@ -1433,7 +1434,7 @@ export default function HomeScreen() {
         </View>
 
         {/* ── Day Mode strip — always visible when plan exists ───────────── */}
-        {!isBuilding && !needsScheduleEntry && (
+        {!isBuilding && !needsScheduleEntry && dayMode && (
           <DayModeStrip mode={dayMode} />
         )}
 

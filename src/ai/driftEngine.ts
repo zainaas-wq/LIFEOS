@@ -205,6 +205,7 @@ function _makeDrift(
   today: string,
 ): DriftEvent {
   return {
+    id: `${type}-${today}`,
     type,
     detectedAt: new Date().toISOString(),
     date: today,

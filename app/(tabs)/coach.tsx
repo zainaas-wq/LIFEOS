@@ -12,7 +12,7 @@
  *   - Voice and image are premium features surfaced as first-class affordances
  */
 
-import React, { useState, useRef, useCallback, useEffect } from 'react';
+import React, { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import {
   View,
   Text,
@@ -24,6 +24,7 @@ import {
   Platform,
   ActivityIndicator,
   Alert,
+  Share,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
@@ -72,12 +73,20 @@ import type { AIRequestMode } from '../../src/ai/orchestrationEngine';
 
 // ─── Quick action prompts (English — sent to AI) ──────────────────────────────
 
-const QUICK_ACTION_PROMPTS = [
-  'Help me fix my day. I missed some tasks and need to recover intelligently.',
-  'I feel stuck and overwhelmed. Help me break things down so I can start.',
-  'My schedule is too packed. Help me rebalance and drop what is not essential.',
-  'What is the single most important thing I should do right now based on my goals?',
-];
+const QUICK_ACTION_PROMPTS = {
+  fix_day:   'Help me fix my day. I missed some tasks and need to recover intelligently.',
+  stuck:     'I feel stuck and overwhelmed. Help me break things down so I can start.',
+  morning:   'Help me plan my day and set my top 3 priorities based on my goals and schedule.',
+  afternoon: 'I am in the middle of my day. Help me stay on track and decide what to do next right now.',
+  evening:   'Help me review how today went and prepare for tomorrow. What should I do differently?',
+};
+
+function getTimeOfDay(): 'morning' | 'afternoon' | 'evening' {
+  const h = new Date().getHours();
+  if (h >= 5  && h < 12) return 'morning';
+  if (h >= 12 && h < 18) return 'afternoon';
+  return 'evening';
+}
 
 // ─── Context strip ────────────────────────────────────────────────────────────
 
@@ -235,8 +244,17 @@ const plan = StyleSheet.create({
 // ─── Chat bubble ──────────────────────────────────────────────────────────────
 
 function ChatBubble({ msg }: { msg: ChatMessage }) {
+  const { t } = useTranslation();
   const isUser = msg.role === 'user';
   const hasCost = !isUser && msg.creditCost != null && msg.creditCost > 0;
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = () => {
+    Share.share({ message: msg.content }).catch(() => {});
+    setCopied(true);
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    setTimeout(() => setCopied(false), 2000);
+  };
   const costLabel = hasCost
     ? msg.creditCost === 1
       ? '-1 credit'
@@ -252,9 +270,19 @@ function ChatBubble({ msg }: { msg: ChatMessage }) {
       <View style={[bubble.wrap, isUser ? bubble.wrapUser : bubble.wrapAI]}>
         <Text style={[bubble.text, isUser && bubble.textUser]}>{msg.content}</Text>
         {msg.plan && <InlinePlan plan={msg.plan} />}
-        {costLabel && (
-          <Text style={bubble.costLabel}>{costLabel}</Text>
-        )}
+        <View style={bubble.bubbleFooter}>
+          {costLabel && <Text style={bubble.costLabel}>{costLabel}</Text>}
+          {!isUser && (
+            <TouchableOpacity onPress={handleCopy} style={bubble.copyBtn} activeOpacity={0.6} hitSlop={8}>
+              <Ionicons
+                name={copied ? 'checkmark-outline' : 'copy-outline'}
+                size={12}
+                color={copied ? Colors.success : Colors.textMuted}
+              />
+              {copied && <Text style={bubble.copiedText}>{t('coach.msg_copied')}</Text>}
+            </TouchableOpacity>
+          )}
+        </View>
       </View>
     </View>
   );
@@ -267,9 +295,12 @@ const bubble = StyleSheet.create({
   wrap:    { maxWidth: '80%', borderRadius: Radius.lg, padding: Spacing.md },
   wrapAI:    { backgroundColor: Colors.surfaceElevated, borderWidth: 1, borderColor: Colors.border, borderBottomStartRadius: 4 },
   wrapUser:  { backgroundColor: Colors.goldMuted, borderWidth: 1, borderColor: Colors.goldDim, borderBottomEndRadius: 4 },
-  text:      { fontSize: FontSize.sm, color: Colors.textPrimary, lineHeight: 20 },
-  textUser:  { color: Colors.gold },
-  costLabel: { fontSize: FontSize.xs - 1, color: Colors.textMuted, marginTop: 4, textAlign: 'right' as const },
+  text:        { fontSize: FontSize.sm, color: Colors.textPrimary, lineHeight: 20 },
+  textUser:    { color: Colors.gold },
+  bubbleFooter:{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 4 },
+  costLabel:   { fontSize: FontSize.xs - 1, color: Colors.textMuted },
+  copyBtn:     { flexDirection: 'row', alignItems: 'center', gap: 3, opacity: 0.8 },
+  copiedText:  { fontSize: FontSize.xs - 1, color: Colors.success },
 });
 
 // ─── Landing — behavioral context card ───────────────────────────────────────
@@ -335,6 +366,64 @@ const ctxCard = StyleSheet.create({
   pill: { backgroundColor: Colors.surface, borderRadius: Radius.sm, paddingHorizontal: Spacing.sm, paddingVertical: 4, alignItems: 'center', borderWidth: 1, borderColor: Colors.border },
   pillVal: { fontSize: FontSize.md, fontWeight: FontWeight.bold, color: Colors.textPrimary },
   pillLabel: { fontSize: 9, color: Colors.textMuted, textTransform: 'uppercase', letterSpacing: 0.5 },
+});
+
+// ─── AI Context Preview ───────────────────────────────────────────────────────
+
+function ContextPreview({
+  goalCount, streak, hasActivePlan, dayMode,
+}: {
+  goalCount: number;
+  streak: number;
+  hasActivePlan: boolean;
+  dayMode: string;
+}) {
+  const { t } = useTranslation();
+  const [expanded, setExpanded] = useState(false);
+  const dir = useDirection();
+
+  const chips = [
+    (t('coach.ctx_preview_goals') as string).replace('{{n}}', String(goalCount)),
+    ...(streak >= 2 ? [(t('coach.ctx_preview_streak') as string).replace('{{n}}', String(streak))] : []),
+    hasActivePlan ? t('coach.ctx_preview_plan') as string : t('coach.ctx_preview_no_plan') as string,
+    dayMode.replace(/_/g, ' ').toLowerCase(),
+  ];
+
+  return (
+    <TouchableOpacity
+      onPress={() => setExpanded((v) => !v)}
+      activeOpacity={0.75}
+      style={[cpv.wrap, { flexDirection: dir.rowDir }]}
+    >
+      <Ionicons name="eye-outline" size={11} color={Colors.textMuted} />
+      <Text style={cpv.label}>{t('coach.ctx_preview_label')}</Text>
+      {expanded ? (
+        <View style={[cpv.chips, { flexDirection: dir.rowDir }]}>
+          {chips.map((c, i) => (
+            <View key={i} style={cpv.chip}>
+              <Text style={cpv.chipText}>{c}</Text>
+            </View>
+          ))}
+        </View>
+      ) : (
+        <Text style={cpv.summary}>{chips.slice(0, 2).join(' · ')}</Text>
+      )}
+      <Ionicons
+        name={expanded ? 'chevron-up' : 'chevron-down'}
+        size={11}
+        color={Colors.textMuted}
+      />
+    </TouchableOpacity>
+  );
+}
+
+const cpv = StyleSheet.create({
+  wrap:    { flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: Spacing.xs, paddingHorizontal: Spacing.md, backgroundColor: Colors.surface, borderRadius: Radius.md, borderWidth: 1, borderColor: Colors.border },
+  label:   { fontSize: FontSize.xs, color: Colors.textMuted, fontWeight: FontWeight.semibold, textTransform: 'uppercase', letterSpacing: 0.6 },
+  summary: { flex: 1, fontSize: FontSize.xs, color: Colors.textMuted },
+  chips:   { flex: 1, flexDirection: 'row', flexWrap: 'wrap', gap: 4 },
+  chip:    { paddingHorizontal: 6, paddingVertical: 2, backgroundColor: Colors.surfaceElevated, borderRadius: Radius.full, borderWidth: 1, borderColor: Colors.border },
+  chipText:{ fontSize: FontSize.xs, color: Colors.textSecondary, textTransform: 'capitalize' },
 });
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -460,12 +549,32 @@ export default function CoachScreen() {
 
   const messages: ChatMessage[] = [welcomeMsg, ...chatHistory];
 
-  // Quick actions with feature gating
+  // Time-aware quick actions
+  const timeOfDay = useMemo(() => getTimeOfDay(), []);
   type QA = { label: string; prompt: string; feature: PlanFeature; event: AnalyticsEventName; icon: string };
-  const quickActions: QA[] = [
-    { label: t('coach.quick_fix_day'), prompt: QUICK_ACTION_PROMPTS[0], feature: 'ai_recover_day', event: 'recover_day_used', icon: 'refresh-outline' },
-    { label: t('coach.quick_stuck'), prompt: QUICK_ACTION_PROMPTS[1], feature: 'ai_chat', event: 'ai_chat_used', icon: 'hand-left-outline' },
-  ];
+  const quickActions: QA[] = useMemo(() => {
+    const timeAction: QA = timeOfDay === 'morning'
+      ? { label: t('coach.quick_plan_morning'),    prompt: QUICK_ACTION_PROMPTS.morning,   feature: 'ai_chat', event: 'ai_chat_used', icon: 'sunny-outline' }
+      : timeOfDay === 'afternoon'
+      ? { label: t('coach.quick_focus_afternoon'), prompt: QUICK_ACTION_PROMPTS.afternoon, feature: 'ai_chat', event: 'ai_chat_used', icon: 'flash-outline' }
+      : { label: t('coach.quick_review_evening'),  prompt: QUICK_ACTION_PROMPTS.evening,   feature: 'ai_chat', event: 'ai_chat_used', icon: 'moon-outline' };
+    return [
+      timeAction,
+      { label: t('coach.quick_fix_day'), prompt: QUICK_ACTION_PROMPTS.fix_day, feature: 'ai_recover_day', event: 'recover_day_used', icon: 'refresh-outline' },
+      { label: t('coach.quick_stuck'),   prompt: QUICK_ACTION_PROMPTS.stuck,   feature: 'ai_chat',        event: 'ai_chat_used',    icon: 'hand-left-outline' },
+    ];
+  }, [timeOfDay, t]);
+
+  // Review streak for context preview
+  const dailyReviews = useAppStore((s) => s.dailyReviews);
+  const reviewStreak = useMemo(() => {
+    const today = getTodayDate();
+    const saved = new Set(dailyReviews.filter((r) => !!r.savedAt).map((r) => r.date));
+    let s = 0;
+    const c = new Date(today + 'T12:00:00');
+    while (saved.has(c.toISOString().slice(0, 10))) { s++; c.setDate(c.getDate() - 1); }
+    return s;
+  }, [dailyReviews]);
 
   const getClient = useCallback((useExternal: boolean): AIClient => {
     if (useExternal && session && !isGuestMode) {
@@ -865,6 +974,14 @@ export default function CoachScreen() {
                 recoveryMessage={dailyDecision.recoveryMessage}
               />
             )}
+
+            {/* AI context preview */}
+            <ContextPreview
+              goalCount={goals.length}
+              streak={reviewStreak}
+              hasActivePlan={!!aiContext.currentPlan}
+              dayMode={dayMode ?? 'ON_TRACK'}
+            />
 
             {/* Action Buttons */}
             <View style={s.actionCards}>

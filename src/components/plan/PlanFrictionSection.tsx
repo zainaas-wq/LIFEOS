@@ -6,7 +6,57 @@ import { Card } from '../ui/Card';
 import { Colors, FontSize, FontWeight, Spacing, Radius } from '../../constants/theme';
 import { getLocalDateStr } from '../../lib/utils';
 import { useAppStore } from '../../store/useAppStore';
-import type { UserProfile } from '../../types';
+import type { UserProfile, DistractionLog } from '../../types';
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+function getLast7Days(): string[] {
+  const days: string[] = [];
+  const now = new Date();
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date(now);
+    d.setDate(now.getDate() - i);
+    days.push(getLocalDateStr(d));
+  }
+  return days;
+}
+
+function weekCountFor(logs: DistractionLog[], key: string, last7: string[]): number {
+  const set = new Set(last7);
+  return logs.filter(
+    (d) => d.note === key && set.has(getLocalDateStr(new Date(d.timestamp))),
+  ).length;
+}
+
+// ─── 7-Day Dots ───────────────────────────────────────────────────────────────
+
+function FrictionWeekDots({ logs, frictionKey, last7 }: {
+  logs: DistractionLog[];
+  frictionKey: string;
+  last7: string[];
+}) {
+  return (
+    <View style={fdStyles.row}>
+      {last7.map((date) => {
+        const hit = logs.some(
+          (d) => d.note === frictionKey && getLocalDateStr(new Date(d.timestamp)) === date,
+        );
+        return (
+          <View
+            key={date}
+            style={[fdStyles.dot, hit && fdStyles.dotHit]}
+          />
+        );
+      })}
+    </View>
+  );
+}
+
+const fdStyles = StyleSheet.create({
+  row:    { flexDirection: 'row', gap: 4, marginTop: 4 },
+  dot:    { width: 8, height: 8, borderRadius: 4, borderWidth: 1.5, borderColor: Colors.border, backgroundColor: 'transparent' },
+  dotHit: { backgroundColor: '#EF4444', borderColor: '#EF4444' },
+});
 
 interface Props {
   profile: UserProfile | null;
@@ -16,11 +66,14 @@ interface Props {
 
 interface FrictionCardProps {
   frictionKey: string;
-  count: number;
+  todayCount: number;
+  weekCount: number;
+  logs: DistractionLog[];
+  last7: string[];
   onLog: () => void;
 }
 
-function FrictionCard({ frictionKey, count, onLog }: FrictionCardProps) {
+function FrictionCard({ frictionKey, todayCount, weekCount, logs, last7, onLog }: FrictionCardProps) {
   const { t } = useTranslation();
 
   const label = t(`frictions.${frictionKey}` as any, { defaultValue: frictionKey });
@@ -36,10 +89,10 @@ function FrictionCard({ frictionKey, count, onLog }: FrictionCardProps) {
       <View style={styles.cardHeader}>
         <Text style={styles.frictionLabel} numberOfLines={1}>{label}</Text>
         <View style={styles.headerRight}>
-          {count > 0 && (
+          {todayCount > 0 && (
             <View style={styles.countBadge}>
               <Text style={styles.countText}>
-                {t('plan.friction_count', { count })}
+                {t('plan.friction_count', { count: todayCount })}
               </Text>
             </View>
           )}
@@ -48,6 +101,16 @@ function FrictionCard({ frictionKey, count, onLog }: FrictionCardProps) {
           </TouchableOpacity>
         </View>
       </View>
+
+      {/* 7-day dot pattern */}
+      <FrictionWeekDots logs={logs} frictionKey={frictionKey} last7={last7} />
+
+      {/* Week count label */}
+      {weekCount > 0 && (
+        <Text style={styles.weekCountText}>
+          {t('plan.friction_week_count', { count: weekCount })}
+        </Text>
+      )}
 
       {/* Counter-strategies */}
       {strategies.length > 0 && (
@@ -73,8 +136,9 @@ export function PlanFrictionSection({ profile }: Props) {
 
   const frictions = profile?.mainFrictions ?? [];
   const today     = getLocalDateStr();
+  const last7     = getLast7Days();
 
-  const countFor = (key: string) =>
+  const todayCountFor = (key: string) =>
     distractionLogs.filter((d) => getLocalDateStr(new Date(d.timestamp)) === today && d.note === key).length;
 
   return (
@@ -90,7 +154,10 @@ export function PlanFrictionSection({ profile }: Props) {
             <FrictionCard
               key={f}
               frictionKey={f}
-              count={countFor(f)}
+              todayCount={todayCountFor(f)}
+              weekCount={weekCountFor(distractionLogs, f, last7)}
+              logs={distractionLogs}
+              last7={last7}
               onLog={() => logDistraction(f)}
             />
           ))}
@@ -134,7 +201,8 @@ const styles = StyleSheet.create({
     borderRadius:      Radius.sm,
     backgroundColor:   Colors.surfaceHigh,
   },
-  countText: { fontSize: FontSize.xs, color: Colors.textMuted },
+  countText:     { fontSize: FontSize.xs, color: Colors.textMuted },
+  weekCountText: { fontSize: FontSize.xs, color: Colors.textMuted, marginTop: 2 },
 
   logBtn: {
     paddingHorizontal: Spacing.sm,

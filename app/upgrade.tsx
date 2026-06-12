@@ -282,6 +282,15 @@ export default function UpgradeScreen() {
           )}
         </TouchableOpacity>
 
+        {/* Price line — shown only when not busy and not in error state */}
+        {!isBusy && phase !== 'error' && (
+          <Text style={styles.priceNote}>
+            {offering
+              ? t('upgrade.price_after_trial', { price: offering.priceString })
+              : t('upgrade.price_unavailable')}
+          </Text>
+        )}
+
         <TouchableOpacity
           onPress={() => router.back()}
           style={styles.maybeBtn}
@@ -434,6 +443,12 @@ const styles = StyleSheet.create({
     fontWeight: FontWeight.bold,
     color: Colors.textInverse,
     letterSpacing: 0.3,
+  },
+  priceNote: {
+    fontSize: FontSize.xs,
+    color: Colors.textMuted,
+    textAlign: 'center',
+    lineHeight: 16,
   },
   maybeBtn: { alignItems: 'center', paddingVertical: Spacing.sm },
   maybeBtnText: { fontSize: FontSize.sm, color: Colors.textMuted },

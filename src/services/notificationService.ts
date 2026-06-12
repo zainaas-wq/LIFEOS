@@ -24,14 +24,106 @@ import { Platform } from 'react-native';
 // ─── Foreground handler ───────────────────────────────────────────────────────
 
 // Call once at app startup. Shows notification alerts even while the app is open.
-// Sound is disabled to avoid being intrusive; badge is never modified.
+// Sound is enabled so notifications ring whether the app is open or backgrounded.
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
     shouldShowAlert: true,
-    shouldPlaySound: false,
+    shouldPlaySound: true,
     shouldSetBadge:  false,
   }),
 });
+
+// ─── Android channel setup ────────────────────────────────────────────────────
+
+/**
+ * Creates (or updates) the default Android notification channel.
+ * Must be called once at app startup (before any notification is scheduled).
+ * On Android 8+ (API 26+) channels control sound, vibration, and importance.
+ * No-op on iOS / web.
+ */
+/**
+ * Registers notification action categories for interactive notifications.
+ * Must be called once at app startup (after channel setup, before scheduling).
+ *
+ * Categories registered:
+ *   task_start      → "Start now" (opens app) + "Snooze 10 min" (silent)
+ *   task_missed     → "Open app" (opens app)
+ *   drift_alert     → "Get back on track" (opens app)
+ *   review_reminder → "Review now" (opens app) + "Later" (silent)
+ *   retention_nudge → "Open LifeOS" (opens app)
+ *
+ * No-op on web. Safe to call multiple times (idempotent).
+ */
+export async function setupNotificationCategories(): Promise<void> {
+  if (Platform.OS === 'web') return;
+  try {
+    await Notifications.setNotificationCategoryAsync('task_start', [
+      {
+        identifier: 'start_now',
+        buttonTitle: 'Start now',
+        options: { opensAppToForeground: true },
+      },
+      {
+        identifier: 'snooze',
+        buttonTitle: 'Snooze 10 min',
+        options: { opensAppToForeground: false },
+      },
+    ]);
+    await Notifications.setNotificationCategoryAsync('task_missed', [
+      {
+        identifier: 'open',
+        buttonTitle: 'Open app',
+        options: { opensAppToForeground: true },
+      },
+    ]);
+    await Notifications.setNotificationCategoryAsync('drift_alert', [
+      {
+        identifier: 'open',
+        buttonTitle: 'Get back on track',
+        options: { opensAppToForeground: true },
+      },
+    ]);
+    await Notifications.setNotificationCategoryAsync('review_reminder', [
+      {
+        identifier: 'review_now',
+        buttonTitle: 'Review now',
+        options: { opensAppToForeground: true },
+      },
+      {
+        identifier: 'later',
+        buttonTitle: 'Later',
+        options: { opensAppToForeground: false },
+      },
+    ]);
+    await Notifications.setNotificationCategoryAsync('retention_nudge', [
+      {
+        identifier: 'open',
+        buttonTitle: 'Open LifeOS',
+        options: { opensAppToForeground: true },
+      },
+    ]);
+  } catch (e) {
+    console.warn('[notificationService] setupNotificationCategories:', e);
+  }
+}
+
+export async function setupAndroidChannel(): Promise<void> {
+  if (Platform.OS !== 'android') return;
+  try {
+    await Notifications.setNotificationChannelAsync('default', {
+      name:              'LifeOS Notifications',
+      importance:        Notifications.AndroidImportance.HIGH,
+      sound:             'default',
+      vibrationPattern:  [0, 250, 150, 250],
+      lightColor:        '#F59E0B',
+      enableLights:      true,
+      enableVibrate:     true,
+      showBadge:         false,
+    });
+  } catch (e) {
+    console.warn('[notificationService] setupAndroidChannel:', e);
+  }
+}
 
 // ─── Permissions ──────────────────────────────────────────────────────────────
 
@@ -82,6 +174,7 @@ export async function scheduleLocal(
   body: string,
   triggerDate: Date,
   data: Record<string, string> = {},
+  categoryIdentifier?: string,
 ): Promise<void> {
   if (Platform.OS === 'web') return;
   if (triggerDate.getTime() <= Date.now()) return;
@@ -95,6 +188,9 @@ export async function scheduleLocal(
       content: {
         title,
         body,
+        sound:           'default',
+        ...(categoryIdentifier && { categoryIdentifier }),
+        ...(Platform.OS === 'android' && { channelId: 'default' }),
         data: { notificationId: id, ...data },
       },
       trigger: { date: triggerDate } as Notifications.DateTriggerInput,

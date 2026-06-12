@@ -75,6 +75,68 @@ function taskStreak(completedDates: string[], today: string): number {
   return streak;
 }
 
+function getLast7Days(today: string): string[] {
+  const days: string[] = [];
+  const base = new Date(today + 'T12:00:00');
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date(base);
+    d.setDate(base.getDate() - i);
+    days.push(d.toISOString().slice(0, 10));
+  }
+  return days;
+}
+
+interface DotInfo { date: string; scheduled: boolean; done: boolean; }
+
+function habitWeekDots(completedDates: string[], daysOfWeek: number[], today: string): DotInfo[] {
+  const set = new Set(completedDates);
+  return getLast7Days(today).map((date) => {
+    const dow = new Date(date + 'T12:00:00').getDay();
+    return { date, scheduled: daysOfWeek.includes(dow), done: set.has(date) };
+  });
+}
+
+function habitMonthRate(completedDates: string[], daysOfWeek: number[], today: string): number | null {
+  const set = new Set(completedDates);
+  let scheduled = 0;
+  let done = 0;
+  const base = new Date(today + 'T12:00:00');
+  for (let i = 27; i >= 0; i--) {
+    const d = new Date(base);
+    d.setDate(base.getDate() - i);
+    if (daysOfWeek.includes(d.getDay())) {
+      scheduled++;
+      if (set.has(d.toISOString().slice(0, 10))) done++;
+    }
+  }
+  if (scheduled < 4) return null;
+  return Math.round((done / scheduled) * 100);
+}
+
+function computeWeekStats(
+  tasks: RecurringTask[],
+  today: string,
+  offDays: number[],
+): { weekScheduled: number; weekDone: number; bestStreak: number } {
+  const last7 = getLast7Days(today);
+  let weekScheduled = 0;
+  let weekDone = 0;
+  let bestStreak = 0;
+  tasks.forEach((task) => {
+    const doneSet = new Set(task.completedDates);
+    last7.forEach((date) => {
+      const dow = new Date(date + 'T12:00:00').getDay();
+      if (!task.daysOfWeek.includes(dow)) return;
+      if (task.skipOnOffDays && offDays.includes(dow)) return;
+      weekScheduled++;
+      if (doneSet.has(date)) weekDone++;
+    });
+    const s = taskStreak(task.completedDates, today);
+    if (s > bestStreak) bestStreak = s;
+  });
+  return { weekScheduled, weekDone, bestStreak };
+}
+
 function daysCoverageLabel(daysOfWeek: number[], t: (k: string) => string): string {
   if (daysOfWeek.length === 7) return t('routines.days_everyday');
   const weekdays = [1, 2, 3, 4, 5];
@@ -86,14 +148,94 @@ function daysCoverageLabel(daysOfWeek: number[], t: (k: string) => string): stri
   return (t('routines.days_custom') as string).replace('{{count}}', String(daysOfWeek.length));
 }
 
+// ─── Week Dots ────────────────────────────────────────────────────────────────
+
+function WeekDots({ dots, color }: { dots: DotInfo[]; color: string }) {
+  return (
+    <View style={wd.row}>
+      {dots.map(({ date, scheduled, done }) => (
+        <View
+          key={date}
+          style={[
+            wd.dot,
+            done      && { backgroundColor: color, borderColor: color },
+            scheduled && !done && { borderColor: color + '55', backgroundColor: 'transparent' },
+            !scheduled && { borderColor: 'transparent', backgroundColor: Colors.surfaceHigh },
+          ]}
+        />
+      ))}
+    </View>
+  );
+}
+
+const wd = StyleSheet.create({
+  row: { flexDirection: 'row', gap: 4, paddingStart: 34, marginTop: 2 },
+  dot: { width: 8, height: 8, borderRadius: 4, borderWidth: 1.5, borderColor: Colors.border, backgroundColor: Colors.surface },
+});
+
+// ─── Week Summary Card ────────────────────────────────────────────────────────
+
+function WeekSummaryCard({
+  tasks, today, offDays,
+}: { tasks: RecurringTask[]; today: string; offDays: number[] }) {
+  const { t } = useTranslation();
+  const { weekScheduled, weekDone, bestStreak } = useMemo(
+    () => computeWeekStats(tasks, today, offDays),
+    [tasks, today, offDays],
+  );
+  if (weekScheduled === 0) return null;
+  const pct = Math.round((weekDone / weekScheduled) * 100);
+  const fillColor = pct === 100 ? Colors.success : Colors.gold;
+  return (
+    <View style={ws.card}>
+      <View style={ws.topRow}>
+        <Text style={ws.cardTitle}>{t('routines.week_title')}</Text>
+        <Text style={[ws.pctBig, { color: fillColor }]}>{pct}%</Text>
+      </View>
+      <View style={ws.track}>
+        <View style={[ws.fill, { width: `${pct}%` as any, backgroundColor: fillColor }]} />
+      </View>
+      <View style={ws.statsRow}>
+        <View style={ws.stat}>
+          <Text style={ws.statVal}>{weekDone}<Text style={ws.statUnit}>/{weekScheduled}</Text></Text>
+          <Text style={ws.statLabel}>{t('routines.week_count_label')}</Text>
+        </View>
+        {bestStreak >= 2 && (
+          <View style={[ws.stat, ws.statBorder]}>
+            <Text style={ws.statVal}>{bestStreak}<Text style={ws.statUnit}>d</Text></Text>
+            <Text style={ws.statLabel}>{t('routines.best_streak')}</Text>
+          </View>
+        )}
+      </View>
+    </View>
+  );
+}
+
+const ws = StyleSheet.create({
+  card:      { marginHorizontal: Spacing.lg, marginBottom: Spacing.md, backgroundColor: Colors.surfaceElevated, borderRadius: Radius.lg, padding: Spacing.md, borderWidth: 1, borderColor: 'rgba(255,255,255,0.07)', gap: Spacing.sm },
+  topRow:    { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  cardTitle: { fontSize: FontSize.xs, color: Colors.textMuted, fontWeight: FontWeight.semibold, textTransform: 'uppercase', letterSpacing: 0.8 },
+  pctBig:    { fontSize: FontSize.lg, fontWeight: FontWeight.bold },
+  track:     { height: 3, backgroundColor: Colors.surfaceHigh, borderRadius: Radius.full, overflow: 'hidden' },
+  fill:      { height: '100%', borderRadius: Radius.full },
+  statsRow:  { flexDirection: 'row', gap: Spacing.md },
+  stat:      { gap: 1 },
+  statBorder:{ paddingStart: Spacing.md, borderStartWidth: 1, borderStartColor: Colors.border },
+  statVal:   { fontSize: FontSize.md, fontWeight: FontWeight.bold, color: Colors.textPrimary },
+  statUnit:  { fontSize: FontSize.xs, color: Colors.textMuted, fontWeight: FontWeight.medium },
+  statLabel: { fontSize: FontSize.xs, color: Colors.textMuted },
+});
+
 // ─── Routine Row ──────────────────────────────────────────────────────────────
 
 function RoutineRow({
-  task, isDone, streak, isTodayActive, onComplete, onDelete,
+  task, isDone, streak, monthRate, weekDots, isTodayActive, onComplete, onDelete,
 }: {
   task: RecurringTask;
   isDone: boolean;
   streak: number;
+  monthRate: number | null;
+  weekDots: DotInfo[];
   isTodayActive: boolean;
   onComplete: () => void;
   onDelete: () => void;
@@ -170,7 +312,19 @@ function RoutineRow({
               </Text>
             </View>
           )}
+          {/* 28-day completion rate */}
+          {monthRate !== null && (
+            <View style={[rr.rateChip, { flexDirection: dir.rowDir }]}>
+              <Ionicons name="stats-chart-outline" size={10} color={Colors.textMuted} />
+              <Text style={rr.metaText}>
+                {(t('routines.month_rate') as string).replace('{{pct}}', String(monthRate))}
+              </Text>
+            </View>
+          )}
         </View>
+
+        {/* 7-day dot heatmap */}
+        <WeekDots dots={weekDots} color={color} />
       </View>
     </View>
   );
@@ -202,6 +356,7 @@ const rr = StyleSheet.create({
   streakChip:  { flexDirection: 'row', alignItems: 'center', gap: 3, paddingHorizontal: Spacing.sm, paddingVertical: 3, backgroundColor: Colors.goldMuted, borderRadius: Radius.full, borderWidth: 1, borderColor: Colors.goldDim },
   streakEmoji: { fontSize: 10 },
   streakText:  { fontSize: FontSize.xs, color: Colors.gold, fontWeight: FontWeight.bold },
+  rateChip:    { flexDirection: 'row', alignItems: 'center', gap: 3, paddingHorizontal: Spacing.sm, paddingVertical: 3, backgroundColor: Colors.surface, borderRadius: Radius.full, borderWidth: 1, borderColor: Colors.border },
 });
 
 // ─── Category Group Header ────────────────────────────────────────────────────
@@ -388,6 +543,11 @@ export default function RoutinesScreen() {
         </View>
       )}
 
+      {/* ── Week summary card ─────────────────────────────────────────────── */}
+      {hasAny && (
+        <WeekSummaryCard tasks={recurringTasks} today={today} offDays={offDays} />
+      )}
+
       <ScrollView
         style={s.scroll}
         contentContainerStyle={s.content}
@@ -415,15 +575,19 @@ export default function RoutinesScreen() {
                   <CategoryHeader category={cat} count={tasks.length} />
                   <View style={s.catGroup}>
                     {tasks.map((task) => {
-                      const isDone      = task.completedDates.includes(today);
+                      const isDone        = task.completedDates.includes(today);
                       const isTodayActive = isActiveToday(task, todayDOW, offDays);
-                      const streak      = taskStreak(task.completedDates, today);
+                      const streak        = taskStreak(task.completedDates, today);
+                      const weekDots      = habitWeekDots(task.completedDates, task.daysOfWeek, today);
+                      const monthRate     = habitMonthRate(task.completedDates, task.daysOfWeek, today);
                       return (
                         <RoutineRow
                           key={task.id}
                           task={task}
                           isDone={isDone}
                           streak={streak}
+                          monthRate={monthRate}
+                          weekDots={weekDots}
                           isTodayActive={isTodayActive}
                           onComplete={() => completeRecurringTaskToday(task.id, today)}
                           onDelete={() => handleDelete(task)}

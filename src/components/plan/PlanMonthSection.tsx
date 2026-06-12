@@ -22,13 +22,15 @@ function buildDays(): string[] {
 
 // ─── Day dot ─────────────────────────────────────────────────────────────────
 
+type DotIntensity = 'none' | 'low' | 'high';
+
 interface DayDotProps {
   date: string;
-  active: boolean;
+  intensity: DotIntensity;
   isToday: boolean;
 }
 
-function DayDot({ date, active, isToday }: DayDotProps) {
+function DayDot({ date, intensity, isToday }: DayDotProps) {
   const dayNum = parseInt(date.slice(8), 10);
   return (
     <View style={styles.dayCell}>
@@ -38,7 +40,8 @@ function DayDot({ date, active, isToday }: DayDotProps) {
       <View
         style={[
           styles.dot,
-          active && !isToday && styles.dotActive,
+          intensity === 'low'  && styles.dotLow,
+          intensity === 'high' && styles.dotHigh,
           isToday && styles.dotToday,
         ]}
       />
@@ -70,16 +73,32 @@ export function PlanMonthSection() {
     }
   }, [profile?.transformationDirection]);
 
-  // ── Build activity set ────────────────────────────────────────────────────
-  const activeDays = new Set<string>();
+  // ── Build intensity map: date → minutes logged ────────────────────────────
+  const minsPerDay = new Map<string, number>();
   focusSessions.forEach((s) => {
-    if (s.end) activeDays.add(getLocalDateStr(new Date(s.start)));
+    if (!s.end) return;
+    const date = getLocalDateStr(new Date(s.start));
+    const mins = s.durationMinutes
+      ?? Math.round((new Date(s.end).getTime() - new Date(s.start).getTime()) / 60_000);
+    minsPerDay.set(date, (minsPerDay.get(date) ?? 0) + mins);
   });
-  reflections.forEach((r) => activeDays.add(r.date));
+
+  // Reflections count as low-intensity activity (no focus logged)
+  reflections.forEach((r) => {
+    if (!minsPerDay.has(r.date)) minsPerDay.set(r.date, 1);
+  });
 
   const days          = buildDays();
   const today         = getLocalDateStr();
-  const activeInRange = days.filter((d) => activeDays.has(d)).length;
+  const activeInRange = days.filter((d) => (minsPerDay.get(d) ?? 0) > 0).length;
+  const totalFocusMins = days.reduce((s, d) => s + (minsPerDay.get(d) ?? 0), 0);
+
+  function getIntensity(date: string): DotIntensity {
+    const mins = minsPerDay.get(date) ?? 0;
+    if (mins === 0) return 'none';
+    if (mins < 60) return 'low';
+    return 'high';
+  }
 
   // ── Intention save ────────────────────────────────────────────────────────
   const handleIntentionSave = () => {
@@ -96,9 +115,19 @@ export function PlanMonthSection() {
       {/* Header */}
       <View style={styles.sectionHeader}>
         <Text style={styles.sectionTitle}>{t('plan.month_title')}</Text>
-        <Text style={styles.activeCount}>
-          {t('plan.month_active_day', { count: activeInRange })}
-        </Text>
+        <View style={styles.headerStats}>
+          {totalFocusMins > 0 && (
+            <Text style={styles.focusHours}>
+              {(t('plan.month_focus_hours') as string).replace(
+                '{{h}}',
+                (totalFocusMins / 60).toFixed(1),
+              )}
+            </Text>
+          )}
+          <Text style={styles.activeCount}>
+            {t('plan.month_active_day', { count: activeInRange })}
+          </Text>
+        </View>
       </View>
 
       {/* Direction / intention */}
@@ -131,7 +160,7 @@ export function PlanMonthSection() {
             <DayDot
               key={d}
               date={d}
-              active={activeDays.has(d)}
+              intensity={getIntensity(d)}
               isToday={d === today}
             />
           ))}
@@ -177,6 +206,8 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
   sectionTitle:  { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.textPrimary },
+  headerStats:   { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
+  focusHours:    { fontSize: FontSize.sm, color: Colors.gold, fontWeight: FontWeight.semibold },
   activeCount:   { fontSize: FontSize.sm, color: Colors.textMuted },
 
   // ── Intention ──────────────────────────────────────────────────────────────
@@ -219,7 +250,11 @@ const styles = StyleSheet.create({
     borderColor:     Colors.border,
     backgroundColor: 'transparent',
   },
-  dotActive: {
+  dotLow: {
+    backgroundColor: Colors.success + '60',
+    borderColor:     Colors.success + '60',
+  },
+  dotHigh: {
     backgroundColor: Colors.success,
     borderColor:     Colors.success,
   },

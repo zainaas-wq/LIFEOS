@@ -30,6 +30,8 @@ import { useAppStore } from '../store/useAppStore';
 import { track } from '../services/analyticsService';
 import {
   requestPermissions,
+  setupAndroidChannel,
+  setupNotificationCategories,
   scheduleLocal,
   cancelNotification,
   cancelAllNotifications,
@@ -46,6 +48,8 @@ import {
   isQuietHour,
   DRIFT_DELAY_MINS,
   NOTIF_IDS,
+  NOTIF_CATEGORIES,
+  NOTIF_ACTIONS,
   timeStrToMins,
 } from '../ai/notificationPlanner';
 
@@ -77,33 +81,42 @@ export function useNotificationSync(): void {
   const driftNotifScheduled  = useRef(false);
   const reviewNotifScheduled = useRef(false);
 
-  // ── Permission request on first mount ──────────────────────────────────
+  // ── Permission request + channel + category setup on first mount ─────────
   useEffect(() => {
+    setupAndroidChannel();        // no-op on iOS; idempotent on Android
+    setupNotificationCategories(); // registers interactive action buttons
     requestPermissions().then((granted) => {
       permGranted.current = granted;
     });
   }, []);
 
-  // ── Tap handler → in-app navigation ────────────────────────────────────
-  // Handles notification taps when the app is already open (foreground/background).
+  // ── Tap + action handler → in-app navigation ──────────────────────────────
+  // Handles notification taps and action button presses when the app is open.
   // Cold-start taps are handled separately in app/_layout.tsx.
+  //
+  // Routing table:
+  //   review-reminder tap / review_now action  → /review
+  //   task-start / task-missed / drift / retention tap or "open"/"start_now" → /(tabs)/home
+  //   "snooze" / "later" actions               → no navigation (user dismissed)
   useEffect(() => {
     const sub = Notifications.addNotificationResponseReceivedListener((response) => {
-      const data = response.notification.request.content.data as Record<string, string>;
-      const id   = data?.notificationId ?? '';
+      const data     = response.notification.request.content.data as Record<string, string>;
+      const id       = data?.notificationId ?? '';
+      const actionId = response.actionIdentifier;
+
+      // Silent actions — user chose to dismiss without opening
+      if (actionId === NOTIF_ACTIONS.snooze || actionId === NOTIF_ACTIONS.later) return;
 
       track('notification_opened', {
         notification_id: id,
-        screen: data?.screen ?? null,
+        action:          actionId,
+        screen:          data?.screen ?? null,
       });
 
-      if (id === NOTIF_IDS.review) {
+      if (id === NOTIF_IDS.review || actionId === NOTIF_ACTIONS.reviewNow) {
         router.push('/review' as any);
-      } else if (
-        id === NOTIF_IDS.drift ||
-        id.startsWith('task-start-') ||
-        id.startsWith('task-missed-')
-      ) {
+      } else {
+        // task-start / task-missed / drift / retention + default tap
         router.push('/(tabs)/home' as any);
       }
     });
@@ -148,7 +161,7 @@ export function useNotificationSync(): void {
           const { title, body } = buildTaskStartContent(item);
           await scheduleLocal(NOTIF_IDS.taskStart(item.id), title, body, startDate, {
             itemId: item.id,
-          });
+          }, NOTIF_CATEGORIES.taskStart);
         }
 
         // task-missed: fires 10 min after start (if still incomplete at that time)
@@ -157,7 +170,7 @@ export function useNotificationSync(): void {
           const { title, body } = buildTaskMissedContent(item);
           await scheduleLocal(NOTIF_IDS.taskMissed(item.id), title, body, missedDate, {
             itemId: item.id,
-          });
+          }, NOTIF_CATEGORIES.taskMissed);
         }
       }
     };
@@ -207,7 +220,7 @@ export function useNotificationSync(): void {
     const fireDate = new Date(Date.now() + DRIFT_DELAY_MINS * 60_000);
     const { title, body } = buildDriftContent();
 
-    scheduleLocal(NOTIF_IDS.drift, title, body, fireDate, { screen: 'home' })
+    scheduleLocal(NOTIF_IDS.drift, title, body, fireDate, { screen: 'home' }, NOTIF_CATEGORIES.drift)
       .then(() => { driftNotifScheduled.current = true; })
       .catch(console.warn);
   }, [activeDrift?.id, activeDrift?.dismissed]);
@@ -233,7 +246,7 @@ export function useNotificationSync(): void {
     if (reminderDate.getTime() <= Date.now()) return; // already past this hour today
 
     const { title, body } = buildReviewReminderContent();
-    scheduleLocal(NOTIF_IDS.review, title, body, reminderDate, { screen: 'review' })
+    scheduleLocal(NOTIF_IDS.review, title, body, reminderDate, { screen: 'review' }, NOTIF_CATEGORIES.review)
       .then(() => { reviewNotifScheduled.current = true; })
       .catch(console.warn);
   }, [pendingReview, profile?.fixedScheduleEnd]);

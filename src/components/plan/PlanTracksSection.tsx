@@ -43,6 +43,12 @@ function fmtHours(mins: number): string {
   return `${h}h`;
 }
 
+function fmtHoursShort(mins: number): string {
+  if (mins === 0) return '0h';
+  const h = (mins / 60).toFixed(1);
+  return `${h}h`;
+}
+
 // ─── Track Card ───────────────────────────────────────────────────────────────
 
 interface TrackCardProps {
@@ -101,10 +107,20 @@ function TrackCard({ goal, loggedMins }: TrackCardProps) {
 
         {/* Stats row: logged · pct · target stepper */}
         <View style={styles.statsRow}>
-          <Text style={styles.loggedText}>
-            {fmtHours(loggedMins)}{' '}
-            <Text style={styles.loggedLabel}>{t('plan.tracks_logged')}</Text>
-          </Text>
+          <View style={styles.loggedGroup}>
+            <Text style={styles.loggedText}>
+              {fmtHours(loggedMins)}{' '}
+              <Text style={styles.loggedLabel}>{t('plan.tracks_logged')}</Text>
+            </Text>
+            {pct < 100 && targetMins > loggedMins && (
+              <Text style={styles.hoursLeftText}>
+                {(t('plan.tracks_hours_left') as string).replace(
+                  '{{h}}',
+                  fmtHoursShort(targetMins - loggedMins),
+                )}
+              </Text>
+            )}
+          </View>
 
           <Text style={[styles.pctText, pct >= 100 && styles.pctComplete]}>
             {pct}%
@@ -145,6 +161,18 @@ export function PlanTracksSection({ profile, goals, focusSessions }: Props) {
   const { t } = useTranslation();
   const tracks = profile?.selectedTrackTypes ?? [];
 
+  // Compute per-goal logged mins and sort by coverage ascending (most behind first)
+  const goalsWithData = goals.map((g) => {
+    const loggedMins  = getWeeklyLoggedMins(focusSessions, g.id);
+    const targetMins  = g.weeklyHoursTarget * 60;
+    const pct         = targetMins > 0 ? loggedMins / targetMins : 0;
+    return { g, loggedMins, pct };
+  }).sort((a, b) => a.pct - b.pct);
+
+  // Weekly summary totals
+  const totalLoggedMins  = goalsWithData.reduce((s, x) => s + x.loggedMins, 0);
+  const totalTargetMins  = goalsWithData.reduce((s, x) => s + x.g.weeklyHoursTarget * 60, 0);
+
   return (
     <View style={styles.section}>
 
@@ -159,6 +187,26 @@ export function PlanTracksSection({ profile, goals, focusSessions }: Props) {
         </TouchableOpacity>
       </View>
 
+      {/* Weekly summary strip */}
+      {goals.length > 0 && totalTargetMins > 0 && (
+        <View style={styles.summaryStrip}>
+          <Text style={styles.summaryText}>
+            {(t('plan.tracks_week_total') as string)
+              .replace('{{logged}}', fmtHoursShort(totalLoggedMins))
+              .replace('{{target}}', fmtHoursShort(totalTargetMins))}
+          </Text>
+          <View style={styles.summaryTrack}>
+            <View style={[
+              styles.summaryFill,
+              {
+                width: `${Math.min(100, Math.round((totalLoggedMins / totalTargetMins) * 100))}%` as any,
+                backgroundColor: totalLoggedMins >= totalTargetMins ? Colors.success : Colors.gold,
+              },
+            ]} />
+          </View>
+        </View>
+      )}
+
       {/* Active track chips (selectedTrackTypes context) */}
       {tracks.length > 0 && (
         <View style={styles.chipRow}>
@@ -172,14 +220,14 @@ export function PlanTracksSection({ profile, goals, focusSessions }: Props) {
         </View>
       )}
 
-      {/* Goal track cards */}
-      {goals.length > 0 ? (
+      {/* Goal track cards — sorted by coverage ascending */}
+      {goalsWithData.length > 0 ? (
         <>
-          {goals.map((g) => (
+          {goalsWithData.map(({ g, loggedMins }) => (
             <TrackCard
               key={g.id}
               goal={g}
-              loggedMins={getWeeklyLoggedMins(focusSessions, g.id)}
+              loggedMins={loggedMins}
             />
           ))}
         </>
@@ -262,10 +310,17 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     marginTop: 2,
   },
-  loggedText:  { fontSize: FontSize.sm, color: Colors.textPrimary, fontWeight: FontWeight.medium },
-  loggedLabel: { fontSize: FontSize.sm, color: Colors.textMuted, fontWeight: FontWeight.regular },
-  pctText:     { fontSize: FontSize.sm, color: Colors.textMuted },
-  pctComplete: { color: Colors.success, fontWeight: FontWeight.semibold },
+  summaryStrip:  { gap: 4 },
+  summaryText:   { fontSize: FontSize.xs, color: Colors.textMuted },
+  summaryTrack:  { height: 3, backgroundColor: Colors.border, borderRadius: Radius.full, overflow: 'hidden' },
+  summaryFill:   { height: '100%', borderRadius: Radius.full },
+
+  loggedGroup:   { gap: 1 },
+  loggedText:    { fontSize: FontSize.sm, color: Colors.textPrimary, fontWeight: FontWeight.medium },
+  loggedLabel:   { fontSize: FontSize.sm, color: Colors.textMuted, fontWeight: FontWeight.regular },
+  hoursLeftText: { fontSize: FontSize.xs, color: Colors.textMuted },
+  pctText:       { fontSize: FontSize.sm, color: Colors.textMuted },
+  pctComplete:   { color: Colors.success, fontWeight: FontWeight.semibold },
 
   stepper:         { flexDirection: 'row', alignItems: 'center', gap: Spacing.xs },
   stepBtn:         {

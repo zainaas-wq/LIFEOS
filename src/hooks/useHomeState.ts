@@ -77,7 +77,7 @@ export interface HomeState {
   setTodayScheduleEntry:    (entry: DailyScheduleEntry) => void;
   endRecoveryEarly:         (id: string) => void;
   recordInteraction:        () => void;
-  startFocus:               (session: Parameters<ReturnType<typeof useAppStore>['startFocus']>[0]) => void;
+  startFocus:               (session: ActiveFocusSession) => void;
   endFocus:                 () => void;
   toggleControlPlanItem:    (id: string) => void;
   skipNowAction:            () => void;
@@ -86,7 +86,7 @@ export interface HomeState {
   completeHabitToday:       (id: string, date: string) => void;
   restartDay:               () => void;
   dismissActiveDrift:       () => void;
-  applyRecoveryAction:      (mode: RecoveryMode) => void;
+  applyRecoveryAction:      (mode: RecoveryMode, nowMins: number) => void;
   extendPlanItem:           (itemId: string, minutes: number) => void;
 
   // ── Time ──────────────────────────────────────────────────────────────────
@@ -111,8 +111,8 @@ export interface HomeState {
   isAiPlan:               boolean;
 
   // ── Ritual cards ──────────────────────────────────────────────────────────
-  morningLaunch:          ReturnType<typeof buildMorningLaunch>;
-  nightShutdown:          ReturnType<typeof buildNightShutdown>;
+  morningLaunch:          ReturnType<typeof buildMorningLaunch> | null;
+  nightShutdown:          ReturnType<typeof buildNightShutdown> | null;
 
   // ── Predictive ────────────────────────────────────────────────────────────
   topPrediction:          ReturnType<typeof predictDrift>[number] | null;

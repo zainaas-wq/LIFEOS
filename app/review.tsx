@@ -15,7 +15,7 @@
  *   - Save always succeeds locally; Supabase sync is fire-and-forget
  */
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
@@ -38,14 +38,45 @@ import {
   Radius,
   Spacing,
 } from '../src/constants/theme';
+import { getTodayDate } from '../src/lib/utils';
 import type { DailyReview } from '../src/types';
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+function fmtFocusMins(mins: number): string {
+  if (mins === 0) return '0m';
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  if (h > 0 && m > 0) return `${h}h ${m}m`;
+  if (h > 0)          return `${h}h`;
+  return `${m}m`;
+}
+
+function fmtDate(dateStr: string): string {
+  const d = new Date(dateStr + 'T12:00:00');
+  return d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+}
+
+function reviewStreak(reviews: DailyReview[], today: string): number {
+  const savedDates = new Set(reviews.filter((r) => !!r.savedAt).map((r) => r.date));
+  let streak = 0;
+  const cursor = new Date(today + 'T12:00:00');
+  while (savedDates.has(cursor.toISOString().slice(0, 10))) {
+    streak++;
+    cursor.setDate(cursor.getDate() - 1);
+  }
+  return streak;
+}
 
 export default function ReviewScreen() {
   const router = useRouter();
+  const today  = getTodayDate();
 
-  const pendingReview     = useAppStore((s) => s.pendingReview);
-  const buildTodayReview  = useAppStore((s) => s.buildTodayReview);
+  const pendingReview         = useAppStore((s) => s.pendingReview);
+  const buildTodayReview      = useAppStore((s) => s.buildTodayReview);
   const saveDailyReviewAction = useAppStore((s) => s.saveDailyReviewAction);
+  const dailyReviews          = useAppStore((s) => s.dailyReviews);
+  const focusSessions         = useAppStore((s) => s.focusSessions);
 
   // Ensure pendingReview is populated before rendering.
   useEffect(() => {
@@ -61,21 +92,27 @@ export default function ReviewScreen() {
   const [whatFailed,     setWhatFailed]     = useState(pendingReview?.whatFailed ?? '');
   const [tomorrowFocus,  setTomorrowFocus]  = useState(pendingReview?.tomorrowFocus ?? '');
 
-  // Derived display values
   const review = pendingReview;
 
   const completionRate = review && review.totalCount > 0
     ? Math.round((review.completedCount / review.totalCount) * 100)
     : review ? 100 : null;
 
-  function _formatFocusMins(mins: number): string {
-    if (mins === 0) return '0m';
-    const h = Math.floor(mins / 60);
-    const m = mins % 60;
-    if (h > 0 && m > 0) return `${h}h ${m}m`;
-    if (h > 0)          return `${h}h`;
-    return `${m}m`;
-  }
+  // Today's focus session count
+  const todaySessionCount = useMemo(() => {
+    return focusSessions.filter((s) => s.start.slice(0, 10) === today && !!s.end).length;
+  }, [focusSessions, today]);
+
+  // Review streak (consecutive saved review days including today)
+  const streak = useMemo(() => reviewStreak(dailyReviews, today), [dailyReviews, today]);
+
+  // Past saved reviews (excluding today, newest first, max 7)
+  const pastReviews = useMemo(() => {
+    return [...dailyReviews]
+      .filter((r) => r.date !== today && !!r.savedAt)
+      .sort((a, b) => b.date.localeCompare(a.date))
+      .slice(0, 7);
+  }, [dailyReviews, today]);
 
   const [saved,   setSaved]   = useState(false);
   const [saving,  setSaving]  = useState(false);
@@ -123,8 +160,18 @@ export default function ReviewScreen() {
           <TouchableOpacity onPress={() => router.back()} hitSlop={12}>
             <Ionicons name="arrow-back" size={22} color={Colors.textSecondary} />
           </TouchableOpacity>
-          <Text style={styles.title}>End of Day</Text>
-          <View style={{ width: 22 }} />
+          <View style={styles.headerCenter}>
+            <Text style={styles.title}>End of Day</Text>
+            <Text style={styles.headerDate}>{fmtDate(today)}</Text>
+          </View>
+          {streak >= 2 ? (
+            <View style={styles.streakBadge}>
+              <Text style={styles.streakEmoji}>🔥</Text>
+              <Text style={styles.streakText}>{streak}d</Text>
+            </View>
+          ) : (
+            <View style={{ width: 42 }} />
+          )}
         </View>
 
         <ScrollView
@@ -142,21 +189,54 @@ export default function ReviewScreen() {
             />
             <StatChip
               label="Focus"
-              value={_formatFocusMins(review.focusMinutes)}
+              value={fmtFocusMins(review.focusMinutes)}
             />
             <StatChip
-              label="Drifts"
-              value={String(review.driftTypes.length)}
-              warn={review.driftTypes.length > 0}
+              label="Sessions"
+              value={String(todaySessionCount)}
+              highlight={todaySessionCount >= 3}
             />
             <StatChip
               label="Score"
               value={review.alignmentScore !== undefined ? `${review.alignmentScore}` : '—'}
-              highlight={
-                review.alignmentScore !== undefined && review.alignmentScore >= 70
-              }
+              highlight={review.alignmentScore !== undefined && review.alignmentScore >= 70}
             />
           </View>
+
+          {/* ── Extra stats row ─────────────────────────────────────────────── */}
+          {((review.distractionCount ?? 0) > 0 || (review.skipCount ?? 0) > 0) && (
+            <View style={styles.extraStatsRow}>
+              {(review.skipCount ?? 0) > 0 && (
+                <View style={styles.extraChip}>
+                  <Ionicons name="remove-circle-outline" size={12} color={Colors.textMuted} />
+                  <Text style={styles.extraChipText}>{review.skipCount} skipped</Text>
+                </View>
+              )}
+              {(review.distractionCount ?? 0) > 0 && (
+                <View style={[styles.extraChip, styles.extraChipWarn]}>
+                  <Ionicons name="warning-outline" size={12} color={Colors.warning} />
+                  <Text style={[styles.extraChipText, { color: Colors.warning }]}>
+                    {review.distractionCount} distractions
+                  </Text>
+                </View>
+              )}
+              {completionRate !== null && (
+                <View style={[styles.extraChip, completionRate >= 80 && styles.extraChipGood]}>
+                  <Ionicons
+                    name="stats-chart-outline"
+                    size={12}
+                    color={completionRate >= 80 ? Colors.success : Colors.textMuted}
+                  />
+                  <Text style={[
+                    styles.extraChipText,
+                    completionRate >= 80 && { color: Colors.success },
+                  ]}>
+                    {completionRate}% done
+                  </Text>
+                </View>
+              )}
+            </View>
+          )}
 
           {/* ── Status badges ───────────────────────────────────────────────── */}
           {review.criticalDone && (
@@ -212,6 +292,41 @@ export default function ReviewScreen() {
             multiline
             minHeight={72}
           />
+
+          {/* ── Past reviews history ──────────────────────────────────────── */}
+          {pastReviews.length > 0 && (
+            <View style={styles.historySection}>
+              <Text style={styles.historyTitle}>Past Reviews</Text>
+              {pastReviews.map((r) => {
+                const rate = r.totalCount > 0
+                  ? Math.round((r.completedCount / r.totalCount) * 100)
+                  : 100;
+                const snippet = r.whatWorked ?? r.reflectionText ?? r.tomorrowFocus;
+                return (
+                  <View key={r.date} style={styles.historyRow}>
+                    <View style={styles.historyLeft}>
+                      <Text style={styles.historyDate}>{fmtDate(r.date)}</Text>
+                      {snippet ? (
+                        <Text style={styles.historySnippet} numberOfLines={1}>
+                          {snippet}
+                        </Text>
+                      ) : null}
+                    </View>
+                    <View style={styles.historyRight}>
+                      <Text style={[
+                        styles.historyRate,
+                        rate >= 80 && { color: Colors.success },
+                        rate < 50  && { color: Colors.error },
+                      ]}>
+                        {rate}%
+                      </Text>
+                      <Text style={styles.historyFocus}>{fmtFocusMins(r.focusMinutes)}</Text>
+                    </View>
+                  </View>
+                );
+              })}
+            </View>
+          )}
 
           {/* bottom padding so content clears the keyboard */}
           <View style={{ height: Spacing.xxl }} />
@@ -320,6 +435,31 @@ const styles = StyleSheet.create({
     padding: Spacing.md,
     gap: Spacing.md,
   },
+  // ── Header enhancements ────────────────────────────────────────────────────
+  headerCenter: { alignItems: 'center', gap: 1 },
+  headerDate:   { fontSize: FontSize.xs, color: Colors.textMuted },
+  streakBadge:  { flexDirection: 'row', alignItems: 'center', gap: 2, backgroundColor: Colors.goldMuted, borderRadius: Radius.full, paddingHorizontal: Spacing.sm, paddingVertical: 4, borderWidth: 1, borderColor: Colors.goldDim },
+  streakEmoji:  { fontSize: 11 },
+  streakText:   { fontSize: FontSize.xs, color: Colors.gold, fontWeight: FontWeight.bold },
+
+  // ── Extra stats row ────────────────────────────────────────────────────────
+  extraStatsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.xs },
+  extraChip:     { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: Spacing.sm, paddingVertical: 4, backgroundColor: Colors.surface, borderRadius: Radius.full, borderWidth: 1, borderColor: Colors.border },
+  extraChipWarn: { borderColor: Colors.warning + '40', backgroundColor: 'rgba(251,191,36,0.08)' },
+  extraChipGood: { borderColor: Colors.success + '40', backgroundColor: Colors.successMuted },
+  extraChipText: { fontSize: FontSize.xs, color: Colors.textMuted },
+
+  // ── History section ────────────────────────────────────────────────────────
+  historySection: { gap: Spacing.sm, marginTop: Spacing.sm },
+  historyTitle:   { fontSize: FontSize.xs, color: Colors.textMuted, textTransform: 'uppercase', letterSpacing: 0.8, fontWeight: FontWeight.semibold },
+  historyRow:     { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: Colors.surface, borderRadius: Radius.md, padding: Spacing.sm, borderWidth: 1, borderColor: Colors.border },
+  historyLeft:    { flex: 1, gap: 2 },
+  historyDate:    { fontSize: FontSize.sm, color: Colors.textSecondary, fontWeight: FontWeight.medium },
+  historySnippet: { fontSize: FontSize.xs, color: Colors.textMuted },
+  historyRight:   { alignItems: 'flex-end', gap: 2 },
+  historyRate:    { fontSize: FontSize.sm, fontWeight: FontWeight.bold, color: Colors.textPrimary },
+  historyFocus:   { fontSize: FontSize.xs, color: Colors.textMuted },
+
   // ── Stats strip ────────────────────────────────────────────────────────────
   statsRow: {
     flexDirection: 'row',

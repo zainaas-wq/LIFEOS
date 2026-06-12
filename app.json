@@ -16,7 +16,8 @@
       "bundleIdentifier": "com.lifeos.app",
       "buildNumber": "1",
       "infoPlist": {
-        "NSMicrophoneUsageDescription": "LifeOS needs microphone access to send voice commands to your AI coach."
+        "NSMicrophoneUsageDescription": "LifeOS needs microphone access to send voice commands to your AI coach.",
+        "ITSAppUsesNonExemptEncryption": false
       }
     },
     "android": {
@@ -25,12 +26,15 @@
         "backgroundColor": "#0A0A0A"
       },
       "package": "com.lifeos.app",
+      "googleServicesFile": "./google-services.json",
       "versionCode": 1,
       "permissions": [
         "android.permission.RECORD_AUDIO",
         "android.permission.RECEIVE_BOOT_COMPLETED",
         "android.permission.VIBRATE",
-        "android.permission.POST_NOTIFICATIONS"
+        "android.permission.POST_NOTIFICATIONS",
+        "android.permission.MODIFY_AUDIO_SETTINGS",
+        "android.permission.INTERNET"
       ]
     },
     "web": {
@@ -64,7 +68,8 @@
           "sounds": [],
           "mode": "production"
         }
-      ]
+      ],
+      "expo-secure-store"
     ],
     "experiments": {
       "typedRoutes": true
@@ -78,6 +83,12 @@
         "projectId": "e6491bca-4789-4d69-86fa-28a349663605"
       }
     },
-    "owner": "microx499"
+    "owner": "microx499",
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/e6491bca-4789-4d69-86fa-28a349663605"
+    }
   }
 }

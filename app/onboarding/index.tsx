@@ -90,6 +90,38 @@ function ProgressBar({ step, total }: { step: number; total: number }) {
   );
 }
 
+// ─── Identity Preview ─────────────────────────────────────────────────────────
+
+function IdentityPreview({ selected }: { selected: IdentityGoalType[] }) {
+  const { t } = useTranslation();
+  if (selected.length === 0) return null;
+  return (
+    <View style={ip.wrap}>
+      <View style={ip.header}>
+        <Ionicons name="sparkles" size={12} color={Colors.gold} />
+        <Text style={ip.label}>{t('onboarding.identity_preview_label')}</Text>
+      </View>
+      <View style={ip.chips}>
+        {selected.map((type) => (
+          <View key={type} style={ip.chip}>
+            <Ionicons name={IDENTITY_ICONS[type]} size={11} color={Colors.gold} />
+            <Text style={ip.chipText}>{t(`onboarding.identity_${type}` as any)}</Text>
+          </View>
+        ))}
+      </View>
+    </View>
+  );
+}
+
+const ip = StyleSheet.create({
+  wrap:     { backgroundColor: Colors.goldMuted, borderRadius: Radius.md, borderWidth: 1, borderColor: Colors.goldDim, padding: Spacing.md, gap: Spacing.sm },
+  header:   { flexDirection: 'row', alignItems: 'center', gap: 5 },
+  label:    { fontSize: FontSize.xs, color: Colors.gold, fontWeight: FontWeight.semibold, textTransform: 'uppercase', letterSpacing: 0.8 },
+  chips:    { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.xs },
+  chip:     { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: Spacing.sm, paddingVertical: 4, backgroundColor: Colors.background, borderRadius: Radius.full, borderWidth: 1, borderColor: Colors.goldDim },
+  chipText: { fontSize: FontSize.xs, color: Colors.textPrimary, fontWeight: FontWeight.medium },
+});
+
 // ─── Time Input ───────────────────────────────────────────────────────────────
 
 function TimeInput({
@@ -184,19 +216,23 @@ export default function OnboardingScreen() {
 
   const handleBack = useCallback(() => setStep((s) => Math.max(0, s - 1)), []);
 
+  const confirmLeave = useCallback(() => {
+    Alert.alert(
+      t('onboarding.leave_setup_title'),
+      t('onboarding.leave_setup_msg'),
+      [
+        { text: t('onboarding.leave_setup_cancel'), style: 'cancel' },
+        { text: t('onboarding.leave_setup_confirm'), style: 'destructive', onPress: () => router.replace('/auth/login' as any) },
+      ],
+    );
+  }, [t]);
+
   // Android hardware back — intercept to prevent navigating out of onboarding
   useEffect(() => {
     if (Platform.OS !== 'android') return;
     const onBack = () => {
       if (step === 0) {
-        Alert.alert(
-          'Leave setup?',
-          'Your progress will be lost. Are you sure?',
-          [
-            { text: 'Stay', style: 'cancel' },
-            { text: 'Leave', style: 'destructive', onPress: () => router.replace('/auth/login' as any) },
-          ],
-        );
+        confirmLeave();
       } else {
         handleBack();
       }
@@ -204,7 +240,7 @@ export default function OnboardingScreen() {
     };
     const sub = BackHandler.addEventListener('hardwareBackPress', onBack);
     return () => sub.remove();
-  }, [step, handleBack]);
+  }, [step, handleBack, confirmLeave]);
 
   const handleNext = () => {
     setTimeError('');
@@ -308,10 +344,16 @@ export default function OnboardingScreen() {
   if (step === 0) {
     return (
       <SafeAreaView style={s.safe} edges={['top', 'bottom']}>
+        <ProgressBar step={0} total={TOTAL_STEPS} />
         <KeyboardAvoidingView style={s.flex} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
           <Animated.View
             style={[s.welcomeRoot, { opacity: fadeAnim, transform: [{ translateY: slideAnim }] }]}
           >
+            {/* Back to auth (top-left) */}
+            <TouchableOpacity onPress={confirmLeave} style={s.backToAuth} activeOpacity={0.7}>
+              <Text style={s.backToAuthText}>{t('onboarding.back_to_auth')}</Text>
+            </TouchableOpacity>
+
             <View style={s.brand}>
               <View style={s.logoMark}>
                 <Ionicons name="layers-outline" size={18} color={Colors.gold} />
@@ -683,6 +725,9 @@ export default function OnboardingScreen() {
               );
             })}
           </View>
+
+          {/* Identity selection preview */}
+          <IdentityPreview selected={identityGoals} />
         </ScrollView>
 
         <View style={s.nav}>
@@ -691,11 +736,26 @@ export default function OnboardingScreen() {
             <Text style={s.navBackText}>{t('onboarding.back')}</Text>
           </TouchableOpacity>
           <View style={s.navRight}>
-            {identityGoals.length === 0 && (
-              <TouchableOpacity onPress={handleComplete} style={s.navSkip} activeOpacity={0.7}>
-                <Text style={s.navSkipText}>{t('onboarding.identity_skip')}</Text>
-              </TouchableOpacity>
-            )}
+            <TouchableOpacity
+              onPress={() => {
+                if (identityGoals.length > 0) {
+                  Alert.alert(
+                    t('onboarding.identity_skip'),
+                    t('onboarding.identity_skip_confirm'),
+                    [
+                      { text: t('onboarding.leave_setup_cancel'), style: 'cancel' },
+                      { text: t('onboarding.identity_skip_confirm_btn'), style: 'destructive', onPress: handleComplete },
+                    ],
+                  );
+                } else {
+                  handleComplete();
+                }
+              }}
+              style={s.navSkip}
+              activeOpacity={0.7}
+            >
+              <Text style={s.navSkipText}>{t('onboarding.identity_skip')}</Text>
+            </TouchableOpacity>
             <TouchableOpacity
               onPress={handleComplete}
               style={[s.navNext, identityGoals.length === 0 && s.navNextMuted]}
@@ -958,4 +1018,8 @@ const s = StyleSheet.create({
   navNextText: { fontSize: FontSize.md, fontWeight: FontWeight.bold, color: Colors.textInverse },
 
   errorText: { fontSize: FontSize.sm, color: Colors.error },
+
+  // Back to auth (step 0)
+  backToAuth:     { alignSelf: 'flex-start', paddingVertical: 4 },
+  backToAuthText: { fontSize: FontSize.sm, color: Colors.textMuted },
 });

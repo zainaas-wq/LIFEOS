@@ -329,6 +329,8 @@ const en = {
     tracks_per_week: '{{hours}}h/wk',
     tracks_no_goals: 'No goals yet.',
     tracks_add_first: 'Add your first goal →',
+    tracks_week_total: '{{logged}} / {{target}} this week',
+    tracks_hours_left: '{{h}}h left',
     // Month section
     month_title: '30-Day System',
     month_active_day_one: '{{count}} active day',
@@ -341,6 +343,7 @@ const en = {
     month_hint_starting_one: '{{count}} day started — keep going.',
     month_hint_starting_other: '{{count}} days started — keep going.',
     month_hint_consistent: '{{count}} active days this month. Stay consistent.',
+    month_focus_hours: '{{h}}h focus',
     // Friction section
     friction_title: 'Friction Map',
     friction_subtitle: 'Your active friction patterns',
@@ -349,6 +352,9 @@ const en = {
     friction_log_btn: 'Log it',
     friction_empty: 'No friction patterns configured.',
     friction_complete_profile: 'Complete your profile →',
+    friction_week_count_one: '{{count}}× this week',
+    friction_week_count_other: '{{count}}× this week',
+    friction_week_label: '7d pattern',
     // Schedule section
     schedule_title: 'Schedule',
     schedule_fixed_hours: 'Fixed Hours',
@@ -410,6 +416,18 @@ const en = {
     // Quick actions
     quick_fix_day: 'Fix my day',
     quick_stuck: 'I feel stuck',
+    quick_plan_morning: 'Plan my day',
+    quick_focus_afternoon: 'What next?',
+    quick_review_evening: 'Review today',
+    // Context preview
+    ctx_preview_label: 'AI sees',
+    ctx_preview_goals: '{{n}} goals',
+    ctx_preview_streak: '{{n}}d streak',
+    ctx_preview_plan: 'Plan active',
+    ctx_preview_no_plan: 'No plan',
+    ctx_preview_mode: '{{mode}}',
+    // Copy message
+    msg_copied: 'Copied',
     // Credits
     credits_zero: '0 credits',
     credits_count_one: '{{count}} credit',
@@ -736,6 +754,14 @@ const en = {
     identity_social:              'Better relationships',
     identity_cta:                 "Build My System →",
     identity_skip:                'Skip for now',
+    identity_skip_confirm:        'Skip identity selection? Your goals will still work, but your AI coach won\'t have a direction to guide you.',
+    identity_skip_confirm_btn:    'Skip anyway',
+    identity_preview_label:       'You are building:',
+    back_to_auth:                 '← Back to sign in',
+    leave_setup_title:            'Leave setup?',
+    leave_setup_msg:              'Your progress will be lost.',
+    leave_setup_confirm:          'Leave',
+    leave_setup_cancel:           'Stay',
   },
 
   // ─── Life role options ───────────────────────────────────────────────────────
@@ -870,6 +896,37 @@ const en = {
     guest_warning_body: 'Your data will not sync across devices and will be lost if you uninstall the app.',
     guest_warning_confirm: 'Continue anyway',
     guest_warning_cancel: 'Go back',
+    // Forgot password / reset flow
+    forgot_password: 'Forgot password?',
+    reset_title: 'Reset password',
+    reset_subtitle: "Enter your email and we'll send you a reset link.",
+    reset_send_link: 'Send Reset Link',
+    reset_sent_title: 'Check your email',
+    reset_sent_body: "We sent a reset link to\n{{email}}",
+    reset_sent_sub: 'Open the link to set a new password, then come back and sign in.',
+    // Update password screen (after clicking reset link)
+    update_password_title: 'Set new password',
+    update_password_subtitle: 'Choose a strong password for your account.',
+    new_password_label: 'New Password',
+    update_password_btn: 'Update Password',
+    update_password_success_title: 'Password updated',
+    update_password_success_body: "You're all set. Sign in with your new password.",
+    // Password strength
+    password_hint_min8: 'Minimum 8 characters',
+    password_strength_weak: 'Weak',
+    password_strength_fair: 'Fair',
+    password_strength_good: 'Good',
+    password_strength_strong: 'Strong',
+    passwords_match: 'Passwords match',
+    // Login lockout
+    lockout_message: 'Too many attempts. Try again in {{secs}} seconds.',
+    lockout_btn: 'Try again in {{secs}}s',
+    // Terms acceptance
+    terms_notice: 'By creating an account, you agree to our',
+    terms_link: 'Terms',
+    and: 'and',
+    privacy_link: 'Privacy Policy',
+    error_password_min8: 'Password must be at least 8 characters.',
     // Legacy keys (preserved for backward compatibility)
     login_title: 'Welcome back',
     login_subtitle: 'Sign in to your LifeOS',
@@ -964,6 +1021,12 @@ const en = {
     // Projects section
     projects_section: 'Projects',
     projects_sub: 'Scheduled goal work',
+    // Batch 16 — deadline urgency
+    deadline_due_today:   'Due today',
+    deadline_tomorrow:    'Tomorrow',
+    deadline_days_left:   '{{n}}d left',
+    deadline_overdue:     '{{n}}d overdue',
+    focus_done_this_week: '{{h}}h done',
   },
 
   // ─── Paywall screen ───────────────────────────────────────────────────────────
@@ -1033,6 +1096,8 @@ const en = {
     restore_link: 'Restore purchase',
     hero_title: 'Built for your life as a [{{roles}}].',
     default_roles: 'student + worker',
+    price_after_trial: 'then {{price}} / month · cancel anytime',
+    price_unavailable: '7-day free trial · cancel anytime',
   },
 
   // ─── Friction counter-strategies ─────────────────────────────────────────────
@@ -1172,6 +1237,12 @@ const en = {
     error_duration: 'Enter a valid duration in minutes',
     delete_confirm: 'Remove this routine?',
     delete_btn: 'Remove',
+    // Batch 15 — week stats
+    week_title:       'This Week',
+    done_label:       'completed',
+    week_count_label: 'scheduled',
+    best_streak:      'Best streak',
+    month_rate:       '{{pct}}%',
   },
 
   // ─── Habits screen ───────────────────────────────────────────────────────────

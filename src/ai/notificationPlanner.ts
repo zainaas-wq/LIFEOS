@@ -177,6 +177,35 @@ export const NOTIF_IDS = {
 };
 
 /**
+ * Notification category identifiers — one per notification type.
+ * Each category maps to a set of action buttons registered at app startup.
+ *
+ * Action identifiers used across categories:
+ *   "start_now"   — open app + navigate to home (task start)
+ *   "snooze"      — no navigation (task start)
+ *   "open"        — open app + navigate to home (missed / drift / retention)
+ *   "review_now"  — open app + navigate to review
+ *   "later"       — no navigation (review reminder)
+ */
+export const NOTIF_CATEGORIES = {
+  taskStart:  'task_start'       as const,
+  taskMissed: 'task_missed'      as const,
+  drift:      'drift_alert'      as const,
+  review:     'review_reminder'  as const,
+  retention:  'retention_nudge'  as const,
+} as const;
+
+/** Action identifiers used in notification categories. */
+export const NOTIF_ACTIONS = {
+  startNow:  'start_now'  as const,
+  snooze:    'snooze'     as const,
+  open:      'open'       as const,
+  reviewNow: 'review_now' as const,
+  later:     'later'      as const,
+  default:   'expo.modules.notifications.actions.DEFAULT' as const,
+} as const;
+
+/**
  * Builds notification content for a retention re-engagement nudge.
  *
  * Sent when the user hasn't opened the app for ≥ 1 day.

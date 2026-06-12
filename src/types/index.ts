@@ -645,6 +645,8 @@ export type DriftType =
  * Replaces the silent internal driftLevel with an explicit, actionable signal.
  */
 export interface DriftEvent {
+  /** Stable identifier for this drift event — used for dedup in notification scheduling. */
+  id: string;
   type: DriftType;
   detectedAt: string;             // ISO timestamp
   date: string;                   // YYYY-MM-DD — O(1) staleness check across day boundary

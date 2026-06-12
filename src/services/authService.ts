@@ -1,6 +1,10 @@
-import { Linking } from 'react-native';
+import * as WebBrowser from 'expo-web-browser';
 import { supabase } from '../lib/supabase';
 import type { Session } from '@supabase/supabase-js';
+
+// Required for expo-web-browser to close the auth session on Android
+// when the user returns to the app after OAuth.
+WebBrowser.maybeCompleteAuthSession();
 
 export async function signIn(email: string, password: string): Promise<Session> {
   const { data, error } = await supabase.auth.signInWithPassword({ email, password });
@@ -27,13 +31,18 @@ export async function getSession(): Promise<Session | null> {
 }
 
 /**
- * Initiate OAuth sign-in via system browser.
- * On success the browser redirects to lifeos://auth/callback, which is
- * picked up by the deep-link listener in app/_layout.tsx.
+ * Initiate OAuth sign-in via an in-app browser (expo-web-browser).
  *
- * Requires Supabase dashboard configuration:
- *   Authentication → Providers → Google / Apple → enable + set redirect URL
- *   Authentication → URL Configuration → add "lifeos://auth/callback" to allowed redirects
+ * Flow:
+ *  1. Ask Supabase for the OAuth URL (skipBrowserRedirect=true so we control when to open).
+ *  2. Open it in an in-app Custom Tab / ASWebAuthenticationSession.
+ *  3. When the provider redirects to lifeos://auth/callback, WebBrowser captures it
+ *     and returns { type: 'success', url }.
+ *  4. We immediately call exchangeCodeForSession — no deep-link race required.
+ *
+ * Supabase dashboard requirements:
+ *   Authentication → Providers → Google / Apple → enable + set Client ID + Secret
+ *   Authentication → URL Configuration → add "lifeos://auth/callback" to Redirect URLs
  */
 export async function signInWithOAuthProvider(
   provider: 'google' | 'apple',
@@ -46,9 +55,26 @@ export async function signInWithOAuthProvider(
     },
   });
   if (error) throw error;
-  if (data?.url) {
-    await Linking.openURL(data.url);
+  if (!data?.url) return;
+
+  const result = await WebBrowser.openAuthSessionAsync(
+    data.url,
+    'lifeos://auth/callback',
+  );
+
+  if (result.type === 'success' && result.url) {
+    const { error: sessionError } = await supabase.auth.exchangeCodeForSession(result.url);
+    if (sessionError) throw sessionError;
+    // Session is now active — onAuthStateChange in _layout.tsx fires SIGNED_IN
   }
+  // type === 'cancel' or 'dismiss' → user closed the browser, silently do nothing
+}
+
+export async function resetPassword(email: string): Promise<void> {
+  const { error } = await supabase.auth.resetPasswordForEmail(email, {
+    redirectTo: 'lifeos://auth/callback',
+  });
+  if (error) throw error;
 }
 
 export function onAuthStateChange(
