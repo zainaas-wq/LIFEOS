@@ -4,87 +4,164 @@ import {
   Text,
   ScrollView,
   StyleSheet,
-  TextInput,
   TouchableOpacity,
-  KeyboardAvoidingView,
-  Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { useTranslation } from 'react-i18next';
 import { useAppStore } from '../../src/store/useAppStore';
-import { AlignmentRing } from '../../src/components/AlignmentRing';
-import { Card } from '../../src/components/ui/Card';
-import { Button } from '../../src/components/ui/Button';
 import { WelcomeFlow } from '../../src/components/WelcomeFlow';
 import { SkeletonSection } from '../../src/components/SkeletonLoader';
 import { computeProgressScore } from '../../src/ai/progressEngine';
-import { getTodayDate, formatDate, getLocalDateStr, generateId } from '../../src/lib/utils';
+import { getTodayDate, getLocalDateStr, generateId } from '../../src/lib/utils';
 import { Colors, FontSize, FontWeight, Spacing, Radius } from '../../src/constants/theme';
-import type { NudgeItem, NudgeUrgency, GoalRiskLevel } from '../../src/types';
 import { getMostAtRiskGoal } from '../../src/ai/goalIntelligence';
+import type { NudgeItem, NudgeUrgency } from '../../src/types';
 
-// ─── Smart Insight Banner ─────────────────────────────────────────────────────
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+function formatStudyTime(minutes: number): string {
+  if (minutes === 0) return '0m';
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  if (h === 0) return `${m}m`;
+  if (m === 0) return `${h}h`;
+  return `${h}h ${m}m`;
+}
+
+function computeStreak(focusSessions: any[]): number {
+  if (!focusSessions.length) return 0;
+  const days = new Set(focusSessions.map((s) => getLocalDateStr(new Date(s.start))));
+  let streak = 0;
+  const d = new Date();
+  while (true) {
+    const key = getLocalDateStr(d);
+    if (!days.has(key)) break;
+    streak++;
+    d.setDate(d.getDate() - 1);
+  }
+  return streak;
+}
+
+// ─── Stat Card ────────────────────────────────────────────────────────────────
+
+function StatCard({
+  icon, iconBg, iconColor, value, label, sub,
+}: {
+  icon: string; iconBg: string; iconColor: string;
+  value: string; label: string; sub?: string;
+}) {
+  return (
+    <View style={statStyles.card}>
+      <View style={[statStyles.iconWrap, { backgroundColor: iconBg }]}>
+        <Ionicons name={icon as any} size={18} color={iconColor} />
+      </View>
+      <Text style={statStyles.value}>{value}</Text>
+      <Text style={statStyles.label}>{label}</Text>
+      {sub ? <Text style={[statStyles.sub, { color: iconColor }]}>{sub}</Text> : null}
+    </View>
+  );
+}
+
+const statStyles = StyleSheet.create({
+  card: {
+    flex: 1,
+    backgroundColor: Colors.surfaceElevated,
+    borderRadius: Radius.lg,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    padding: Spacing.md,
+    gap: 4,
+    minHeight: 112,
+  },
+  iconWrap: {
+    width: 36, height: 36, borderRadius: Radius.md,
+    alignItems: 'center', justifyContent: 'center', marginBottom: 4,
+  },
+  value: { fontSize: FontSize.xxl, fontWeight: FontWeight.bold, color: Colors.textPrimary },
+  label: { fontSize: FontSize.xs, color: Colors.textSecondary, fontWeight: FontWeight.medium },
+  sub:   { fontSize: FontSize.xs, fontWeight: FontWeight.semibold },
+});
+
+// ─── Plan Item Row ─────────────────────────────────────────────────────────────
+
+const PLAN_COLORS = ['#6C63FF', '#4ADE80', '#FB923C', '#38BDF8', '#F472B6'];
+
+function PlanRow({
+  title, time, color, completed, onPress,
+}: {
+  title: string; time: string; color: string; completed: boolean; onPress: () => void;
+}) {
+  return (
+    <TouchableOpacity style={planStyles.row} onPress={onPress} activeOpacity={0.7}>
+      <View style={[planStyles.dot, { backgroundColor: color }]} />
+      <View style={planStyles.info}>
+        <Text style={[planStyles.title, completed && planStyles.done]} numberOfLines={1}>
+          {title}
+        </Text>
+        <Text style={planStyles.time}>{time}</Text>
+      </View>
+      <Ionicons
+        name={completed ? 'checkmark-circle' : 'chevron-forward'}
+        size={16}
+        color={completed ? Colors.success : Colors.textMuted}
+      />
+    </TouchableOpacity>
+  );
+}
+
+const planStyles = StyleSheet.create({
+  row: {
+    flexDirection: 'row', alignItems: 'center', gap: Spacing.md,
+    paddingVertical: Spacing.sm + 2,
+    borderBottomWidth: 1, borderBottomColor: Colors.border,
+  },
+  dot:   { width: 10, height: 10, borderRadius: Radius.full },
+  info:  { flex: 1, gap: 2 },
+  title: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.textPrimary },
+  done:  { color: Colors.textMuted, textDecorationLine: 'line-through' },
+  time:  { fontSize: FontSize.xs, color: Colors.textSecondary },
+});
+
+// ─── Nudge Banner ─────────────────────────────────────────────────────────────
 
 const URGENCY_COLOR: Record<NudgeUrgency, string> = {
-  low:      Colors.gold,
-  medium:   Colors.gold,
-  high:     '#FB923C',
-  critical: '#F87171',
+  low: Colors.gold, medium: Colors.gold, high: '#FB923C', critical: '#F87171',
 };
 
-function SmartInsightBanner({
-  nudge,
-  onStartFocus,
-  onDismiss,
-}: {
+function NudgeBanner({ nudge, onStart, onDismiss }: {
   nudge: NudgeItem;
-  onStartFocus: (itemId: string, title: string) => void;
+  onStart: (id: string, title: string) => void;
   onDismiss: () => void;
 }) {
-  const urgency = nudge.urgency ?? 'medium';
-  const accent  = nudge.isRecovery ? Colors.error : URGENCY_COLOR[urgency];
-  const isRecovery = nudge.isRecovery ?? false;
-
+  const accent = nudge.isRecovery ? Colors.error : URGENCY_COLOR[nudge.urgency ?? 'medium'];
   return (
-    <View style={[insightStyles.card, { borderColor: accent + '55' }]}>
-      {/* Left accent bar */}
-      <View style={[insightStyles.bar, { backgroundColor: accent }]} />
-
-      <View style={insightStyles.body}>
-        {/* Header */}
-        <View style={insightStyles.headerRow}>
-          <View style={[insightStyles.badge, { backgroundColor: accent + '22', borderColor: accent + '44' }]}>
-            <Ionicons
-              name={isRecovery ? 'refresh-circle-outline' : urgency === 'critical' ? 'flash' : 'sparkles'}
-              size={11}
-              color={accent}
-            />
-            <Text style={[insightStyles.badgeText, { color: accent }]}>
-              {isRecovery ? 'RECOVERY' : urgency === 'critical' ? 'CRITICAL' : 'BEST ACTION'}
+    <View style={[nudgeStyles.card, { borderColor: accent + '44' }]}>
+      <View style={[nudgeStyles.bar, { backgroundColor: accent }]} />
+      <View style={nudgeStyles.body}>
+        <View style={nudgeStyles.topRow}>
+          <View style={[nudgeStyles.badge, { backgroundColor: accent + '22' }]}>
+            <Ionicons name="sparkles" size={10} color={accent} />
+            <Text style={[nudgeStyles.badgeText, { color: accent }]}>
+              {nudge.isRecovery ? 'RECOVERY' : 'BEST ACTION'}
             </Text>
           </View>
           <TouchableOpacity onPress={onDismiss} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
             <Ionicons name="close" size={14} color={Colors.textMuted} />
           </TouchableOpacity>
         </View>
-
-        {/* Context reason */}
         {!!nudge.contextReason && (
-          <Text style={insightStyles.context}>{nudge.contextReason}</Text>
+          <Text style={nudgeStyles.reason}>{nudge.contextReason}</Text>
         )}
-
-        {/* Action row */}
-        <View style={insightStyles.actionRow}>
-          <Text style={insightStyles.actionTitle} numberOfLines={1}>{nudge.itemTitle}</Text>
+        <View style={nudgeStyles.actionRow}>
+          <Text style={nudgeStyles.actionTitle} numberOfLines={1}>{nudge.itemTitle}</Text>
           <TouchableOpacity
-            style={[insightStyles.startBtn, { backgroundColor: accent }]}
-            onPress={() => onStartFocus(nudge.itemId, nudge.itemTitle)}
+            style={[nudgeStyles.startBtn, { backgroundColor: accent }]}
+            onPress={() => onStart(nudge.itemId, nudge.itemTitle)}
             activeOpacity={0.85}
           >
-            <Ionicons name="flash" size={13} color={Colors.textInverse} />
-            <Text style={insightStyles.startBtnText}>Start</Text>
+            <Ionicons name="flash" size={12} color="#000" />
+            <Text style={nudgeStyles.startBtnText}>Start</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -92,134 +169,48 @@ function SmartInsightBanner({
   );
 }
 
-const insightStyles = StyleSheet.create({
+const nudgeStyles = StyleSheet.create({
   card: {
-    flexDirection: 'row',
-    backgroundColor: Colors.surfaceElevated,
-    borderRadius: Radius.md,
-    borderWidth: 1,
-    overflow: 'hidden',
+    flexDirection: 'row', backgroundColor: Colors.surfaceElevated,
+    borderRadius: Radius.md, borderWidth: 1, overflow: 'hidden',
   },
   bar:  { width: 4 },
   body: { flex: 1, padding: Spacing.md, gap: Spacing.sm },
-
-  headerRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  topRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   badge: {
-    flexDirection: 'row', alignItems: 'center', gap: 4,
-    paddingHorizontal: Spacing.sm, paddingVertical: 2,
-    borderRadius: Radius.full, borderWidth: 1,
+    flexDirection: 'row', alignItems: 'center', gap: 3,
+    paddingHorizontal: Spacing.sm, paddingVertical: 2, borderRadius: Radius.full,
   },
-  badgeText: { fontSize: FontSize.xs - 1, fontWeight: FontWeight.bold, letterSpacing: 0.8 },
-
-  context:     { fontSize: FontSize.sm, color: Colors.textSecondary, lineHeight: 20 },
-
-  actionRow:   { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
-  actionTitle: { flex: 1, fontSize: FontSize.md, fontWeight: FontWeight.bold, color: Colors.textPrimary },
+  badgeText:  { fontSize: 10, fontWeight: FontWeight.bold, letterSpacing: 0.8 },
+  reason:     { fontSize: FontSize.sm, color: Colors.textSecondary, lineHeight: 19 },
+  actionRow:  { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
+  actionTitle:{ flex: 1, fontSize: FontSize.md, fontWeight: FontWeight.bold, color: Colors.textPrimary },
   startBtn: {
     flexDirection: 'row', alignItems: 'center', gap: 4,
-    paddingHorizontal: Spacing.md, paddingVertical: Spacing.sm,
-    borderRadius: Radius.md,
+    paddingHorizontal: Spacing.md, paddingVertical: Spacing.sm, borderRadius: Radius.md,
   },
-  startBtnText: { fontSize: FontSize.sm, fontWeight: FontWeight.bold, color: Colors.textInverse },
-});
-
-// ─── At-Risk Goal Banner ──────────────────────────────────────────────────────
-
-const RISK_COLOR: Record<GoalRiskLevel, string> = {
-  'on-track': '#4ADE80',
-  'at-risk':  '#FB923C',
-  'critical': '#F87171',
-  'stalled':  '#6B7280',
-};
-
-function AtRiskGoalBanner({
-  goalTitle,
-  riskLevel,
-  riskReason,
-  probability,
-  onPress,
-}: {
-  goalTitle:   string;
-  riskLevel:   GoalRiskLevel;
-  riskReason:  string;
-  probability: number;
-  onPress:     () => void;
-}) {
-  const accent = RISK_COLOR[riskLevel];
-  const label  = riskLevel === 'critical' ? 'CRITICAL GOAL' :
-                 riskLevel === 'stalled'  ? 'STALLED GOAL'  : 'GOAL AT RISK';
-
-  return (
-    <TouchableOpacity
-      style={[riskStyles.card, { borderColor: accent + '55' }]}
-      onPress={onPress}
-      activeOpacity={0.8}
-    >
-      <View style={[riskStyles.bar, { backgroundColor: accent }]} />
-      <View style={riskStyles.body}>
-        <View style={riskStyles.row}>
-          <Ionicons
-            name={riskLevel === 'critical' ? 'flash' : riskLevel === 'stalled' ? 'pause-circle-outline' : 'warning-outline'}
-            size={13}
-            color={accent}
-          />
-          <Text style={[riskStyles.label, { color: accent }]}>{label}</Text>
-          <View style={[riskStyles.probChip, { backgroundColor: accent + '22' }]}>
-            <Text style={[riskStyles.probText, { color: accent }]}>{probability}%</Text>
-          </View>
-          <Ionicons name="chevron-forward" size={13} color={Colors.textMuted} />
-        </View>
-        <Text style={riskStyles.title} numberOfLines={1}>{goalTitle}</Text>
-        <Text style={riskStyles.reason} numberOfLines={1}>{riskReason}</Text>
-      </View>
-    </TouchableOpacity>
-  );
-}
-
-const riskStyles = StyleSheet.create({
-  card: {
-    flexDirection: 'row',
-    backgroundColor: Colors.surfaceElevated,
-    borderRadius: Radius.md,
-    borderWidth: 1,
-    overflow: 'hidden',
-  },
-  bar:  { width: 3 },
-  body: { flex: 1, padding: Spacing.md, gap: 3 },
-  row:  { flexDirection: 'row', alignItems: 'center', gap: Spacing.xs },
-  label: { flex: 1, fontSize: FontSize.xs, fontWeight: FontWeight.bold, letterSpacing: 0.6, textTransform: 'uppercase' },
-  probChip: { paddingHorizontal: 6, paddingVertical: 1, borderRadius: Radius.full },
-  probText: { fontSize: FontSize.xs, fontWeight: FontWeight.bold },
-  title:  { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.textPrimary },
-  reason: { fontSize: FontSize.xs, color: Colors.textMuted },
+  startBtnText: { fontSize: FontSize.sm, fontWeight: FontWeight.bold, color: '#000' },
 });
 
 // ─── Home Screen ──────────────────────────────────────────────────────────────
 
 export default function HomeScreen() {
-  const { t } = useTranslation();
-
   const profile            = useAppStore((s) => s.profile);
   const hasSeenWelcome     = useAppStore((s) => s.hasSeenWelcome);
   const isHydrating        = useAppStore((s) => s.isHydrating);
   const session            = useAppStore((s) => s.session);
   const rules              = useAppStore((s) => s.rules);
-  const activeFocus        = useAppStore((s) => s.activeFocus);
   const focusSessions      = useAppStore((s) => s.focusSessions);
   const controlPlan        = useAppStore((s) => s.controlPlan);
-  const saveReflection     = useAppStore((s) => s.saveReflection);
   const loadSeedData       = useAppStore((s) => s.loadSeedData);
   const seedLoaded         = useAppStore((s) => s.seedLoaded);
-  const logDistraction     = useAppStore((s) => s.logDistraction);
-  const distractionLogs    = useAppStore((s) => s.distractionLogs);
-  const startFocus              = useAppStore((s) => s.startFocus);
-  const computeSmartNudge       = useAppStore((s) => s.computeSmartNudge);
-  const goals                   = useAppStore((s) => s.goals);
-  const goalIntelligence        = useAppStore((s) => s.goalIntelligence);
+  const startFocus         = useAppStore((s) => s.startFocus);
+  const computeSmartNudge  = useAppStore((s) => s.computeSmartNudge);
+  const goals              = useAppStore((s) => s.goals);
+  const goalIntelligence   = useAppStore((s) => s.goalIntelligence);
   const computeGoalIntelligence = useAppStore((s) => s.computeGoalIntelligence);
-  const todayReflection    = useAppStore((s) =>
-    s.reflections?.find((r) => r.date === getTodayDate()) ?? null
-  );
+  const distractionLogs    = useAppStore((s) => s.distractionLogs);
+  const reflections        = useAppStore((s) => s.reflections);
 
   const [smartNudge, setSmartNudge] = useState<NudgeItem | null>(null);
 
@@ -227,372 +218,377 @@ export default function HomeScreen() {
     if (__DEV__ && !seedLoaded && !profile) loadSeedData();
   }, []);
 
-  // Compute smart nudge on mount and every 5 minutes
   useEffect(() => {
-    const compute = () => {
-      const nudge = computeSmartNudge();
-      setSmartNudge(nudge);
-    };
+    const compute = () => setSmartNudge(computeSmartNudge());
     compute();
     const interval = setInterval(compute, 5 * 60 * 1000);
     return () => clearInterval(interval);
   }, [controlPlan, goals]);
 
-  // Compute goal intelligence on mount and when goals/plan change
   useEffect(() => {
     if (goals.length > 0) computeGoalIntelligence();
   }, [goals, controlPlan]);
 
-  const handleStartFocusFromNudge = useCallback((itemId: string, title: string) => {
-    const linkedGoal = goals.find((g) =>
-      controlPlan?.plan.items.find((i) => i.id === itemId)?.goalId === g.id,
-    );
-    startFocus({
-      id:              generateId(),
-      goalId:          linkedGoal?.id,
-      goalTitle:       title,
-      durationMinutes: 50,
-      startedAt:       new Date().toISOString(),
-    });
-    setSmartNudge(null);
-    router.push('/(tabs)/focus' as any);
-  }, [goals, controlPlan, startFocus]);
-
-  const atRiskGoal = useMemo(
-    () => getMostAtRiskGoal(goals, goalIntelligence),
-    [goals, goalIntelligence],
-  );
-
   const today = getTodayDate();
 
-  const [reflectionText, setReflectionText]   = useState(todayReflection?.text ?? '');
-  const [reflectionSaved, setReflectionSaved] = useState(!!todayReflection);
+  const todaySessions = useMemo(
+    () => focusSessions.filter((s) => getLocalDateStr(new Date(s.start)) === today),
+    [focusSessions, today],
+  );
+  const todayFocusMin = useMemo(
+    () => todaySessions.reduce((sum, s) => sum + (s.durationMinutes ?? 0), 0),
+    [todaySessions],
+  );
+  const streak = useMemo(() => computeStreak(focusSessions), [focusSessions]);
 
   const planItems = useMemo(
     () => (controlPlan?.plan.items ?? []).filter((i) => i.type !== 'break' && i.type !== 'event'),
     [controlPlan],
   );
 
-  const todayDistractions = distractionLogs.filter((d) => getLocalDateStr(new Date(d.timestamp)) === today).length;
-
-  const alignmentResult = useMemo(
-    () =>
-      computeProgressScore({
-        planItems,
-        rules,
-        criticalActionCompleted:
-          controlPlan?.plan.items.some((i) => !!i.isCritical && i.completed) ?? false,
-        hasReflection: !!todayReflection || reflectionSaved,
-        distractionCount: todayDistractions,
-        seriousnessScore: profile?.seriousnessScore ?? 7,
-      }),
-    [planItems, rules, controlPlan, todayReflection, reflectionSaved, todayDistractions, profile],
+  const todayDistractions = useMemo(
+    () => distractionLogs.filter((d) => getLocalDateStr(new Date(d.timestamp)) === today).length,
+    [distractionLogs, today],
   );
 
-  const handleSaveReflection = () => {
-    if (reflectionText.trim()) {
-      saveReflection(today, reflectionText.trim());
-      setReflectionSaved(true);
-    }
-  };
+  const todayReflection = useMemo(
+    () => reflections?.find((r) => r.date === today) ?? null,
+    [reflections, today],
+  );
 
-  const todaySessionCount = focusSessions.filter((s) => getLocalDateStr(new Date(s.start)) === today).length;
-  const todayFocusMin = focusSessions
-    .filter((s) => getLocalDateStr(new Date(s.start)) === today)
-    .reduce((sum, s) => sum + (s.durationMinutes ?? 0), 0);
+  const alignmentResult = useMemo(
+    () => computeProgressScore({
+      planItems,
+      rules,
+      criticalActionCompleted: controlPlan?.plan.items.some((i) => !!i.isCritical && i.completed) ?? false,
+      hasReflection: !!todayReflection,
+      distractionCount: todayDistractions,
+      seriousnessScore: profile?.seriousnessScore ?? 7,
+    }),
+    [planItems, rules, controlPlan, todayReflection, todayDistractions, profile],
+  );
 
+  const focusScore = Math.min(
+    100,
+    Math.round(
+      (alignmentResult.taskScore / 40) * 60 +
+      (alignmentResult.ruleScore / 30) * 25 +
+      (alignmentResult.criticalScore / 20) * 15,
+    ),
+  );
+
+  const tasksTotal = planItems.length;
+  const tasksDone  = planItems.filter((i) => i.completed).length;
+
+  // Greeting
   const hour = new Date().getHours();
-  const greetingKey =
-    hour < 12 ? 'home.greeting_morning' :
-    hour < 17 ? 'home.greeting_afternoon' :
-                'home.greeting_evening';
-  const greetingName = profile?.name ? `, ${profile.name}` : '';
-  const greetingText = `${t(greetingKey)}${greetingName}`;
+  const greetingEmoji = hour < 12 ? '☀️' : hour < 17 ? '👋' : '🌙';
+  const greetingWord  = hour < 12 ? 'Good Morning' : hour < 17 ? 'Good Afternoon' : 'Good Evening';
+  const greetingName  = profile?.name ? `, ${profile.name}` : '';
+
+  const dateLabel = new Date().toLocaleDateString('en-US', {
+    weekday: 'long', day: 'numeric', month: 'long',
+  });
+
+  const displayItems = useMemo(() => planItems.slice(0, 5), [planItems]);
+
+  const handleStartFromNudge = useCallback((itemId: string, title: string) => {
+    const linkedGoal = goals.find((g) =>
+      controlPlan?.plan.items.find((i) => i.id === itemId)?.goalId === g.id,
+    );
+    startFocus({
+      id: generateId(),
+      goalId: linkedGoal?.id,
+      goalTitle: title,
+      durationMinutes: 50,
+      startedAt: new Date().toISOString(),
+    });
+    setSmartNudge(null);
+    router.push('/(tabs)/focus' as any);
+  }, [goals, controlPlan, startFocus]);
 
   const showWelcome = !!profile?.onboardingComplete && !hasSeenWelcome;
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
-      {/* Welcome flow shows once after onboarding — before anything else */}
       <WelcomeFlow visible={showWelcome} />
-
-      <KeyboardAvoidingView
-        style={styles.flex}
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      <ScrollView
+        style={styles.scroll}
+        contentContainerStyle={styles.content}
+        showsVerticalScrollIndicator={false}
       >
-        <ScrollView
-          style={styles.scroll}
-          contentContainerStyle={styles.content}
-          showsVerticalScrollIndicator={false}
-          keyboardShouldPersistTaps="handled"
-        >
-          {/* ── Header ─────────────────────────────────────────────────────── */}
-          <View style={styles.header}>
-            <Text style={styles.greeting}>{greetingText}</Text>
-            <Text style={styles.date}>{formatDate(today)}</Text>
-          </View>
-
-          {/* ── Hydration loading skeleton ─────────────────────────────────── */}
-          {isHydrating && !!session && (
-            <View style={styles.skeletonWrap}>
-              <SkeletonSection cards={3} />
-            </View>
-          )}
-
-          {/* ── Alignment Ring ─────────────────────────────────────────────── */}
-          <View style={[styles.ringWrap, isHydrating && !!session && { opacity: 0, height: 0 }]}>
-            <AlignmentRing result={alignmentResult} size={180} />
-            <View style={styles.breakdown}>
-              <ScorePill label={t('home.score_tasks')}    value={alignmentResult.taskScore}       max={40} />
-              <ScorePill label={t('home.score_rules')}    value={alignmentResult.ruleScore}       max={30} />
-              <ScorePill label={t('home.score_critical')} value={alignmentResult.criticalScore}   max={20} />
-              <ScorePill label={t('home.score_reflect')}  value={alignmentResult.reflectionScore} max={10} />
-            </View>
-          </View>
-
-          {/* ── Focus stats ────────────────────────────────────────────────── */}
-          {(todaySessionCount > 0 || activeFocus) && (
-            <Card gold style={styles.focusCard}>
-              <View style={styles.focusRow}>
-                <Ionicons name="flash" size={16} color={Colors.gold} />
-                <Text style={styles.focusLabel}>
-                  {activeFocus
-                    ? t('home.focus_active_label', { title: activeFocus.goalTitle })
-                    : t('home.focus_summary', { count: todaySessionCount, mins: todayFocusMin })}
-                </Text>
-              </View>
-            </Card>
-          )}
-
-          {/* ── Distraction log ────────────────────────────────────────────── */}
-          <TouchableOpacity
-            onPress={() => logDistraction()}
-            style={styles.distractionBtn}
-            activeOpacity={0.75}
-          >
-            <Ionicons name="warning-outline" size={13} color={Colors.textMuted} />
-            <Text style={styles.distractionBtnText}>
-              {todayDistractions > 0
-                ? t('home.distraction_count', { count: todayDistractions })
-                : t('home.distraction_prompt')}
+        {/* Header */}
+        <View style={styles.header}>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.dateText}>{dateLabel}</Text>
+            <Text style={styles.greeting}>
+              {greetingWord}{greetingName} {greetingEmoji}
             </Text>
-          </TouchableOpacity>
-
-          {/* ── Smart Insight Banner ───────────────────────────────────────── */}
-          {smartNudge && (
-            <SmartInsightBanner
-              nudge={smartNudge}
-              onStartFocus={handleStartFocusFromNudge}
-              onDismiss={() => setSmartNudge(null)}
-            />
-          )}
-
-          {/* ── At-Risk Goal Warning ────────────────────────────────────────── */}
-          {atRiskGoal && (
-            <AtRiskGoalBanner
-              goalTitle={atRiskGoal.goal.title}
-              riskLevel={atRiskGoal.intel.riskLevel}
-              riskReason={atRiskGoal.intel.riskReason}
-              probability={atRiskGoal.intel.probability}
-              onPress={() => router.push('/(tabs)/goals' as any)}
-            />
-          )}
-
-          {/* ── First-run getting started card ─────────────────────────────── */}
-          {goals.length === 0 && !isHydrating && !seedLoaded && (
-            <Card style={styles.getStartedCard}>
-              <View style={styles.getStartedIcon}>
-                <Ionicons name="sparkles" size={24} color={Colors.gold} />
-              </View>
-              <Text style={styles.getStartedTitle}>Set up your intelligence layer</Text>
-              <Text style={styles.getStartedDesc}>
-                LifeOS activates when you add goals, courses, and projects. Add your first goal to start receiving AI-powered guidance and risk detection.
-              </Text>
-              <View style={styles.getStartedActions}>
-                <TouchableOpacity
-                  style={styles.getStartedBtn}
-                  onPress={() => router.push('/(tabs)/goals' as any)}
-                  activeOpacity={0.8}
-                >
-                  <Ionicons name="flag-outline" size={14} color={Colors.gold} />
-                  <Text style={styles.getStartedBtnText}>Add First Goal</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[styles.getStartedBtn, { borderColor: Colors.border }]}
-                  onPress={() => router.push('/(tabs)/ai' as any)}
-                  activeOpacity={0.8}
-                >
-                  <Ionicons name="chatbubbles-outline" size={14} color={Colors.textSecondary} />
-                  <Text style={[styles.getStartedBtnText, { color: Colors.textSecondary }]}>Ask AI Coach</Text>
-                </TouchableOpacity>
-              </View>
-            </Card>
-          )}
-
-          {/* ── Critical Action / Today's Focus ────────────────────────────── */}
-          {(() => {
-            const criticalItem = controlPlan?.plan.items.find((i) => !!i.isCritical);
-            if (criticalItem) {
-              return (
-                <Card gold style={styles.section}>
-                  <View style={styles.criticalHeader}>
-                    <Ionicons name="flash" size={14} color={Colors.gold} />
-                    <Text style={styles.criticalLabel}>{t('home.todays_focus')}</Text>
-                  </View>
-                  <Text style={styles.criticalAction}>{criticalItem.title}</Text>
-                </Card>
-              );
-            }
-            return (
-              <Card style={styles.section}>
-                <View style={styles.emptyRow}>
-                  <Text style={styles.emptyHint}>{t('home.no_plan_today')}</Text>
-                  <TouchableOpacity onPress={() => router.push('/(tabs)/plan' as any)}>
-                    <Text style={styles.emptyLink}>{t('home.go_to_plan')}</Text>
-                  </TouchableOpacity>
-                </View>
-              </Card>
-            );
-          })()}
-
-          {/* ── Ask Coach shortcut ─────────────────────────────────────────── */}
+          </View>
           <TouchableOpacity
-            style={styles.coachPrompt}
+            style={styles.iconBtn}
+            onPress={() => router.push('/(tabs)/more' as any)}
+            activeOpacity={0.7}
+          >
+            <Ionicons name="notifications-outline" size={20} color={Colors.textSecondary} />
+          </TouchableOpacity>
+        </View>
+
+        {isHydrating && !!session && <SkeletonSection cards={3} />}
+
+        {/* Stats Grid */}
+        <View style={styles.statsGrid}>
+          <View style={styles.statsRow}>
+            <StatCard
+              icon="flash"
+              iconBg="rgba(108,99,255,0.18)"
+              iconColor="#6C63FF"
+              value={String(focusScore)}
+              label="Focus Score"
+              sub={focusScore >= 80 ? 'Great Focus!' : focusScore >= 50 ? 'Keep Going' : 'Needs Work'}
+            />
+            <StatCard
+              icon="checkbox-outline"
+              iconBg="rgba(74,222,128,0.15)"
+              iconColor="#4ADE80"
+              value={`${tasksDone}/${tasksTotal || 0}`}
+              label="Tasks"
+              sub="To do today"
+            />
+          </View>
+          <View style={styles.statsRow}>
+            <StatCard
+              icon="time-outline"
+              iconBg="rgba(251,146,60,0.15)"
+              iconColor="#FB923C"
+              value={formatStudyTime(todayFocusMin)}
+              label="Study Time"
+              sub={todayFocusMin > 0 ? 'Keep it up!' : 'Start a session'}
+            />
+            <StatCard
+              icon="flame-outline"
+              iconBg="rgba(248,113,113,0.15)"
+              iconColor="#F87171"
+              value={String(streak)}
+              label="Streak"
+              sub={streak === 1 ? 'Day' : 'Days'}
+            />
+          </View>
+        </View>
+
+        {/* Smart Nudge */}
+        {smartNudge && (
+          <NudgeBanner
+            nudge={smartNudge}
+            onStart={handleStartFromNudge}
+            onDismiss={() => setSmartNudge(null)}
+          />
+        )}
+
+        {/* Today's Plan */}
+        <View style={styles.section}>
+          <View style={styles.sectionHeader}>
+            <Text style={styles.sectionTitle}>Today's Plan</Text>
+            <TouchableOpacity onPress={() => router.push('/(tabs)/plan' as any)} activeOpacity={0.7}>
+              <Text style={styles.seeAll}>See all</Text>
+            </TouchableOpacity>
+          </View>
+          <View style={styles.planCard}>
+            {displayItems.length === 0 ? (
+              <View style={styles.emptyPlan}>
+                <Ionicons name="calendar-outline" size={32} color={Colors.textMuted} />
+                <Text style={styles.emptyText}>No plan for today yet</Text>
+                <TouchableOpacity
+                  style={styles.createPlanBtn}
+                  onPress={() => router.push('/(tabs)/plan' as any)}
+                  activeOpacity={0.8}
+                >
+                  <Text style={styles.createPlanText}>Create Plan</Text>
+                </TouchableOpacity>
+              </View>
+            ) : (
+              displayItems.map((item, idx) => (
+                <PlanRow
+                  key={item.id}
+                  title={item.title}
+                  time={
+                    item.startTime && item.endTime
+                      ? `${item.startTime} – ${item.endTime}`
+                      : item.startTime ?? 'Anytime'
+                  }
+                  color={PLAN_COLORS[idx % PLAN_COLORS.length]}
+                  completed={!!item.completed}
+                  onPress={() => router.push('/(tabs)/plan' as any)}
+                />
+              ))
+            )}
+          </View>
+        </View>
+
+        {/* Quick Actions */}
+        <View style={styles.quickRow}>
+          <TouchableOpacity
+            style={styles.quickBtn}
+            onPress={() => router.push('/(tabs)/focus' as any)}
+            activeOpacity={0.8}
+          >
+            <Ionicons name="flash" size={15} color={Colors.gold} />
+            <Text style={styles.quickText}>Focus</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.quickBtn}
             onPress={() => router.push('/(tabs)/coach' as any)}
             activeOpacity={0.8}
           >
-            <View style={styles.coachIcon}>
-              <Ionicons name="sparkles" size={14} color={Colors.gold} />
-            </View>
-            <Text style={styles.coachText}>{t('home.ask_coach')}</Text>
-            <Ionicons name="arrow-forward" size={14} color={Colors.textMuted} />
+            <Ionicons name="sparkles" size={15} color={Colors.gold} />
+            <Text style={styles.quickText}>Coach</Text>
           </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.quickBtn}
+            onPress={() => router.push('/(tabs)/goals' as any)}
+            activeOpacity={0.8}
+          >
+            <Ionicons name="flag-outline" size={15} color={Colors.gold} />
+            <Text style={styles.quickText}>Goals</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.quickBtn}
+            onPress={() => router.push('/(tabs)/memory' as any)}
+            activeOpacity={0.8}
+          >
+            <Ionicons name="library-outline" size={15} color={Colors.gold} />
+            <Text style={styles.quickText}>Memory</Text>
+          </TouchableOpacity>
+        </View>
 
-          {/* ── Daily Reflection ───────────────────────────────────────────── */}
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>{t('home.reflection_title')}</Text>
-            <Card elevated>
-              <TextInput
-                value={reflectionText}
-                onChangeText={(text) => { setReflectionText(text); setReflectionSaved(false); }}
-                placeholder={t('home.reflection_placeholder')}
-                placeholderTextColor={Colors.textMuted}
-                multiline
-                numberOfLines={4}
-                style={styles.reflectionInput}
-                editable={!reflectionSaved}
-              />
-              {!reflectionSaved && reflectionText.trim().length > 0 && (
-                <Button
-                  label={t('home.reflection_save')}
-                  onPress={handleSaveReflection}
-                  variant="ghost"
-                  size="sm"
-                  style={styles.reflectionBtn}
-                />
-              )}
-              {reflectionSaved && (
-                <View style={styles.reflectionSavedRow}>
-                  <Ionicons name="checkmark-circle" size={14} color={Colors.success} />
-                  <Text style={styles.reflectionSavedText}>{t('home.reflection_saved')}</Text>
-                  <TouchableOpacity onPress={() => setReflectionSaved(false)}>
-                    <Text style={styles.reflectionEdit}>{t('common.edit')}</Text>
-                  </TouchableOpacity>
+        {/* At-risk goal */}
+        {goals.length > 0 && (() => {
+          const atRisk = getMostAtRiskGoal(goals, goalIntelligence);
+          if (!atRisk || atRisk.intel.riskLevel === 'on-track') return null;
+          const accent = atRisk.intel.riskLevel === 'critical' ? '#F87171' : '#FB923C';
+          return (
+            <TouchableOpacity
+              style={[styles.riskCard, { borderColor: accent + '44' }]}
+              onPress={() => router.push('/(tabs)/goals' as any)}
+              activeOpacity={0.8}
+            >
+              <View style={[styles.riskBar, { backgroundColor: accent }]} />
+              <View style={styles.riskBody}>
+                <View style={styles.riskTopRow}>
+                  <Ionicons name="warning-outline" size={13} color={accent} />
+                  <Text style={[styles.riskLabel, { color: accent }]}>
+                    {atRisk.intel.riskLevel === 'critical' ? 'CRITICAL GOAL' : 'GOAL AT RISK'}
+                  </Text>
+                  <Ionicons name="chevron-forward" size={13} color={Colors.textMuted} />
                 </View>
-              )}
-            </Card>
+                <Text style={styles.riskTitle} numberOfLines={1}>{atRisk.goal.title}</Text>
+                <Text style={styles.riskReason} numberOfLines={1}>{atRisk.intel.riskReason}</Text>
+              </View>
+            </TouchableOpacity>
+          );
+        })()}
+
+        {/* First-run CTA */}
+        {goals.length === 0 && !isHydrating && !seedLoaded && (
+          <View style={styles.onboardCard}>
+            <View style={styles.onboardIcon}>
+              <Ionicons name="sparkles" size={26} color={Colors.gold} />
+            </View>
+            <Text style={styles.onboardTitle}>Set up your intelligence layer</Text>
+            <Text style={styles.onboardDesc}>
+              LifeOS activates when you add goals, courses, and projects. Add your first goal to start receiving AI-powered guidance.
+            </Text>
+            <View style={styles.onboardActions}>
+              <TouchableOpacity
+                style={styles.onboardBtn}
+                onPress={() => router.push('/(tabs)/goals' as any)}
+                activeOpacity={0.8}
+              >
+                <Ionicons name="flag-outline" size={14} color={Colors.gold} />
+                <Text style={styles.onboardBtnText}>Add First Goal</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.onboardBtn, { borderColor: Colors.border }]}
+                onPress={() => router.push('/(tabs)/coach' as any)}
+                activeOpacity={0.8}
+              >
+                <Ionicons name="chatbubbles-outline" size={14} color={Colors.textSecondary} />
+                <Text style={[styles.onboardBtnText, { color: Colors.textSecondary }]}>Ask Coach</Text>
+              </TouchableOpacity>
+            </View>
           </View>
-        </ScrollView>
-      </KeyboardAvoidingView>
+        )}
+      </ScrollView>
     </SafeAreaView>
   );
 }
 
-function ScorePill({ label, value, max }: { label: string; value: number; max: number }) {
-  return (
-    <View style={pill.wrap}>
-      <Text style={pill.value}>{value}</Text>
-      <Text style={pill.max}>/{max}</Text>
-      <Text style={pill.label}>{label}</Text>
-    </View>
-  );
-}
-const pill = StyleSheet.create({
-  wrap:  { alignItems: 'center', gap: 2 },
-  value: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.textPrimary },
-  max:   { fontSize: FontSize.xs, color: Colors.textMuted },
-  label: { fontSize: FontSize.xs, color: Colors.textSecondary, textTransform: 'uppercase', letterSpacing: 0.5 },
-});
-
 const styles = StyleSheet.create({
   safe:    { flex: 1, backgroundColor: Colors.background },
-  flex:    { flex: 1 },
   scroll:  { flex: 1 },
-  content: { padding: Spacing.lg, paddingBottom: Spacing.xxl, gap: Spacing.md },
+  content: { padding: Spacing.lg, paddingBottom: Spacing.xxl + 20, gap: Spacing.lg },
 
-  header:   { gap: 2 },
-  greeting: { fontSize: FontSize.sm, color: Colors.textSecondary, textTransform: 'uppercase', letterSpacing: 1 },
-  date:     { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.textPrimary },
+  header: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between' },
+  dateText: { fontSize: FontSize.sm, color: Colors.textSecondary, marginBottom: 2 },
+  greeting: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.textPrimary, lineHeight: 28 },
+  iconBtn: {
+    width: 40, height: 40, borderRadius: Radius.full,
+    backgroundColor: Colors.surfaceElevated, borderWidth: 1, borderColor: Colors.border,
+    alignItems: 'center', justifyContent: 'center', marginTop: 4,
+  },
 
-  skeletonWrap: { gap: Spacing.md, paddingVertical: Spacing.md },
-  ringWrap:  { alignItems: 'center', paddingVertical: Spacing.lg, gap: Spacing.lg },
-  breakdown: { flexDirection: 'row', justifyContent: 'space-around', width: '100%', paddingHorizontal: Spacing.md },
+  statsGrid: { gap: Spacing.sm },
+  statsRow:  { flexDirection: 'row', gap: Spacing.sm },
 
-  focusCard:  { gap: 0 },
-  focusRow:   { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
-  focusLabel: { fontSize: FontSize.sm, color: Colors.gold, fontWeight: FontWeight.medium, flex: 1 },
+  section:       { gap: Spacing.sm },
+  sectionHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  sectionTitle:  { fontSize: FontSize.md, fontWeight: FontWeight.bold, color: Colors.textPrimary },
+  seeAll:        { fontSize: FontSize.sm, color: Colors.gold },
 
-  distractionBtn: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-    gap: Spacing.xs, paddingVertical: Spacing.xs + 2,
+  planCard: {
+    backgroundColor: Colors.surfaceElevated, borderRadius: Radius.lg,
+    borderWidth: 1, borderColor: Colors.border,
+    paddingHorizontal: Spacing.md, paddingTop: Spacing.xs, paddingBottom: Spacing.sm,
+  },
+  emptyPlan:     { alignItems: 'center', paddingVertical: Spacing.xl, gap: Spacing.sm },
+  emptyText:     { fontSize: FontSize.sm, color: Colors.textMuted },
+  createPlanBtn: {
+    marginTop: Spacing.xs, paddingHorizontal: Spacing.lg, paddingVertical: Spacing.sm,
+    borderRadius: Radius.md, borderWidth: 1, borderColor: Colors.gold,
+  },
+  createPlanText: { fontSize: FontSize.sm, color: Colors.gold, fontWeight: FontWeight.semibold },
+
+  quickRow: { flexDirection: 'row', gap: Spacing.sm },
+  quickBtn: {
+    flex: 1, flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+    gap: 4, paddingVertical: Spacing.md,
     backgroundColor: Colors.surfaceElevated, borderRadius: Radius.md,
     borderWidth: 1, borderColor: Colors.border,
   },
-  distractionBtnText: { fontSize: FontSize.xs, color: Colors.textMuted },
+  quickText: { fontSize: FontSize.xs, color: Colors.gold, fontWeight: FontWeight.semibold },
 
-  section:        { gap: Spacing.xs },
-  sectionTitle:   { fontSize: FontSize.xs, color: Colors.textMuted, textTransform: 'uppercase', letterSpacing: 1 },
-  criticalHeader: { flexDirection: 'row', alignItems: 'center', gap: Spacing.xs, marginBottom: Spacing.xs },
-  criticalLabel:  { fontSize: FontSize.xs, color: Colors.gold, fontWeight: FontWeight.semibold, textTransform: 'uppercase', letterSpacing: 1 },
-  criticalAction: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.textPrimary, lineHeight: 28 },
-  emptyRow:       { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  emptyHint:      { fontSize: FontSize.sm, color: Colors.textMuted },
-  emptyLink:      { fontSize: FontSize.sm, color: Colors.gold },
+  riskCard:   { flexDirection: 'row', backgroundColor: Colors.surfaceElevated, borderRadius: Radius.md, borderWidth: 1, overflow: 'hidden' },
+  riskBar:    { width: 3 },
+  riskBody:   { flex: 1, padding: Spacing.md, gap: 3 },
+  riskTopRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.xs },
+  riskLabel:  { flex: 1, fontSize: FontSize.xs, fontWeight: FontWeight.bold, letterSpacing: 0.6, textTransform: 'uppercase' },
+  riskTitle:  { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.textPrimary },
+  riskReason: { fontSize: FontSize.xs, color: Colors.textMuted },
 
-  getStartedCard: { gap: Spacing.sm, alignItems: 'center', paddingVertical: Spacing.lg },
-  getStartedIcon: {
-    width: 52, height: 52, borderRadius: 26,
-    backgroundColor: Colors.goldMuted, alignItems: 'center', justifyContent: 'center',
+  onboardCard: {
+    backgroundColor: Colors.surfaceElevated, borderRadius: Radius.lg,
+    borderWidth: 1, borderColor: Colors.border,
+    padding: Spacing.lg, alignItems: 'center', gap: Spacing.sm,
   },
-  getStartedTitle: {
-    fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.textPrimary, textAlign: 'center',
-  },
-  getStartedDesc: {
-    fontSize: FontSize.sm, color: Colors.textSecondary, textAlign: 'center', lineHeight: 21,
-  },
-  getStartedActions: { flexDirection: 'row', gap: Spacing.sm, flexWrap: 'wrap', justifyContent: 'center' },
-  getStartedBtn: {
+  onboardIcon:    { width: 56, height: 56, borderRadius: Radius.full, backgroundColor: Colors.goldMuted, alignItems: 'center', justifyContent: 'center' },
+  onboardTitle:   { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.textPrimary, textAlign: 'center' },
+  onboardDesc:    { fontSize: FontSize.sm, color: Colors.textSecondary, textAlign: 'center', lineHeight: 20 },
+  onboardActions: { flexDirection: 'row', gap: Spacing.sm, flexWrap: 'wrap', justifyContent: 'center' },
+  onboardBtn: {
     flexDirection: 'row', alignItems: 'center', gap: Spacing.xs,
     paddingHorizontal: Spacing.md, paddingVertical: Spacing.sm,
-    borderRadius: Radius.md, borderWidth: 1, borderColor: Colors.gold + '55',
-    backgroundColor: Colors.surfaceElevated,
+    borderRadius: Radius.md, borderWidth: 1, borderColor: Colors.goldDim,
+    backgroundColor: Colors.surface,
   },
-  getStartedBtnText: { fontSize: FontSize.sm, color: Colors.gold, fontWeight: FontWeight.medium },
-
-  coachPrompt: {
-    flexDirection: 'row', alignItems: 'center', gap: Spacing.sm,
-    backgroundColor: Colors.surfaceElevated, borderRadius: Radius.md,
-    borderWidth: 1, borderColor: Colors.goldDim, padding: Spacing.md,
-  },
-  coachIcon: {
-    width: 28, height: 28, borderRadius: Radius.full,
-    backgroundColor: Colors.goldMuted, alignItems: 'center', justifyContent: 'center',
-  },
-  coachText: { flex: 1, fontSize: FontSize.sm, color: Colors.textSecondary },
-
-  reflectionInput:    { color: Colors.textPrimary, fontSize: FontSize.md, lineHeight: 24, minHeight: 90, textAlignVertical: 'top' },
-  reflectionBtn:      { alignSelf: 'flex-end', marginTop: Spacing.sm },
-  reflectionSavedRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.xs, marginTop: Spacing.sm },
-  reflectionSavedText:{ fontSize: FontSize.sm, color: Colors.success, flex: 1 },
-  reflectionEdit:     { fontSize: FontSize.sm, color: Colors.gold },
+  onboardBtnText: { fontSize: FontSize.sm, color: Colors.gold, fontWeight: FontWeight.medium },
 });
