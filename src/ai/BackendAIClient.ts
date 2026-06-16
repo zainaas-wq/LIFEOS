@@ -11,7 +11,7 @@
 
 import type { AIClient, AIContext } from './AIClient';
 import { detectAgentType } from './AIClient';
-import type { ChatMessage, Plan } from '../types';
+import type { AIAction, ChatMessage, Plan } from '../types';
 import { LocalAIClient } from './LocalAIClient';
 import { generateSmartDailyPlan, generateSmartWeeklyPlan, parseFixedWindow } from './planningEngine';
 import { rescheduleRemaining } from './adaptiveRescheduler';
@@ -313,7 +313,7 @@ export class BackendAIClient implements AIClient {
       // Edge Function returns { type, data } without status — add 'pending' so
       // ai.tsx can detect and execute the action via executeAIAction.
       action: responseData?.action
-        ? { ...responseData.action, status: 'pending' as const }
+        ? { ...responseData.action, type: responseData.action.type as AIAction['type'], status: 'pending' as const }
         : undefined,
     };
   }
