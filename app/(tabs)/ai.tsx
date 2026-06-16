@@ -1,4 +1,4 @@
-import React, { useState, useRef, useCallback } from 'react';
+import React, { useState, useRef, useCallback, useEffect } from 'react';
 import {
   View,
   Text,
@@ -17,6 +17,7 @@ import { useAppStore, useAIContext } from '../../src/store/useAppStore';
 import { LocalAIClient } from '../../src/ai/LocalAIClient';
 import { BackendAIClient } from '../../src/ai/BackendAIClient';
 import type { AIClient } from '../../src/ai/AIClient';
+import { executeAIAction } from '../../src/ai/actionExecutor';
 import type { ChatMessage, Plan, PlanItem } from '../../src/types';
 import { generateId, getTodayDate, formatDate } from '../../src/lib/utils';
 import { Colors, FontSize, FontWeight, Radius, Spacing } from '../../src/constants/theme';
@@ -26,6 +27,7 @@ import type { UseMonthlyUsageResult } from '../../src/services/usageService';
 import { track } from '../../src/services/analyticsService';
 import type { AnalyticsEventName } from '../../src/services/analyticsService';
 import { UpgradeModal } from '../../src/components/upgrade/UpgradeModal';
+import { BetaFeedbackModal } from '../../src/components/BetaFeedbackModal';
 
 // ─── Quick-action prompts (AI inputs — not UI text, stay as English) ──────────
 
@@ -230,10 +232,81 @@ const planStyles = StyleSheet.create({
   },
 });
 
+// ─── Action confirmation chip ─────────────────────────────────────────────────
+
+const ACTION_ICON: Record<string, string> = {
+  create_memory:       'bookmark-outline',
+  update_goal:         'flag-outline',
+  complete_task:       'checkmark-circle-outline',
+  create_reminder:     'alarm-outline',
+  create_focus_session:'timer-outline',
+};
+
+const ACTION_LABEL: Record<string, string> = {
+  create_memory:       'Memory saved',
+  update_goal:         'Goal updated',
+  complete_task:       'Task completed',
+  create_reminder:     'Reminder set',
+  create_focus_session:'Session logged',
+};
+
+function ActionChip({ type, status, message }: { type: string; status: string; message?: string }) {
+  const icon  = ACTION_ICON[type] ?? 'flash-outline';
+  const label = status === 'executed'
+    ? (message ?? ACTION_LABEL[type] ?? 'Done')
+    : status === 'failed'
+      ? (message ?? 'Action failed')
+      : 'Processing…';
+  const color = status === 'executed' ? '#4ADE80' : status === 'failed' ? '#F87171' : Colors.gold;
+
+  return (
+    <View style={[actionStyles.chip, { borderColor: color + '55' }]}>
+      <Ionicons name={icon as any} size={11} color={color} />
+      <Text style={[actionStyles.label, { color }]}>{label}</Text>
+    </View>
+  );
+}
+
+const actionStyles = StyleSheet.create({
+  chip: {
+    flexDirection: 'row', alignItems: 'center', gap: 5,
+    marginTop: Spacing.xs, alignSelf: 'flex-start',
+    paddingHorizontal: Spacing.sm, paddingVertical: 3,
+    borderRadius: Radius.full, borderWidth: 1,
+    backgroundColor: Colors.surfaceHigh,
+  },
+  label: { fontSize: FontSize.xs, letterSpacing: 0.2 },
+});
+
 // ─── Chat bubble ──────────────────────────────────────────────────────────────
 
 function ChatBubble({ msg }: { msg: ChatMessage }) {
   const isUser = msg.role === 'user';
+  const isWelcome = msg.id === 'welcome';
+
+  const trackRecommendationShown    = useAppStore((s) => s.trackRecommendationShown);
+  const trackRecommendationAccepted = useAppStore((s) => s.trackRecommendationAccepted);
+  const [vote, setVote] = useState<'up' | 'down' | null>(null);
+
+  useEffect(() => {
+    if (!isUser && !isWelcome) {
+      trackRecommendationShown();
+      track('recommendation_shown');
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const handleVote = (v: 'up' | 'down') => {
+    if (vote !== null) return;
+    setVote(v);
+    if (v === 'up') {
+      trackRecommendationAccepted();
+      track('recommendation_accepted');
+    } else {
+      track('recommendation_dismissed');
+    }
+  };
+
   return (
     <View style={[bubbleStyles.row, isUser && bubbleStyles.rowUser]}>
       {!isUser && (
@@ -246,6 +319,46 @@ function ChatBubble({ msg }: { msg: ChatMessage }) {
           {msg.content}
         </Text>
         {msg.plan && <InlinePlan plan={msg.plan} />}
+        {msg.action && (
+          <ActionChip
+            type={msg.action.type}
+            status={msg.action.status}
+            message={msg.action.message}
+          />
+        )}
+        {!isUser && !isWelcome && (
+          <View style={bubbleStyles.voteRow}>
+            <TouchableOpacity
+              onPress={() => handleVote('up')}
+              style={[bubbleStyles.voteBtn, vote === 'up' && bubbleStyles.voteBtnUp]}
+              disabled={vote !== null}
+              hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+            >
+              <Ionicons
+                name={vote === 'up' ? 'thumbs-up' : 'thumbs-up-outline'}
+                size={12}
+                color={vote === 'up' ? '#4ADE80' : Colors.textMuted}
+              />
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={() => handleVote('down')}
+              style={[bubbleStyles.voteBtn, vote === 'down' && bubbleStyles.voteBtnDown]}
+              disabled={vote !== null}
+              hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+            >
+              <Ionicons
+                name={vote === 'down' ? 'thumbs-down' : 'thumbs-down-outline'}
+                size={12}
+                color={vote === 'down' ? '#F87171' : Colors.textMuted}
+              />
+            </TouchableOpacity>
+            {vote && (
+              <Text style={bubbleStyles.voteThanks}>
+                {vote === 'up' ? 'Helpful' : 'Not helpful'}
+              </Text>
+            )}
+          </View>
+        )}
       </View>
     </View>
   );
@@ -264,6 +377,150 @@ const bubbleStyles = StyleSheet.create({
   bubbleUser: { backgroundColor: Colors.goldMuted, borderWidth: 1, borderColor: Colors.goldDim, borderBottomEndRadius: 4 },
   text:     { fontSize: FontSize.sm, color: Colors.textPrimary, lineHeight: 20 },
   textUser: { color: Colors.gold },
+
+  voteRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.xs,
+    marginTop: Spacing.xs + 2,
+    paddingTop: Spacing.xs,
+    borderTopWidth: 1,
+    borderTopColor: Colors.border,
+  },
+  voteBtn: {
+    padding: 4,
+    borderRadius: Radius.sm,
+    borderWidth: 1,
+    borderColor: 'transparent',
+  },
+  voteBtnUp:    { borderColor: '#4ADE8044' },
+  voteBtnDown:  { borderColor: '#F8717144' },
+  voteThanks: {
+    fontSize: FontSize.xs,
+    color: Colors.textMuted,
+    marginLeft: Spacing.xs,
+    fontStyle: 'italic',
+  },
+});
+
+// ─── AI Context Summary (shown in empty chat so users see what AI knows) ──────
+
+function AIContextSummary() {
+  const [open, setOpen]    = useState(false);
+  const goals              = useAppStore((s) => s.goals);
+  const localMemories      = useAppStore((s) => s.localMemories);
+  const courses            = useAppStore((s) => s.courses);
+  const academicRisks      = useAppStore((s) => s.academicRisks);
+  const projects           = useAppStore((s) => s.projects);
+  const projectIntelligence = useAppStore((s) => s.projectIntelligence);
+  const goalIntelligence   = useAppStore((s) => s.goalIntelligence);
+
+  const criticalAcademic   = academicRisks.filter((r) => r.riskLevel === 'critical').length;
+  const atRiskGoals        = Object.values(goalIntelligence).filter((g) => g.riskLevel === 'critical' || g.riskLevel === 'at-risk').length;
+  const unhealthyProjects  = Object.values(projectIntelligence).filter((p) => p.healthScore < 60).length;
+
+  const items: Array<{ icon: keyof typeof Ionicons.glyphMap; color: string; label: string; value: string }> = [
+    {
+      icon: 'library-outline', color: '#818CF8',
+      label: 'Memories loaded', value: `${Math.min(localMemories.length, 30)} of ${localMemories.length}`,
+    },
+    {
+      icon: 'flag-outline', color: Colors.gold,
+      label: 'Goals tracked',
+      value: atRiskGoals > 0 ? `${goals.length} (${atRiskGoals} at risk)` : String(goals.length),
+    },
+    ...(courses.length > 0 ? [{
+      icon: 'school-outline' as keyof typeof Ionicons.glyphMap, color: '#6C8EBF',
+      label: 'Academic context',
+      value: criticalAcademic > 0 ? `${courses.length} courses · ${criticalAcademic} critical` : `${courses.length} courses`,
+    }] : []),
+    ...(projects.length > 0 ? [{
+      icon: 'git-branch-outline' as keyof typeof Ionicons.glyphMap, color: '#34D399',
+      label: 'Projects tracked',
+      value: unhealthyProjects > 0 ? `${projects.length} (${unhealthyProjects} at risk)` : String(projects.length),
+    }] : []),
+  ];
+
+  return (
+    <View style={ctx.card}>
+      <TouchableOpacity
+        style={ctx.header}
+        onPress={() => setOpen((v) => !v)}
+        activeOpacity={0.75}
+      >
+        <Ionicons name="sparkles" size={13} color={Colors.gold} />
+        <Text style={ctx.headerText}>What your AI Coach knows right now</Text>
+        <Ionicons name={open ? 'chevron-up' : 'chevron-down'} size={12} color={Colors.textMuted} />
+      </TouchableOpacity>
+      {open && (
+        <View style={ctx.body}>
+          {items.map((item, i) => (
+            <View key={i} style={ctx.item}>
+              <Ionicons name={item.icon} size={13} color={item.color} />
+              <Text style={ctx.itemLabel}>{item.label}</Text>
+              <Text style={[ctx.itemValue, { color: item.color }]}>{item.value}</Text>
+            </View>
+          ))}
+          <Text style={ctx.hint}>
+            The AI uses this context to personalise every response — no generic advice.
+          </Text>
+        </View>
+      )}
+    </View>
+  );
+}
+
+const ctx = StyleSheet.create({
+  card: {
+    marginHorizontal: Spacing.lg,
+    marginTop: Spacing.sm,
+    backgroundColor: Colors.surfaceElevated,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Colors.gold + '33',
+    overflow: 'hidden',
+  },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.xs,
+    padding: Spacing.md,
+  },
+  headerText: {
+    flex: 1,
+    fontSize: FontSize.xs,
+    color: Colors.textSecondary,
+    fontWeight: FontWeight.medium,
+  },
+  body: {
+    borderTopWidth: 1,
+    borderTopColor: Colors.border,
+    padding: Spacing.md,
+    gap: Spacing.sm,
+  },
+  item: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
+  },
+  itemLabel: {
+    flex: 1,
+    fontSize: FontSize.sm,
+    color: Colors.textSecondary,
+  },
+  itemValue: {
+    fontSize: FontSize.sm,
+    fontWeight: FontWeight.medium,
+  },
+  hint: {
+    fontSize: FontSize.xs,
+    color: Colors.textMuted,
+    lineHeight: 17,
+    paddingTop: Spacing.xs,
+    borderTopWidth: 1,
+    borderTopColor: Colors.border,
+    marginTop: Spacing.xs,
+  },
 });
 
 // ─── Main screen ──────────────────────────────────────────────────────────────
@@ -288,14 +545,27 @@ export default function AIScreen() {
   const isGuestMode    = useAppStore((s) => s.isGuestMode);
   const goals          = useAppStore((s) => s.goals);
   const aiContext      = useAIContext();
+  const pendingCoachMessage    = useAppStore((s) => s.pendingCoachMessage);
+  const setPendingCoachMessage = useAppStore((s) => s.setPendingCoachMessage);
 
   const entitlements = useEntitlements();
   const { refresh: refreshUsage } = entitlements;
 
+  const betaFeedbackSubmitted = useAppStore((s) => s.betaStats.feedbackSubmitted);
+
   const [input, setInput]   = useState('');
   const [loading, setLoading] = useState(false);
   const [upgradeFeatName, setUpgradeFeatName] = useState<string | null>(null);
+  const [showFeedback, setShowFeedback] = useState(false);
   const scrollRef = useRef<ScrollView>(null);
+
+  // Trigger feedback modal once after the first real AI response
+  useEffect(() => {
+    if (!betaFeedbackSubmitted && chatHistory.some((m) => m.role === 'assistant')) {
+      const timer = setTimeout(() => setShowFeedback(true), 1800);
+      return () => clearTimeout(timer);
+    }
+  }, [chatHistory, betaFeedbackSubmitted]);
 
   // Welcome message uses t() — built inside component so translation is available
   const welcomeMsg: ChatMessage = {
@@ -316,6 +586,14 @@ export default function AIScreen() {
     { label: t('coach.quick_actions.improve_progress'),   prompt: QUICK_ACTION_PROMPTS[5], feature: 'ai_chat',           analyticsEvent: 'ai_chat_used'        },
     { label: t('coach.quick_actions.monthly_review'),     prompt: QUICK_ACTION_PROMPTS[6], feature: 'ai_monthly_review', analyticsEvent: 'ai_chat_used'        },
   ];
+
+  // Auto-fire pending message from Study screen (or any other screen)
+  useEffect(() => {
+    if (pendingCoachMessage) {
+      setPendingCoachMessage(null);
+      send(pendingCoachMessage);
+    }
+  }, []); // intentionally fires once on mount
 
   // Always show welcome + persisted history
   const messages: ChatMessage[] = [welcomeMsg, ...chatHistory];
@@ -346,7 +624,22 @@ export default function AIScreen() {
 
       try {
         const client = getClient();
-        const reply = await client.chat(trimmed, chatHistory, aiContext);
+        const rawReply = await client.chat(trimmed, chatHistory, aiContext);
+
+        // Sprint 4: auto-execute any action embedded in the response
+        let reply = rawReply;
+        if (rawReply.action && rawReply.action.status === 'pending') {
+          const result = executeAIAction(rawReply.action);
+          reply = {
+            ...rawReply,
+            action: {
+              ...rawReply.action,
+              status:  result.success ? 'executed' : 'failed',
+              message: result.message,
+            },
+          };
+        }
+
         addChatMessage(reply);
         if (reply.plan) setCurrentPlan(reply.plan);
       } catch (err: any) {
@@ -398,6 +691,8 @@ export default function AIScreen() {
         />
 
         {/* ── Messages ───────────────────────────────────────────────────── */}
+        {chatHistory.length === 0 && <AIContextSummary />}
+
         <ScrollView
           ref={scrollRef}
           style={styles.messages}
@@ -481,6 +776,11 @@ export default function AIScreen() {
         visible={upgradeFeatName !== null}
         featureName={upgradeFeatName ?? undefined}
         onDismiss={() => setUpgradeFeatName(null)}
+      />
+
+      <BetaFeedbackModal
+        visible={showFeedback}
+        onClose={() => setShowFeedback(false)}
       />
     </SafeAreaView>
   );

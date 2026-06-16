@@ -23,12 +23,52 @@ import { useAppStore } from '../store/useAppStore';
 // ─── Event name registry ──────────────────────────────────────────────────────
 
 export type AnalyticsEventName =
+  // ── Core lifecycle ─────────────────────────────────────────────────────────
   | 'app_opened'
   | 'onboarding_completed'
+  | 'screen_viewed'
+  // ── AI ────────────────────────────────────────────────────────────────────
   | 'ai_chat_used'
+  | 'ai_action_executed'
+  | 'ai_action_failed'
+  // ── Memory ────────────────────────────────────────────────────────────────
+  | 'memory_created'
+  | 'memory_deleted'
+  | 'memory_searched'
+  // ── Goals ─────────────────────────────────────────────────────────────────
+  | 'goal_created'
+  | 'goal_completed'
+  | 'recommendation_accepted'
+  // ── Focus ─────────────────────────────────────────────────────────────────
+  | 'focus_session_started'
+  | 'focus_session_completed'
+  // ── Projects ──────────────────────────────────────────────────────────────
+  | 'project_created'
+  | 'milestone_completed'
+  // ── Study ─────────────────────────────────────────────────────────────────
+  | 'course_created'
+  | 'exam_added'
+  | 'assignment_completed'
+  // ── Beta Launch ───────────────────────────────────────────────────────────
+  | 'welcome_flow_seen'
+  | 'welcome_flow_completed'
+  | 'demo_data_loaded'
+  | 'walkthrough_started'
+  | 'walkthrough_completed'
+  | 'walkthrough_skipped'
+  // ── Phase E — Closed Beta ──────────────────────────────────────────────────
+  | 'recommendation_shown'
+  | 'recommendation_dismissed'
+  | 'beta_feedback_submitted'
+  | 'day_1_active'
+  | 'day_3_active'
+  | 'day_7_active'
+  | 'day_14_active'
+  // ── Retention ─────────────────────────────────────────────────────────────
   | 'build_day_used'
   | 'recover_day_used'
   | 'weekly_review_used'
+  // ── Monetisation ──────────────────────────────────────────────────────────
   | 'upgrade_cta_opened'
   | 'paywall_viewed'
   | 'purchase_started'

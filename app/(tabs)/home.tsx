@@ -1,4 +1,4 @@
-import React, { useMemo, useState, useEffect } from 'react';
+import React, { useMemo, useState, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
@@ -17,30 +17,251 @@ import { useAppStore } from '../../src/store/useAppStore';
 import { AlignmentRing } from '../../src/components/AlignmentRing';
 import { Card } from '../../src/components/ui/Card';
 import { Button } from '../../src/components/ui/Button';
+import { WelcomeFlow } from '../../src/components/WelcomeFlow';
+import { SkeletonSection } from '../../src/components/SkeletonLoader';
 import { computeProgressScore } from '../../src/ai/progressEngine';
-import { getTodayDate, formatDate, getLocalDateStr } from '../../src/lib/utils';
+import { getTodayDate, formatDate, getLocalDateStr, generateId } from '../../src/lib/utils';
 import { Colors, FontSize, FontWeight, Spacing, Radius } from '../../src/constants/theme';
+import type { NudgeItem, NudgeUrgency, GoalRiskLevel } from '../../src/types';
+import { getMostAtRiskGoal } from '../../src/ai/goalIntelligence';
+
+// ─── Smart Insight Banner ─────────────────────────────────────────────────────
+
+const URGENCY_COLOR: Record<NudgeUrgency, string> = {
+  low:      Colors.gold,
+  medium:   Colors.gold,
+  high:     '#FB923C',
+  critical: '#F87171',
+};
+
+function SmartInsightBanner({
+  nudge,
+  onStartFocus,
+  onDismiss,
+}: {
+  nudge: NudgeItem;
+  onStartFocus: (itemId: string, title: string) => void;
+  onDismiss: () => void;
+}) {
+  const urgency = nudge.urgency ?? 'medium';
+  const accent  = nudge.isRecovery ? Colors.error : URGENCY_COLOR[urgency];
+  const isRecovery = nudge.isRecovery ?? false;
+
+  return (
+    <View style={[insightStyles.card, { borderColor: accent + '55' }]}>
+      {/* Left accent bar */}
+      <View style={[insightStyles.bar, { backgroundColor: accent }]} />
+
+      <View style={insightStyles.body}>
+        {/* Header */}
+        <View style={insightStyles.headerRow}>
+          <View style={[insightStyles.badge, { backgroundColor: accent + '22', borderColor: accent + '44' }]}>
+            <Ionicons
+              name={isRecovery ? 'refresh-circle-outline' : urgency === 'critical' ? 'flash' : 'sparkles'}
+              size={11}
+              color={accent}
+            />
+            <Text style={[insightStyles.badgeText, { color: accent }]}>
+              {isRecovery ? 'RECOVERY' : urgency === 'critical' ? 'CRITICAL' : 'BEST ACTION'}
+            </Text>
+          </View>
+          <TouchableOpacity onPress={onDismiss} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+            <Ionicons name="close" size={14} color={Colors.textMuted} />
+          </TouchableOpacity>
+        </View>
+
+        {/* Context reason */}
+        {!!nudge.contextReason && (
+          <Text style={insightStyles.context}>{nudge.contextReason}</Text>
+        )}
+
+        {/* Action row */}
+        <View style={insightStyles.actionRow}>
+          <Text style={insightStyles.actionTitle} numberOfLines={1}>{nudge.itemTitle}</Text>
+          <TouchableOpacity
+            style={[insightStyles.startBtn, { backgroundColor: accent }]}
+            onPress={() => onStartFocus(nudge.itemId, nudge.itemTitle)}
+            activeOpacity={0.85}
+          >
+            <Ionicons name="flash" size={13} color={Colors.textInverse} />
+            <Text style={insightStyles.startBtnText}>Start</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    </View>
+  );
+}
+
+const insightStyles = StyleSheet.create({
+  card: {
+    flexDirection: 'row',
+    backgroundColor: Colors.surfaceElevated,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    overflow: 'hidden',
+  },
+  bar:  { width: 4 },
+  body: { flex: 1, padding: Spacing.md, gap: Spacing.sm },
+
+  headerRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  badge: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    paddingHorizontal: Spacing.sm, paddingVertical: 2,
+    borderRadius: Radius.full, borderWidth: 1,
+  },
+  badgeText: { fontSize: FontSize.xs - 1, fontWeight: FontWeight.bold, letterSpacing: 0.8 },
+
+  context:     { fontSize: FontSize.sm, color: Colors.textSecondary, lineHeight: 20 },
+
+  actionRow:   { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
+  actionTitle: { flex: 1, fontSize: FontSize.md, fontWeight: FontWeight.bold, color: Colors.textPrimary },
+  startBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    paddingHorizontal: Spacing.md, paddingVertical: Spacing.sm,
+    borderRadius: Radius.md,
+  },
+  startBtnText: { fontSize: FontSize.sm, fontWeight: FontWeight.bold, color: Colors.textInverse },
+});
+
+// ─── At-Risk Goal Banner ──────────────────────────────────────────────────────
+
+const RISK_COLOR: Record<GoalRiskLevel, string> = {
+  'on-track': '#4ADE80',
+  'at-risk':  '#FB923C',
+  'critical': '#F87171',
+  'stalled':  '#6B7280',
+};
+
+function AtRiskGoalBanner({
+  goalTitle,
+  riskLevel,
+  riskReason,
+  probability,
+  onPress,
+}: {
+  goalTitle:   string;
+  riskLevel:   GoalRiskLevel;
+  riskReason:  string;
+  probability: number;
+  onPress:     () => void;
+}) {
+  const accent = RISK_COLOR[riskLevel];
+  const label  = riskLevel === 'critical' ? 'CRITICAL GOAL' :
+                 riskLevel === 'stalled'  ? 'STALLED GOAL'  : 'GOAL AT RISK';
+
+  return (
+    <TouchableOpacity
+      style={[riskStyles.card, { borderColor: accent + '55' }]}
+      onPress={onPress}
+      activeOpacity={0.8}
+    >
+      <View style={[riskStyles.bar, { backgroundColor: accent }]} />
+      <View style={riskStyles.body}>
+        <View style={riskStyles.row}>
+          <Ionicons
+            name={riskLevel === 'critical' ? 'flash' : riskLevel === 'stalled' ? 'pause-circle-outline' : 'warning-outline'}
+            size={13}
+            color={accent}
+          />
+          <Text style={[riskStyles.label, { color: accent }]}>{label}</Text>
+          <View style={[riskStyles.probChip, { backgroundColor: accent + '22' }]}>
+            <Text style={[riskStyles.probText, { color: accent }]}>{probability}%</Text>
+          </View>
+          <Ionicons name="chevron-forward" size={13} color={Colors.textMuted} />
+        </View>
+        <Text style={riskStyles.title} numberOfLines={1}>{goalTitle}</Text>
+        <Text style={riskStyles.reason} numberOfLines={1}>{riskReason}</Text>
+      </View>
+    </TouchableOpacity>
+  );
+}
+
+const riskStyles = StyleSheet.create({
+  card: {
+    flexDirection: 'row',
+    backgroundColor: Colors.surfaceElevated,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    overflow: 'hidden',
+  },
+  bar:  { width: 3 },
+  body: { flex: 1, padding: Spacing.md, gap: 3 },
+  row:  { flexDirection: 'row', alignItems: 'center', gap: Spacing.xs },
+  label: { flex: 1, fontSize: FontSize.xs, fontWeight: FontWeight.bold, letterSpacing: 0.6, textTransform: 'uppercase' },
+  probChip: { paddingHorizontal: 6, paddingVertical: 1, borderRadius: Radius.full },
+  probText: { fontSize: FontSize.xs, fontWeight: FontWeight.bold },
+  title:  { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.textPrimary },
+  reason: { fontSize: FontSize.xs, color: Colors.textMuted },
+});
+
+// ─── Home Screen ──────────────────────────────────────────────────────────────
 
 export default function HomeScreen() {
   const { t } = useTranslation();
 
-  const profile       = useAppStore((s) => s.profile);
-  const rules         = useAppStore((s) => s.rules);
-  const activeFocus   = useAppStore((s) => s.activeFocus);
-  const focusSessions = useAppStore((s) => s.focusSessions);
-  const controlPlan   = useAppStore((s) => s.controlPlan);
-  const saveReflection = useAppStore((s) => s.saveReflection);
-  const loadSeedData  = useAppStore((s) => s.loadSeedData);
-  const seedLoaded    = useAppStore((s) => s.seedLoaded);
-  const logDistraction = useAppStore((s) => s.logDistraction);
-  const distractionLogs = useAppStore((s) => s.distractionLogs);
-  const todayReflection = useAppStore((s) =>
+  const profile            = useAppStore((s) => s.profile);
+  const hasSeenWelcome     = useAppStore((s) => s.hasSeenWelcome);
+  const isHydrating        = useAppStore((s) => s.isHydrating);
+  const session            = useAppStore((s) => s.session);
+  const rules              = useAppStore((s) => s.rules);
+  const activeFocus        = useAppStore((s) => s.activeFocus);
+  const focusSessions      = useAppStore((s) => s.focusSessions);
+  const controlPlan        = useAppStore((s) => s.controlPlan);
+  const saveReflection     = useAppStore((s) => s.saveReflection);
+  const loadSeedData       = useAppStore((s) => s.loadSeedData);
+  const seedLoaded         = useAppStore((s) => s.seedLoaded);
+  const logDistraction     = useAppStore((s) => s.logDistraction);
+  const distractionLogs    = useAppStore((s) => s.distractionLogs);
+  const startFocus              = useAppStore((s) => s.startFocus);
+  const computeSmartNudge       = useAppStore((s) => s.computeSmartNudge);
+  const goals                   = useAppStore((s) => s.goals);
+  const goalIntelligence        = useAppStore((s) => s.goalIntelligence);
+  const computeGoalIntelligence = useAppStore((s) => s.computeGoalIntelligence);
+  const todayReflection    = useAppStore((s) =>
     s.reflections?.find((r) => r.date === getTodayDate()) ?? null
   );
+
+  const [smartNudge, setSmartNudge] = useState<NudgeItem | null>(null);
 
   useEffect(() => {
     if (__DEV__ && !seedLoaded && !profile) loadSeedData();
   }, []);
+
+  // Compute smart nudge on mount and every 5 minutes
+  useEffect(() => {
+    const compute = () => {
+      const nudge = computeSmartNudge();
+      setSmartNudge(nudge);
+    };
+    compute();
+    const interval = setInterval(compute, 5 * 60 * 1000);
+    return () => clearInterval(interval);
+  }, [controlPlan, goals]);
+
+  // Compute goal intelligence on mount and when goals/plan change
+  useEffect(() => {
+    if (goals.length > 0) computeGoalIntelligence();
+  }, [goals, controlPlan]);
+
+  const handleStartFocusFromNudge = useCallback((itemId: string, title: string) => {
+    const linkedGoal = goals.find((g) =>
+      controlPlan?.plan.items.find((i) => i.id === itemId)?.goalId === g.id,
+    );
+    startFocus({
+      id:              generateId(),
+      goalId:          linkedGoal?.id,
+      goalTitle:       title,
+      durationMinutes: 50,
+      startedAt:       new Date().toISOString(),
+    });
+    setSmartNudge(null);
+    router.push('/(tabs)/focus' as any);
+  }, [goals, controlPlan, startFocus]);
+
+  const atRiskGoal = useMemo(
+    () => getMostAtRiskGoal(goals, goalIntelligence),
+    [goals, goalIntelligence],
+  );
 
   const today = getTodayDate();
 
@@ -88,8 +309,13 @@ export default function HomeScreen() {
   const greetingName = profile?.name ? `, ${profile.name}` : '';
   const greetingText = `${t(greetingKey)}${greetingName}`;
 
+  const showWelcome = !!profile?.onboardingComplete && !hasSeenWelcome;
+
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
+      {/* Welcome flow shows once after onboarding — before anything else */}
+      <WelcomeFlow visible={showWelcome} />
+
       <KeyboardAvoidingView
         style={styles.flex}
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
@@ -106,8 +332,15 @@ export default function HomeScreen() {
             <Text style={styles.date}>{formatDate(today)}</Text>
           </View>
 
+          {/* ── Hydration loading skeleton ─────────────────────────────────── */}
+          {isHydrating && !!session && (
+            <View style={styles.skeletonWrap}>
+              <SkeletonSection cards={3} />
+            </View>
+          )}
+
           {/* ── Alignment Ring ─────────────────────────────────────────────── */}
-          <View style={styles.ringWrap}>
+          <View style={[styles.ringWrap, isHydrating && !!session && { opacity: 0, height: 0 }]}>
             <AlignmentRing result={alignmentResult} size={180} />
             <View style={styles.breakdown}>
               <ScorePill label={t('home.score_tasks')}    value={alignmentResult.taskScore}       max={40} />
@@ -144,6 +377,57 @@ export default function HomeScreen() {
                 : t('home.distraction_prompt')}
             </Text>
           </TouchableOpacity>
+
+          {/* ── Smart Insight Banner ───────────────────────────────────────── */}
+          {smartNudge && (
+            <SmartInsightBanner
+              nudge={smartNudge}
+              onStartFocus={handleStartFocusFromNudge}
+              onDismiss={() => setSmartNudge(null)}
+            />
+          )}
+
+          {/* ── At-Risk Goal Warning ────────────────────────────────────────── */}
+          {atRiskGoal && (
+            <AtRiskGoalBanner
+              goalTitle={atRiskGoal.goal.title}
+              riskLevel={atRiskGoal.intel.riskLevel}
+              riskReason={atRiskGoal.intel.riskReason}
+              probability={atRiskGoal.intel.probability}
+              onPress={() => router.push('/(tabs)/goals' as any)}
+            />
+          )}
+
+          {/* ── First-run getting started card ─────────────────────────────── */}
+          {goals.length === 0 && !isHydrating && !seedLoaded && (
+            <Card style={styles.getStartedCard}>
+              <View style={styles.getStartedIcon}>
+                <Ionicons name="sparkles" size={24} color={Colors.gold} />
+              </View>
+              <Text style={styles.getStartedTitle}>Set up your intelligence layer</Text>
+              <Text style={styles.getStartedDesc}>
+                LifeOS activates when you add goals, courses, and projects. Add your first goal to start receiving AI-powered guidance and risk detection.
+              </Text>
+              <View style={styles.getStartedActions}>
+                <TouchableOpacity
+                  style={styles.getStartedBtn}
+                  onPress={() => router.push('/(tabs)/goals' as any)}
+                  activeOpacity={0.8}
+                >
+                  <Ionicons name="flag-outline" size={14} color={Colors.gold} />
+                  <Text style={styles.getStartedBtnText}>Add First Goal</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.getStartedBtn, { borderColor: Colors.border }]}
+                  onPress={() => router.push('/(tabs)/ai' as any)}
+                  activeOpacity={0.8}
+                >
+                  <Ionicons name="chatbubbles-outline" size={14} color={Colors.textSecondary} />
+                  <Text style={[styles.getStartedBtnText, { color: Colors.textSecondary }]}>Ask AI Coach</Text>
+                </TouchableOpacity>
+              </View>
+            </Card>
+          )}
 
           {/* ── Critical Action / Today's Focus ────────────────────────────── */}
           {(() => {
@@ -250,6 +534,7 @@ const styles = StyleSheet.create({
   greeting: { fontSize: FontSize.sm, color: Colors.textSecondary, textTransform: 'uppercase', letterSpacing: 1 },
   date:     { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.textPrimary },
 
+  skeletonWrap: { gap: Spacing.md, paddingVertical: Spacing.md },
   ringWrap:  { alignItems: 'center', paddingVertical: Spacing.lg, gap: Spacing.lg },
   breakdown: { flexDirection: 'row', justifyContent: 'space-around', width: '100%', paddingHorizontal: Spacing.md },
 
@@ -273,6 +558,26 @@ const styles = StyleSheet.create({
   emptyRow:       { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   emptyHint:      { fontSize: FontSize.sm, color: Colors.textMuted },
   emptyLink:      { fontSize: FontSize.sm, color: Colors.gold },
+
+  getStartedCard: { gap: Spacing.sm, alignItems: 'center', paddingVertical: Spacing.lg },
+  getStartedIcon: {
+    width: 52, height: 52, borderRadius: 26,
+    backgroundColor: Colors.goldMuted, alignItems: 'center', justifyContent: 'center',
+  },
+  getStartedTitle: {
+    fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.textPrimary, textAlign: 'center',
+  },
+  getStartedDesc: {
+    fontSize: FontSize.sm, color: Colors.textSecondary, textAlign: 'center', lineHeight: 21,
+  },
+  getStartedActions: { flexDirection: 'row', gap: Spacing.sm, flexWrap: 'wrap', justifyContent: 'center' },
+  getStartedBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: Spacing.xs,
+    paddingHorizontal: Spacing.md, paddingVertical: Spacing.sm,
+    borderRadius: Radius.md, borderWidth: 1, borderColor: Colors.gold + '55',
+    backgroundColor: Colors.surfaceElevated,
+  },
+  getStartedBtnText: { fontSize: FontSize.sm, color: Colors.gold, fontWeight: FontWeight.medium },
 
   coachPrompt: {
     flexDirection: 'row', alignItems: 'center', gap: Spacing.sm,

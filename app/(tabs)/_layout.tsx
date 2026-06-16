@@ -32,7 +32,7 @@ export default function TabsLayout() {
           tabBarHideOnKeyboard: true,
         }}
       >
-        {/* ── 5 visible tabs ──────────────────────────────────────────────── */}
+        {/* ── 5 visible tabs — HOME | MEMORY | FOCUS | COACH | MORE ───────── */}
 
         <Tabs.Screen
           name="home"
@@ -43,24 +43,17 @@ export default function TabsLayout() {
             ),
           }}
         />
+
         <Tabs.Screen
-          name="plan"
+          name="memory"
           options={{
-            title: 'Plan',
+            title: 'Memory',
             tabBarIcon: ({ focused }) => (
-              <TabIcon name={focused ? 'calendar' : 'calendar-outline'} focused={focused} />
+              <TabIcon name={focused ? 'library' : 'library-outline'} focused={focused} />
             ),
           }}
         />
-        <Tabs.Screen
-          name="coach"
-          options={{
-            title: 'Coach',
-            tabBarIcon: ({ focused }) => (
-              <TabIcon name={focused ? 'sparkles' : 'sparkles-outline'} focused={focused} />
-            ),
-          }}
-        />
+
         <Tabs.Screen
           name="focus"
           options={{
@@ -70,27 +63,41 @@ export default function TabsLayout() {
             ),
           }}
         />
+
         <Tabs.Screen
-          name="profile"
+          name="coach"
           options={{
-            title: 'Profile',
+            title: 'Coach',
             tabBarIcon: ({ focused }) => (
-              <TabIcon name={focused ? 'person' : 'person-outline'} focused={focused} />
+              <TabIcon name={focused ? 'sparkles' : 'sparkles-outline'} focused={focused} />
             ),
           }}
         />
 
-        {/* ── Legacy tabs — hidden from tab bar, routes remain valid ────────
-            These screens are still accessible programmatically via router.push.
-            They will be deprecated gradually as their content migrates into
-            the new tab shells above. Do not delete them yet.            ── */}
+        <Tabs.Screen
+          name="more"
+          options={{
+            title: 'More',
+            tabBarIcon: ({ focused }) => (
+              <TabIcon name={focused ? 'grid' : 'grid-outline'} focused={focused} />
+            ),
+          }}
+        />
 
+        {/* ── Routes kept valid but hidden from tab bar ────────────────────
+            Accessible via router.push() from the More screen and Coach.   */}
+
+        <Tabs.Screen name="plan"     options={{ href: null }} />
         <Tabs.Screen name="planner"  options={{ href: null }} />
         <Tabs.Screen name="ai"       options={{ href: null }} />
         <Tabs.Screen name="settings" options={{ href: null }} />
         <Tabs.Screen name="goals"    options={{ href: null }} />
         <Tabs.Screen name="rules"    options={{ href: null }} />
         <Tabs.Screen name="schedule" options={{ href: null }} />
+        <Tabs.Screen name="profile"  options={{ href: null }} />
+        <Tabs.Screen name="study"     options={{ href: null }} />
+        <Tabs.Screen name="projects"  options={{ href: null }} />
+        <Tabs.Screen name="analytics" options={{ href: null }} />
       </Tabs>
     </View>
   );
@@ -106,7 +113,7 @@ const styles = StyleSheet.create({
     paddingBottom: 6,
     paddingTop: 4,
   },
-  tabLabel: { fontSize: FontSize.xs - 1, letterSpacing: 0.2 },
-  iconWrap: { alignItems: 'center', justifyContent: 'center', paddingTop: 2 },
+  tabLabel:      { fontSize: FontSize.xs - 1, letterSpacing: 0.2 },
+  iconWrap:      { alignItems: 'center', justifyContent: 'center', paddingTop: 2 },
   iconWrapActive: {},
 });

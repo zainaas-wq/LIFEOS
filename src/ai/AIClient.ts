@@ -1,19 +1,59 @@
-import type { ChatMessage, Goal, SkillPlan, Rule, ScheduleEvent, Plan, FocusSession } from '../types';
+import type {
+  ChatMessage, Goal, SkillPlan, Rule, ScheduleEvent, Plan, FocusSession,
+  MemoryEntry, AgentType, DailyReflection, GoalIntelligence,
+  Course, Assignment, Exam, Topic, Project, Milestone,
+} from '../types';
 
 // ─── Context passed to every AI call ─────────────────────────────────────────
 
 export interface AIContext {
-  goals: Goal[];
-  skillPlans: SkillPlan[];
-  rules: Rule[];
-  scheduleEvents: ScheduleEvent[];
-  mainFocus?: string;
+  goals:               Goal[];
+  skillPlans:          SkillPlan[];
+  rules:               Rule[];
+  scheduleEvents:      ScheduleEvent[];
+  mainFocus?:          string;
   biggestDistraction?: string;
-  fixedScheduleStart?: string; // HH:MM — planning window start
-  fixedScheduleEnd?: string;   // HH:MM — planning window end
-  focusSessions?: FocusSession[];
-  currentPlan?: Plan;
-  todayDate: string; // YYYY-MM-DD
+  fixedScheduleStart?: string;
+  fixedScheduleEnd?:   string;
+  focusSessions?:      FocusSession[];
+  currentPlan?:        Plan;
+  todayDate:           string;
+  memories?:           MemoryEntry[];
+  // Phase A: full context for agent routing
+  reflections?:        DailyReflection[];
+  goalIntelligence?:   Record<string, GoalIntelligence>;
+  courses?:            Course[];
+  assignments?:        Assignment[];
+  exams?:              Exam[];
+  projects?:           Project[];
+  milestones?:         Milestone[];
+  distractionCount?:   number;
+  energyStyle?:        string;
+  workStyle?:          string;
+  // Phase B: academic intelligence
+  courseReadiness?:    Record<string, import('./readinessEngine').CourseReadiness>;
+  academicRisks?:      import('./academicRiskEngine').AcademicRisk[];
+  // Phase B.5: topic intelligence
+  topics?:             Topic[];
+  topicWeakness?:      Record<string, import('./weaknessEngine').TopicWeakness>;
+  // Phase C: project intelligence
+  projectIntelligence?: Record<string, import('./projectIntelligenceEngine').ProjectIntelligence>;
+  projectRisks?:        import('./projectIntelligenceEngine').ProjectRisk[];
+}
+
+// ─── Agent-type detection ─────────────────────────────────────────────────────
+
+export function detectAgentType(message: string, hasMemories: boolean): AgentType {
+  const m = message.toLowerCase();
+  if (
+    hasMemories &&
+    /\b(remember|recall|learned|where did|what did i (learn|write|note|store)|find.*note|my note|memory)\b/.test(m)
+  ) return 'memory';
+  if (/\b(plan|schedule|organize|prioritiz|calendar|daily|weekly|today)\b/.test(m)) return 'planning';
+  if (/\b(study|learn|exam|course|quiz|flashcard|lecture|assignment|weak|topic)\b/.test(m)) return 'learning';
+  if (/\b(project|milestone|blocker|blocked|sprint|build|ship|deadline|velocity|stalled|release|feature|bug|implement|architect)\b/.test(m)) return 'builder';
+  if (/\b(focus|distract|habit|productivity|deep work|session|procrastin|energy)\b/.test(m)) return 'productivity';
+  return 'life';
 }
 
 // ─── Abstract interface ───────────────────────────────────────────────────────

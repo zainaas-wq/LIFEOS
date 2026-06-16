@@ -7,6 +7,12 @@ import { supabase } from '../src/lib/supabase';
 import { useAppStore } from '../src/store/useAppStore';
 import { initRevenueCat, logOutRevenueCat } from '../src/services/purchaseService';
 import { track } from '../src/services/analyticsService';
+import type { AnalyticsEventName } from '../src/services/analyticsService';
+import {
+  setupNotificationListener,
+  registerNotificationRouter,
+  requestNotificationPermissions,
+} from '../src/services/notificationService';
 // Initialise i18next before any component renders (side-effectful import)
 import '../src/i18n';
 
@@ -30,6 +36,14 @@ export default function RootLayout() {
     track('app_opened');
     const timer = setTimeout(() => setReady(true), 50);
     return () => clearTimeout(timer);
+  }, []);
+
+  // ── Sprint 5: Notification listener + permission request ─────────────────
+  useEffect(() => {
+    registerNotificationRouter((screen) => router.replace(screen as any));
+    const cleanup = setupNotificationListener();
+    requestNotificationPermissions().catch(console.warn);
+    return cleanup;
   }, []);
 
   // ── 2. Restore Supabase session and listen for auth changes ───────────────
@@ -64,6 +78,34 @@ export default function RootLayout() {
     return () => data.subscription.unsubscribe();
   }, []);
 
+  // ── Retention milestones — fires once per day-N threshold ────────────────
+  useEffect(() => {
+    if (!ready) return;
+
+    const { betaStats, markDayActive, setInstallDate } = useAppStore.getState();
+    const today = new Date().toISOString().split('T')[0];
+
+    if (!betaStats.installDate) {
+      setInstallDate(today);
+      return;
+    }
+
+    const install    = new Date(betaStats.installDate);
+    const now        = new Date();
+    const daysSince  = Math.floor((now.getTime() - install.getTime()) / (1000 * 60 * 60 * 24));
+
+    const DAY_EVENT: Record<number, AnalyticsEventName> = {
+      1: 'day_1_active', 3: 'day_3_active', 7: 'day_7_active', 14: 'day_14_active',
+    };
+
+    for (const day of [1, 3, 7, 14]) {
+      if (daysSince >= day && !betaStats.daysActiveTracked.includes(day)) {
+        markDayActive(day);
+        track(DAY_EVENT[day]);
+      }
+    }
+  }, [ready]);
+
   // ── 3. Route based on auth state (only once both checks pass) ─────────────
   useEffect(() => {
     if (!ready || !sessionChecked) return;
@@ -93,6 +135,7 @@ export default function RootLayout() {
         <Stack.Screen name="auth" />
         <Stack.Screen name="onboarding/index" />
         <Stack.Screen name="(tabs)" />
+        <Stack.Screen name="beta-feedback-review" options={{ animation: 'slide_from_right' }} />
       </Stack>
     </>
   );

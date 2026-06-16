@@ -8,6 +8,43 @@ export type PlanType      = 'daily' | 'weekly';
 export type PlanItemType  = 'goal' | 'skill' | 'break' | 'event' | 'free';
 export type ChatRole      = 'user' | 'assistant';
 
+// ─── Memory Engine ────────────────────────────────────────────────────────────
+
+export type MemoryEntrySource =
+  | 'note'        // user-written text note
+  | 'knowledge'   // user-tagged knowledge item
+  | 'goal'        // auto-created when a goal is added
+  | 'reflection'  // auto-created from daily reflections
+  | 'focus'       // auto-created after focus sessions
+  | 'ai_insight'; // insights the AI coach surfaces
+
+export interface MemoryEntry {
+  id: string;
+  title: string;
+  content: string;
+  source: MemoryEntrySource;
+  tags: string[];           // free-form user tags
+  linkedGoalId?: string;
+  linkedCourseId?: string;     // Phase B: link to Course.id
+  linkedTopicId?: string;      // Phase B.5: link to Topic.id
+  linkedExamId?: string;       // Phase B.5: link to Exam.id
+  linkedAssignmentId?: string; // Phase B.5: link to Assignment.id
+  linkedProjectId?: string;    // Phase C: link to Project.id
+  linkedMilestoneId?: string;  // Phase C: link to Milestone.id
+  createdAt: string;        // ISO
+  updatedAt: string;        // ISO
+}
+
+// ─── Multi-agent routing ──────────────────────────────────────────────────────
+
+export type AgentType =
+  | 'memory'       // retrieval, knowledge questions
+  | 'planning'     // scheduling, prioritization
+  | 'learning'     // study, exams, weakness detection
+  | 'productivity' // focus, habits, distractions
+  | 'builder'      // projects, milestones, blockers, velocity
+  | 'life';        // general coaching, goal strategy
+
 // ─── LifeOS 2.0 identity unions ───────────────────────────────────────────────
 
 export type LifeRole =
@@ -76,6 +113,20 @@ export interface ScheduleEvent {
   recurring: boolean;
   daysOfWeek: number[];   // 0 = Sun … 6 = Sat
   createdAt: string;
+}
+
+// ─── Goal Intelligence (Phase 3) ─────────────────────────────────────────────
+
+export type GoalRiskLevel = 'on-track' | 'at-risk' | 'critical' | 'stalled';
+
+export interface GoalIntelligence {
+  probability: number;          // 0–100 (chance of achieving goal on time)
+  riskLevel: GoalRiskLevel;
+  riskReason: string;           // human-readable explanation
+  lastActivityDate?: string;    // ISO — last focus session on this goal
+  weeklyHoursLogged: number;    // focus hours logged this week
+  inTodaysPlan: boolean;        // appears in today's control plan
+  computedAt: string;           // ISO — when this was last computed
 }
 
 // ─── Goals ────────────────────────────────────────────────────────────────────
@@ -187,15 +238,23 @@ export interface Plan {
 
 // ─── Control System ───────────────────────────────────────────────────────────
 
-export type NudgeType = 'start' | 'missed' | 'checkin';
+export type NudgeType    = 'start' | 'missed' | 'checkin' | 'recovery' | 'opportunity';
+export type NudgeUrgency = 'low' | 'medium' | 'high' | 'critical';
 
 export interface NudgeItem {
   id: string;
-  itemId: string;         // references PlanItem.id
+  itemId: string;              // references PlanItem.id
   itemTitle: string;
-  triggerTime: string;    // "HH:MM"
+  triggerTime: string;         // "HH:MM"
   type: NudgeType;
-  snoozedUntil?: string;  // "HH:MM" if snoozed
+  snoozedUntil?: string;       // "HH:MM" if snoozed
+
+  // ── Smart Reminder Engine (Phase 2) ────────────────────────────────────────
+  contextReason?: string;      // "45 min free · peak energy · exam in 3 days"
+  urgency?: NudgeUrgency;
+  freeMinutes?: number;        // free window length detected at trigger time
+  daysUntilDeadline?: number;  // nearest goal deadline
+  isRecovery?: boolean;        // distraction recovery nudge
 }
 
 export interface DistractionLog {
@@ -222,12 +281,20 @@ export interface ControlDailyPlan {
 
 // ─── AI / Chat ────────────────────────────────────────────────────────────────
 
+export interface AIAction {
+  type:    'create_memory' | 'update_goal' | 'complete_task' | 'create_reminder' | 'create_focus_session';
+  data:    Record<string, unknown>;
+  status:  'pending' | 'executed' | 'failed';
+  message?: string;
+}
+
 export interface ChatMessage {
-  id: string;
-  role: ChatRole;
-  content: string;
+  id:        string;
+  role:      ChatRole;
+  content:   string;
   createdAt: string;
-  plan?: Plan;             // optionally embedded structured plan
+  plan?:     Plan;         // optionally embedded structured plan
+  action?:   AIAction;     // Phase A Sprint 4: AI-requested action
 }
 
 // ─── Coach session ────────────────────────────────────────────────────────────
@@ -264,6 +331,96 @@ export interface OnboardingIdentity {
   transformationDirection: string;
   // Internal scoring — not displayed as a product metric
   seriousnessScore: number;          // 1–10, drives planning engine weights
+}
+
+// ─── Student System (Phase 4) ─────────────────────────────────────────────────
+
+export type AssignmentType = 'homework' | 'quiz' | 'project' | 'lab' | 'reading' | 'other';
+export type ExamType       = 'midterm'  | 'final' | 'quiz'   | 'practical';
+
+// Topic — granular knowledge unit within a Course
+export interface Topic {
+  id:        string;
+  courseId:  string;
+  name:      string;           // e.g. "Thread Synchronization"
+  createdAt: string;
+}
+
+export interface Course {
+  id:          string;
+  name:        string;
+  code?:       string;       // e.g. "CS101"
+  instructor?: string;
+  creditHours?: number;
+  color:       string;       // hex color for card display
+  createdAt:   string;
+}
+
+export interface Assignment {
+  id:            string;
+  courseId:      string;
+  title:         string;
+  type:          AssignmentType;
+  dueDate:       string;     // YYYY-MM-DD
+  dueTime?:      string;     // HH:MM
+  estimatedMins?: number;
+  completed:     boolean;
+  priority:      'high' | 'medium' | 'low';
+  notes?:        string;
+  createdAt:     string;
+}
+
+export interface Exam {
+  id:          string;
+  courseId:    string;
+  title:       string;
+  date:        string;       // YYYY-MM-DD
+  time?:       string;       // HH:MM
+  location?:   string;
+  type:        ExamType;
+  durationMins?: number;
+  topics:      string[];
+  notes?:      string;
+  createdAt:   string;
+}
+
+// ─── Project System (Phase 5) ─────────────────────────────────────────────────
+
+export type ProjectStatus   = 'active' | 'paused' | 'completed' | 'cancelled';
+export type MilestoneStatus = 'pending' | 'in_progress' | 'completed' | 'blocked';
+
+export interface Project {
+  id:           string;
+  title:        string;
+  description?: string;
+  status:       ProjectStatus;
+  color:        string;
+  deadline?:    string;       // YYYY-MM-DD
+  goalId?:      string;       // optional link to a Goal/LifeTrack
+  createdAt:    string;
+  updatedAt:    string;
+}
+
+export interface Milestone {
+  id:             string;
+  projectId:      string;
+  title:          string;
+  status:         MilestoneStatus;
+  dueDate?:       string;     // YYYY-MM-DD
+  estimatedHours?: number;
+  completedAt?:   string;     // ISO — used for stagnation detection
+  notes?:         string;
+  order:          number;     // display order within project
+  createdAt:      string;
+}
+
+export interface ProjectHealth {
+  progress:          number;   // 0–1 (completed milestones / total)
+  completedCount:    number;
+  totalCount:        number;
+  daysSinceActivity: number;   // days since last milestone was completed
+  isStalled:         boolean;  // active project with no milestone progress in 7+ days
+  stalledReason?:    string;
 }
 
 // ─── Legacy planner compat (kept for existing planner tab) ───────────────────

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -12,6 +12,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useAppStore } from '../../src/store/useAppStore';
+import { track } from '../../src/services/analyticsService';
 import { GoalCard } from '../../src/components/GoalCard';
 import { Card } from '../../src/components/ui/Card';
 import { Button } from '../../src/components/ui/Button';
@@ -34,11 +35,18 @@ const CATEGORY_COLOR: Record<GoalCategory, string> = {
 };
 
 export default function GoalsScreen() {
-  const goals = useAppStore((s) => s.goals);
-  const weeklyPlan = useAppStore((s) => s.weeklyPlan);
-  const addGoal = useAppStore((s) => s.addGoal);
-  const updateGoal = useAppStore((s) => s.updateGoal);
-  const deleteGoal = useAppStore((s) => s.deleteGoal);
+  const goals                  = useAppStore((s) => s.goals);
+  const weeklyPlan             = useAppStore((s) => s.weeklyPlan);
+  const addGoal                = useAppStore((s) => s.addGoal);
+  const updateGoal             = useAppStore((s) => s.updateGoal);
+  const deleteGoal             = useAppStore((s) => s.deleteGoal);
+  const goalIntelligence       = useAppStore((s) => s.goalIntelligence);
+  const computeGoalIntelligence = useAppStore((s) => s.computeGoalIntelligence);
+
+  // Run intelligence analysis on mount and whenever goals change
+  useEffect(() => {
+    computeGoalIntelligence();
+  }, [goals]);
 
   const [modalVisible, setModalVisible] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -78,6 +86,7 @@ export default function GoalsScreen() {
       updateGoal(editingId, { title: title.trim(), category, weeklyHoursTarget: hours, priority, deadline: deadline || undefined });
     } else {
       addGoal({ title: title.trim(), category, weeklyHoursTarget: hours, priority, deadline: deadline || undefined });
+      track('goal_created', { category, has_deadline: !!deadline });
     }
     setModalVisible(false);
   };
@@ -132,8 +141,8 @@ export default function GoalsScreen() {
                 <Ionicons name="flag-outline" size={32} color={Colors.textMuted} />
                 <Text style={styles.emptyTitle}>No goals yet</Text>
                 <Text style={styles.emptyText}>
-                  Define what you want to achieve this week.{'\n'}
-                  LifeOS will schedule sessions for you.
+                  Goals activate your intelligence layer.{'\n'}
+                  LifeOS will detect risks, track velocity, and build your weekly plan automatically.
                 </Text>
                 <Button label="Add First Goal" onPress={openAdd} variant="ghost" size="sm" />
               </View>
@@ -146,6 +155,7 @@ export default function GoalsScreen() {
                   key={goal.id}
                   goal={goal}
                   allocatedMins={a?.allocatedMins ?? 0}
+                  intelligence={goalIntelligence[goal.id]}
                   onEdit={() => openEdit(goal)}
                   onDelete={() => deleteGoal(goal.id)}
                 />

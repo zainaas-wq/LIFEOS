@@ -10,6 +10,7 @@
  */
 
 import type { AIClient, AIContext } from './AIClient';
+import { detectAgentType } from './AIClient';
 import type { ChatMessage, Plan } from '../types';
 import { LocalAIClient } from './LocalAIClient';
 import { generateSmartDailyPlan, generateSmartWeeklyPlan, parseFixedWindow } from './planningEngine';
@@ -47,50 +48,136 @@ function isRecoverDayRequest(msg: string): boolean {
 // ─── Context mapper ───────────────────────────────────────────────────────────
 
 function buildChatContext(ctx: AIContext): object {
-  // Focus summary: aggregate this-week sessions by goal title
   const weekStart = getWeekStartStr(ctx.todayDate);
   const weeklyMinsByGoal: Record<string, number> = {};
   for (const s of ctx.focusSessions ?? []) {
     if (!s.goalId || !s.start || s.start < weekStart) continue;
     const goal = ctx.goals.find((g) => g.id === s.goalId);
-    const key = goal?.title ?? s.goalId;
+    const key  = goal?.title ?? s.goalId;
     weeklyMinsByGoal[key] = (weeklyMinsByGoal[key] ?? 0) + (s.durationMinutes ?? 0);
   }
   const totalWeeklyMins = Object.values(weeklyMinsByGoal).reduce((a, b) => a + b, 0);
 
+  // Today's distraction count
+  const today = new Date().toDateString();
+
   return {
-    todayDate:            ctx.todayDate,
-    mainFocus:            ctx.mainFocus,
-    biggestDistraction:   ctx.biggestDistraction,
-    fixedScheduleStart:   ctx.fixedScheduleStart,
-    fixedScheduleEnd:     ctx.fixedScheduleEnd,
+    todayDate:           ctx.todayDate,
+    mainFocus:           ctx.mainFocus,
+    biggestDistraction:  ctx.biggestDistraction,
+    fixedScheduleStart:  ctx.fixedScheduleStart,
+    fixedScheduleEnd:    ctx.fixedScheduleEnd,
+    energyStyle:         ctx.energyStyle,
+    workStyle:           ctx.workStyle,
+    distractionCount:    ctx.distractionCount ?? 0,
+
     tracks: ctx.goals.map((g) => ({
-      title:              g.title,
-      category:           g.category,
-      weeklyHoursTarget:  g.weeklyHoursTarget,
-      priority:           g.priority,
+      title:             g.title,
+      category:          g.category,
+      weeklyHoursTarget: g.weeklyHoursTarget,
+      priority:          g.priority,
+      deadline:          g.deadline,
     })),
     schedule: ctx.scheduleEvents.map((e) => ({
-      title:       e.title,
-      start:       e.start,
-      end:         e.end,
-      daysOfWeek:  e.daysOfWeek,
-      location:    e.location,
+      title:      e.title, start: e.start, end: e.end,
+      daysOfWeek: e.daysOfWeek, location: e.location,
     })),
-    frictions: [], // populated in a future sprint when DistractionLog is in AIContext
+    frictions:    [],
     focusSummary: { weeklyMinsByGoal, totalWeeklyMins },
+
     todayPlan: ctx.currentPlan
       ? {
           date:  ctx.currentPlan.dateRange.start,
           items: ctx.currentPlan.items.map((i) => ({
-            startTime: i.startTime,
-            endTime:   i.endTime,
-            title:     i.title,
-            type:      i.type,
-            completed: i.completed,
+            startTime: i.startTime, endTime: i.endTime,
+            title: i.title, type: i.type, completed: i.completed,
           })),
         }
       : undefined,
+
+    // Phase A: agent-specific context
+    rules: (ctx.rules ?? [])
+      .filter((r) => r.enabled)
+      .map((r) => ({
+        title: r.title, type: r.type, enabled: r.enabled,
+        startTime: r.startTime, endTime: r.endTime, followedToday: r.followedToday,
+      })),
+    reflections: (ctx.reflections ?? [])
+      .slice(0, 7)
+      .map((r) => ({ date: r.date, text: r.text.slice(0, 300) })),
+    goalIntelligence: ctx.goalIntelligence ?? {},
+    courses:     (ctx.courses ?? []).map((c) => ({
+      id: c.id, name: c.name, code: c.code, creditHours: c.creditHours,
+    })),
+    exams: (ctx.exams ?? [])
+      .filter((e) => e.date >= ctx.todayDate)
+      .sort((a, b) => a.date.localeCompare(b.date))
+      .slice(0, 10)
+      .map((e) => ({
+        id: e.id, courseId: e.courseId, title: e.title,
+        date: e.date, topics: e.topics, type: e.type,
+      })),
+    assignments: (ctx.assignments ?? [])
+      .filter((a) => !a.completed && a.dueDate >= ctx.todayDate)
+      .sort((a, b) => a.dueDate.localeCompare(b.dueDate))
+      .slice(0, 15)
+      .map((a) => ({
+        id: a.id, courseId: a.courseId, title: a.title,
+        dueDate: a.dueDate, type: a.type, priority: a.priority, completed: a.completed,
+      })),
+    projects: (ctx.projects ?? [])
+      .filter((p) => p.status === 'active')
+      .map((p) => ({
+        id: p.id, title: p.title, status: p.status, deadline: p.deadline,
+      })),
+    milestones: (ctx.milestones ?? [])
+      .filter((m) => m.status !== 'completed')
+      .slice(0, 20)
+      .map((m) => ({
+        id: m.id, projectId: m.projectId, title: m.title,
+        status: m.status, dueDate: m.dueDate,
+      })),
+
+    // Phase B: academic intelligence
+    courseReadiness: ctx.courseReadiness
+      ? Object.values(ctx.courseReadiness).map((r) => ({
+          courseId: r.courseId, courseName: r.courseName,
+          score: r.score, label: r.label,
+          recommendation: r.recommendation,
+          studyMinsThisWeek: r.studyMinsThisWeek,
+          daysUntilNextExam: r.daysUntilNextExam,
+          overdueAssignments: r.overdueAssignments,
+        }))
+      : [],
+    academicRisks: (ctx.academicRisks ?? []).map((r) => ({
+      courseName: r.courseName, riskLevel: r.riskLevel,
+      reason: r.reason, actionRequired: r.actionRequired,
+    })),
+    // Phase B.5: topic intelligence
+    topicWeakness: ctx.topicWeakness
+      ? Object.values(ctx.topicWeakness).map((t) => ({
+          topicName: t.topicName, courseName: t.courseName,
+          score: t.score, label: t.label,
+          memoryCount: t.memoryCount, recommendation: t.recommendation,
+        }))
+      : [],
+    // Phase C: project intelligence
+    projectIntelligence: ctx.projectIntelligence
+      ? Object.values(ctx.projectIntelligence).map((pi) => ({
+          projectId: pi.projectId, projectName: pi.projectName,
+          healthScore: pi.healthScore, healthLabel: pi.healthLabel,
+          completionProbability: pi.completionProbability,
+          velocity: pi.velocity, blockedCount: pi.blockedCount,
+          overdueCount: pi.overdueCount, daysSinceActivity: pi.daysSinceActivity,
+          deadlineRisk: pi.deadlineRisk, daysUntilDeadline: pi.daysUntilDeadline,
+          completedCount: pi.completedCount, totalCount: pi.totalCount,
+          recommendation: pi.recommendation,
+        }))
+      : [],
+    projectRisks: (ctx.projectRisks ?? []).map((r) => ({
+      projectName: r.projectName, riskLevel: r.riskLevel,
+      reason: r.reason, actionRequired: r.actionRequired,
+    })),
   };
 }
 
@@ -121,6 +208,7 @@ export class BackendAIClient implements AIClient {
       content?: string;
       createdAt?: string;
       usage?: { promptTokens?: number; completionTokens?: number; totalTokens?: number; provider?: string };
+      action?: { type: string; data: Record<string, unknown> };
       error?: string;
       code?: string;
     } | null = null;
@@ -130,6 +218,8 @@ export class BackendAIClient implements AIClient {
     const controller = new AbortController();
     const timeoutId  = setTimeout(() => controller.abort(), 30_000);
 
+    const agentType = detectAgentType(userMessage, (context.memories?.length ?? 0) > 0);
+
     try {
       const res = await fetch(this.endpoint, {
         method: 'POST',
@@ -138,9 +228,10 @@ export class BackendAIClient implements AIClient {
           Authorization:   `Bearer ${this.accessToken}`,
         },
         body: JSON.stringify({
-          message: userMessage,
-          history: wireHistory,
-          context: buildChatContext(context),
+          message:   userMessage,
+          history:   wireHistory,
+          context:   buildChatContext(context),
+          agentType, // routes to specialized agent mode on the backend
         }),
         signal: controller.signal,
       });
@@ -219,6 +310,11 @@ export class BackendAIClient implements AIClient {
       content:   text,
       createdAt: responseData?.createdAt ?? new Date().toISOString(),
       plan,
+      // Edge Function returns { type, data } without status — add 'pending' so
+      // ai.tsx can detect and execute the action via executeAIAction.
+      action: responseData?.action
+        ? { ...responseData.action, status: 'pending' as const }
+        : undefined,
     };
   }
 

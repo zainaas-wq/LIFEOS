@@ -10,10 +10,11 @@
 import type {
   Goal, SkillPlan, Rule, ScheduleEvent,
   Plan, PlanItem, PlanItemType,
-  ControlDailyPlan, NudgeItem, UserPreferences,
+  ControlDailyPlan, NudgeItem, UserPreferences, UserProfile,
 } from '../types';
 import { generateSmartDailyPlan } from '../ai/planningEngine';
 import { timeToMins, minsToTime } from '../ai/planGenerator';
+import { buildSmartNudgeSchedule } from '../ai/nudgeEngine';
 import { generateId } from '../lib/utils';
 
 // ─── Defaults ────────────────────────────────────────────────────────────────
@@ -175,6 +176,7 @@ export function generateControlPlan(
   prefOverrides?: Partial<UserPreferences>,
   fixedStart?: number,
   fixedEnd?: number,
+  profile?: UserProfile | null,
 ): ControlDailyPlan {
   const prefs: UserPreferences = {
     ...derivePreferences(rules),
@@ -191,8 +193,10 @@ export function generateControlPlan(
   // 3. Compute next best action
   const nextBestAction = computeNextBestAction(enrichedItems);
 
-  // 4. Build nudge schedule
-  const nudgeSchedule = buildNudgeSchedule(enrichedItems);
+  // 4. Build smart nudge schedule (energy-aware + deadline-aware)
+  const nudgeSchedule = profile
+    ? buildSmartNudgeSchedule(enrichedItems, goals, profile)
+    : buildNudgeSchedule(enrichedItems);
 
   return {
     plan: enrichedPlan,
