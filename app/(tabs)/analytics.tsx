@@ -76,7 +76,7 @@ function StatTile({ label, value, sub, color }: {
 }) {
   return (
     <View style={tileS.tile}>
-      <Text style={[tileS.value, color && { color }]}>{value}</Text>
+      <Text style={[tileS.value, color ? { color } : undefined]}>{value}</Text>
       <Text style={tileS.label}>{label}</Text>
       {sub && <Text style={tileS.sub}>{sub}</Text>}
     </View>

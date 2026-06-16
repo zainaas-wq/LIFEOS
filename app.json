@@ -43,8 +43,7 @@
           "cameraPermission": false
         }
       ],
-      "expo-localization",
-      "react-native-purchases"
+      "expo-localization"
     ],
     "experiments": {
       "typedRoutes": true

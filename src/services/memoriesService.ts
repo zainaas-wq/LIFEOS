@@ -92,7 +92,7 @@ export async function upsertMemory(userId: string, entry: MemoryEntry): Promise<
   const { error } = await supabase
     .from('memories')
     .upsert(
-      { ...row, updated_at: new Date().toISOString() },
+      { ...row, updated_at: new Date().toISOString() } as any,
       { onConflict: 'id' },
     );
   if (error) throw error;
@@ -119,6 +119,6 @@ export async function migrateLocalMemories(
   const rows = entries.map((e) => entryToRow(userId, e));
   const { error } = await supabase
     .from('memories')
-    .upsert(rows, { onConflict: 'id', ignoreDuplicates: true });
+    .upsert(rows as any, { onConflict: 'id', ignoreDuplicates: true });
   if (error) throw error;
 }
