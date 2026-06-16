@@ -1,78 +1,119 @@
-import React, { useState } from 'react';
+﻿import React, { useState, useMemo } from "react";
 import {
-  View,
-  Text,
-  ScrollView,
-  StyleSheet,
-  TouchableOpacity,
-  Modal,
-  KeyboardAvoidingView,
-  Platform,
-} from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { Ionicons } from '@expo/vector-icons';
-import { router } from 'expo-router';
-import { useAppStore } from '../../../src/store/useAppStore';
-import { Card } from '../../../src/components/ui/Card';
-import { Button } from '../../../src/components/ui/Button';
-import { Input } from '../../../src/components/ui/Input';
-import { SectionHeader } from '../../../src/components/SectionHeader';
-import { Colors, FontSize, FontWeight, Radius, Spacing } from '../../../src/constants/theme';
-import type { ScheduleEvent, EventCategory } from '../../../src/types';
+  View, Text, ScrollView, StyleSheet, TouchableOpacity,
+  Modal, KeyboardAvoidingView, Platform, Alert,
+} from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
+import { Ionicons } from "@expo/vector-icons";
+import { useAppStore } from "../../../src/store/useAppStore";
+import { Input } from "../../../src/components/ui/Input";
+import { Button } from "../../../src/components/ui/Button";
+import { Colors, Spacing, FontSize, FontWeight, Radius } from "../../../src/constants/theme";
+import type { ScheduleEvent, EventCategory } from "../../../src/types";
 
-const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-const DAY_NAMES_FULL = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+const DAY_LABELS = ["S", "M", "T", "W", "T", "F", "S"];
+const DAY_NAMES  = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+const MONTH_NAMES = [
+  "January","February","March","April","May","June",
+  "July","August","September","October","November","December",
+];
 
-const CATEGORIES: { value: EventCategory; label: string; icon: keyof typeof Ionicons.glyphMap }[] = [
-  { value: 'class',    label: 'Class',    icon: 'school-outline'    },
-  { value: 'work',     label: 'Work',     icon: 'briefcase-outline' },
-  { value: 'health',   label: 'Health',   icon: 'fitness-outline'   },
-  { value: 'personal', label: 'Personal', icon: 'person-outline'    },
-  { value: 'social',   label: 'Social',   icon: 'people-outline'    },
-  { value: 'other',    label: 'Other',    icon: 'ellipsis-horizontal-outline' },
+const CATEGORIES: { value: EventCategory; label: string }[] = [
+  { value: "class",    label: "Class"    },
+  { value: "work",     label: "Work"     },
+  { value: "health",   label: "Health"   },
+  { value: "personal", label: "Personal" },
+  { value: "social",   label: "Social"   },
+  { value: "other",    label: "Other"    },
 ];
 
 const CATEGORY_COLOR: Record<EventCategory, string> = {
-  class:    '#6C8EBF',
+  class:    "#6C8EBF",
   work:     Colors.gold,
-  health:   '#4ADE80',
-  personal: '#F472B6',
-  social:   '#A78BFA',
+  health:   "#4ADE80",
+  personal: "#F472B6",
+  social:   "#A78BFA",
   other:    Colors.textMuted,
 };
 
+function getMonthGrid(year: number, month: number): Array<Date | null> {
+  const firstDay    = new Date(year, month, 1).getDay();
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const grid: Array<Date | null> = [];
+  for (let i = 0; i < firstDay; i++) grid.push(null);
+  for (let d = 1; d <= daysInMonth; d++) grid.push(new Date(year, month, d));
+  while (grid.length % 7 !== 0) grid.push(null);
+  return grid;
+}
+
+function isSameDay(a: Date, b: Date): boolean {
+  return a.getFullYear() === b.getFullYear() &&
+         a.getMonth()    === b.getMonth()    &&
+         a.getDate()     === b.getDate();
+}
+
+function fmtMonthYear(d: Date): string {
+  return `${MONTH_NAMES[d.getMonth()]} ${d.getFullYear()}`;
+}
+
+function fmtDayLabel(d: Date): string {
+  return `${DAY_NAMES[d.getDay()]}, ${MONTH_NAMES[d.getMonth()]} ${d.getDate()}`;
+}
+
 export default function ScheduleScreen() {
-  const scheduleEvents = useAppStore((s) => s.scheduleEvents);
-  const addScheduleEvent = useAppStore((s) => s.addScheduleEvent);
+  const scheduleEvents      = useAppStore((s) => s.scheduleEvents);
+  const addScheduleEvent    = useAppStore((s) => s.addScheduleEvent);
   const deleteScheduleEvent = useAppStore((s) => s.deleteScheduleEvent);
 
-  const [modalVisible, setModalVisible] = useState(false);
-  const [selectedDay, setSelectedDay] = useState(1); // Monday default
+  const today = new Date();
 
-  // Form state
-  const [title, setTitle] = useState('');
-  const [location, setLocation] = useState('');
-  const [start, setStart] = useState('09:00');
-  const [end, setEnd] = useState('10:00');
-  const [formDays, setFormDays] = useState<number[]>([1]); // multi-select
-  const [category, setCategory] = useState<EventCategory>('class');
-  const [error, setError] = useState('');
+  const [viewDate,     setViewDate]     = useState(new Date());
+  const [selectedDate, setSelectedDate] = useState(new Date());
+  const [modalVisible, setModalVisible] = useState(false);
+
+  const [title,    setTitle]    = useState("");
+  const [start,    setStart]    = useState("09:00");
+  const [end,      setEnd]      = useState("10:00");
+  const [location, setLocation] = useState("");
+  const [category, setCategory] = useState<EventCategory>("class");
+  const [formDays, setFormDays] = useState<number[]>([new Date().getDay()]);
+  const [error,    setError]    = useState("");
+
+  const grid = useMemo(
+    () => getMonthGrid(viewDate.getFullYear(), viewDate.getMonth()),
+    [viewDate],
+  );
+
+  const daysWithEvents = useMemo(() => {
+    const set = new Set<number>();
+    scheduleEvents.forEach((e) => { e.daysOfWeek.forEach((d) => set.add(d)); });
+    return set;
+  }, [scheduleEvents]);
+
+  const selectedDayEvents = useMemo(
+    () => scheduleEvents.filter((e) => e.daysOfWeek.includes(selectedDate.getDay())),
+    [scheduleEvents, selectedDate],
+  );
+
+  const prevMonth = () => setViewDate((d) => new Date(d.getFullYear(), d.getMonth() - 1, 1));
+  const nextMonth = () => setViewDate((d) => new Date(d.getFullYear(), d.getMonth() + 1, 1));
 
   const toggleFormDay = (day: number) => {
-    setFormDays((prev) =>
-      prev.includes(day) ? prev.filter((d) => d !== day) : [...prev, day]
-    );
+    setFormDays((prev) => prev.includes(day) ? prev.filter((d) => d !== day) : [...prev, day]);
+  };
+
+  const resetForm = () => {
+    setTitle(""); setStart("09:00"); setEnd("10:00");
+    setLocation(""); setCategory("class");
+    setFormDays([new Date().getDay()]); setError("");
   };
 
   const handleAdd = () => {
-    if (!title.trim()) { setError('Event title is required.'); return; }
-    if (start >= end) { setError('End time must be after start time.'); return; }
-    if (formDays.length === 0) { setError('Select at least one day.'); return; }
+    if (!title.trim())         { setError("Event title is required."); return; }
+    if (start >= end)          { setError("End time must be after start time."); return; }
+    if (formDays.length === 0) { setError("Select at least one day."); return; }
     addScheduleEvent({
-      title: title.trim(),
-      start,
-      end,
-      category,
+      title: title.trim(), start, end, category,
       daysOfWeek: [...formDays].sort(),
       location: location.trim() || undefined,
       recurring: true,
@@ -81,236 +122,184 @@ export default function ScheduleScreen() {
     setModalVisible(false);
   };
 
-  const resetForm = () => {
-    setTitle(''); setLocation(''); setStart('09:00');
-    setEnd('10:00'); setFormDays([selectedDay]); setCategory('class'); setError('');
-  };
-
-  const eventsForDay = (day: number) =>
-    scheduleEvents
-      .filter((e) => e.daysOfWeek.includes(day))
-      .sort((a, b) => a.start.localeCompare(b.start));
-
-  const totalEvents = scheduleEvents.length;
-
   return (
-    <SafeAreaView style={styles.safe} edges={['top']}>
-      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+    <SafeAreaView style={s.safe} edges={["top"]}>
+      <ScrollView contentContainerStyle={s.content} showsVerticalScrollIndicator={false}>
+
         {/* Header */}
-        <View style={styles.header}>
-          <View>
-            <Text style={styles.screenLabel}>Schedule</Text>
-            <Text style={styles.screenTitle}>Weekly Events</Text>
-          </View>
-          <View style={styles.headerBtns}>
-            <TouchableOpacity
-              onPress={() => router.push('/(tabs)/schedule/import' as any)}
-              style={styles.importBtn}
-              activeOpacity={0.7}
-            >
-              <Ionicons name="cloud-upload-outline" size={16} color={Colors.gold} />
-              <Text style={styles.importBtnText}>Import</Text>
+        <View style={s.header}>
+          <Text style={s.screenTitle}>Schedule</Text>
+          <View style={s.monthNav}>
+            <TouchableOpacity onPress={prevMonth} style={s.navBtn} activeOpacity={0.7}>
+              <Ionicons name="chevron-back" size={18} color={Colors.textSecondary} />
             </TouchableOpacity>
-            <TouchableOpacity
-              onPress={() => { resetForm(); setModalVisible(true); }}
-              style={styles.addBtn}
-              activeOpacity={0.7}
-            >
-              <Ionicons name="add" size={22} color={Colors.gold} />
+            <Text style={s.monthLabel}>{fmtMonthYear(viewDate)}</Text>
+            <TouchableOpacity onPress={nextMonth} style={s.navBtn} activeOpacity={0.7}>
+              <Ionicons name="chevron-forward" size={18} color={Colors.textSecondary} />
             </TouchableOpacity>
           </View>
         </View>
 
-        {/* Day selector */}
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.dayScroll}>
-          {DAY_NAMES.map((name, day) => {
-            const count = eventsForDay(day).length;
-            const active = selectedDay === day;
-            return (
-              <TouchableOpacity
-                key={day}
-                onPress={() => setSelectedDay(day)}
-                style={[styles.dayChip, active && styles.dayChipActive]}
-                activeOpacity={0.7}
-              >
-                <Text style={[styles.dayChipText, active && styles.dayChipTextActive]}>
-                  {name}
-                </Text>
-                {count > 0 && (
-                  <View style={[styles.dayBadge, active && styles.dayBadgeActive]}>
-                    <Text style={[styles.dayBadgeText, active && styles.dayBadgeTextActive]}>
-                      {count}
-                    </Text>
-                  </View>
-                )}
-              </TouchableOpacity>
-            );
-          })}
-        </ScrollView>
+        {/* Calendar grid */}
+        <View style={s.calendarCard}>
+          {/* Day-of-week headers */}
+          <View style={s.calRow}>
+            {DAY_LABELS.map((d, i) => (
+              <View key={i} style={s.calCell}>
+                <Text style={s.calDayLabel}>{d}</Text>
+              </View>
+            ))}
+          </View>
 
-        {/* Events for selected day */}
-        <View style={styles.section}>
-          <SectionHeader
-            title={DAY_NAMES_FULL[selectedDay]}
-            action="+ Add"
-            onAction={() => { resetForm(); setFormDays([selectedDay]); setModalVisible(true); }}
-          />
+          {/* Day cells */}
+          {Array.from({ length: grid.length / 7 }, (_, row) => (
+            <View key={row} style={s.calRow}>
+              {grid.slice(row * 7, row * 7 + 7).map((date, col) => {
+                if (!date) return <View key={col} style={s.calCell} />;
+                const isToday    = isSameDay(date, today);
+                const isSelected = isSameDay(date, selectedDate);
+                const hasEvent   = daysWithEvents.has(date.getDay());
+                return (
+                  <TouchableOpacity
+                    key={col}
+                    style={s.calCell}
+                    onPress={() => setSelectedDate(date)}
+                    activeOpacity={0.7}
+                  >
+                    <View style={[
+                      s.dayCircle,
+                      isToday    && s.dayCircleToday,
+                      isSelected && !isToday && s.dayCircleSelected,
+                    ]}>
+                      <Text style={[
+                        s.dayNum,
+                        isToday    && s.dayNumToday,
+                        isSelected && !isToday && s.dayNumSelected,
+                      ]}>
+                        {date.getDate()}
+                      </Text>
+                    </View>
+                    {hasEvent && !isToday && (
+                      <View style={s.eventDot} />
+                    )}
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          ))}
+        </View>
 
-          {eventsForDay(selectedDay).length === 0 ? (
-            <Card>
-              <Text style={styles.emptyText}>No events on {DAY_NAMES_FULL[selectedDay]}.</Text>
-            </Card>
+        {/* Selected day events */}
+        <View style={s.section}>
+          <Text style={s.sectionTitle}>{fmtDayLabel(selectedDate)}</Text>
+
+          {selectedDayEvents.length === 0 ? (
+            <View style={s.emptyDay}>
+              <Ionicons name="calendar-outline" size={32} color={Colors.textMuted} />
+              <Text style={s.emptyDayText}>No events on this day</Text>
+            </View>
           ) : (
-            eventsForDay(selectedDay).map((event) => (
-              <EventRow
-                key={event.id}
-                event={event}
-                onDelete={() => deleteScheduleEvent(event.id)}
-              />
-            ))
+            selectedDayEvents.map((event) => {
+              const color = CATEGORY_COLOR[event.category];
+              return (
+                <View key={event.id} style={[s.eventCard, { borderLeftColor: color }]}>
+                  <View style={s.eventBody}>
+                    <Text style={s.eventTitle}>{event.title}</Text>
+                    <Text style={s.eventMeta}>{event.start} – {event.end}</Text>
+                    {event.location ? (
+                      <View style={s.eventLocationRow}>
+                        <Ionicons name="location-outline" size={12} color={Colors.textMuted} />
+                        <Text style={s.eventLocation}>{event.location}</Text>
+                      </View>
+                    ) : null}
+                  </View>
+                  <View style={[s.categoryChip, { backgroundColor: color + "22" }]}>
+                    <Text style={[s.categoryChipText, { color }]}>{event.category}</Text>
+                  </View>
+                  <TouchableOpacity
+                    onPress={() => Alert.alert("Delete Event", `Delete "${event.title}"?`, [
+                      { text: "Cancel", style: "cancel" },
+                      { text: "Delete", style: "destructive", onPress: () => deleteScheduleEvent(event.id) },
+                    ])}
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  >
+                    <Ionicons name="trash-outline" size={16} color={Colors.textMuted} />
+                  </TouchableOpacity>
+                </View>
+              );
+            })
           )}
         </View>
 
-        {/* Weekly overview */}
-        {totalEvents > 0 && (
-          <View style={styles.section}>
-            <SectionHeader title="All Events" />
-            {DAY_NAMES.map((name, day) => {
-              const events = eventsForDay(day);
-              if (!events.length) return null;
-              return (
-                <View key={day} style={styles.overviewDay}>
-                  <Text style={styles.overviewDayName}>{name}</Text>
-                  <View style={styles.overviewEvents}>
-                    {events.map((e) => (
-                      <View
-                        key={e.id}
-                        style={[styles.overviewBadge, { borderLeftColor: CATEGORY_COLOR[e.category] }]}
-                      >
-                        <Text style={styles.overviewBadgeText} numberOfLines={1}>
-                          {e.start} {e.title}
-                        </Text>
-                      </View>
-                    ))}
-                  </View>
-                </View>
-              );
-            })}
-          </View>
-        )}
       </ScrollView>
 
+      {/* FAB */}
+      <TouchableOpacity style={s.fab} onPress={() => setModalVisible(true)} activeOpacity={0.85}>
+        <Ionicons name="add" size={28} color={Colors.textInverse} />
+      </TouchableOpacity>
+
       {/* Add Event Modal */}
-      <Modal
-        visible={modalVisible}
-        animationType="slide"
-        presentationStyle="pageSheet"
-        onRequestClose={() => setModalVisible(false)}
-      >
-        <KeyboardAvoidingView
-          style={styles.flex}
-          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        >
-          <View style={styles.modal}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>New Event</Text>
-              <TouchableOpacity onPress={() => setModalVisible(false)}>
+      <Modal visible={modalVisible} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => { resetForm(); setModalVisible(false); }}>
+        <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : "height"}>
+          <View style={s.modal}>
+            <View style={s.modalHeader}>
+              <Text style={s.modalTitle}>New Event</Text>
+              <TouchableOpacity onPress={() => { resetForm(); setModalVisible(false); }}>
                 <Ionicons name="close" size={24} color={Colors.textSecondary} />
               </TouchableOpacity>
             </View>
 
-            <ScrollView contentContainerStyle={styles.modalBody} keyboardShouldPersistTaps="handled">
-              <Input
-                label="Event Title"
-                value={title}
-                onChangeText={(t) => { setTitle(t); setError(''); }}
-                placeholder="e.g. University lecture, Gym, Team standup"
-                autoFocus
-                error={error}
-              />
+            <ScrollView contentContainerStyle={s.modalBody} keyboardShouldPersistTaps="handled">
+              <Input label="Event Title" value={title} onChangeText={(t) => { setTitle(t); setError(""); }}
+                placeholder="e.g. Data Structures Lecture" autoFocus error={error} />
 
-              <Input
-                label="Location (optional)"
-                value={location}
-                onChangeText={setLocation}
-                placeholder="e.g. Room 201, Online"
-              />
+              <Input label="Start Time" value={start} onChangeText={setStart} placeholder="09:00" />
+              <Input label="End Time"   value={end}   onChangeText={setEnd}   placeholder="10:00" />
+              <Input label="Location (optional)" value={location} onChangeText={setLocation} placeholder="Room 201" />
 
-              {/* Category picker */}
               <View>
-                <Text style={styles.fieldLabel}>Category</Text>
-                <View style={styles.catGrid}>
-                  {CATEGORIES.map(({ value, label, icon }) => {
-                    const active = category === value;
-                    const color = CATEGORY_COLOR[value];
+                <Text style={s.fieldLabel}>Category</Text>
+                <View style={s.categoryGrid}>
+                  {CATEGORIES.map((cat) => {
+                    const active = category === cat.value;
+                    const color  = CATEGORY_COLOR[cat.value];
                     return (
                       <TouchableOpacity
-                        key={value}
-                        onPress={() => setCategory(value)}
-                        style={[
-                          styles.catBtn,
-                          active && { borderColor: color, backgroundColor: color + '20' },
-                        ]}
+                        key={cat.value}
+                        style={[s.catChip, active && { borderColor: color, backgroundColor: color + "22" }]}
+                        onPress={() => setCategory(cat.value)}
                         activeOpacity={0.7}
                       >
-                        <Ionicons name={icon} size={14} color={active ? color : Colors.textMuted} />
-                        <Text style={[styles.catBtnText, active && { color }]}>{label}</Text>
+                        <Text style={[s.catChipText, active && { color }]}>{cat.label}</Text>
                       </TouchableOpacity>
                     );
                   })}
                 </View>
               </View>
 
-              {/* Day multi-select */}
               <View>
-                <Text style={styles.fieldLabel}>Repeats on</Text>
-                <View style={styles.dayGrid}>
-                  {DAY_NAMES.map((name, day) => {
+                <Text style={s.fieldLabel}>Repeat on days</Text>
+                <View style={s.daysRow}>
+                  {DAY_LABELS.map((label, day) => {
                     const active = formDays.includes(day);
                     return (
                       <TouchableOpacity
                         key={day}
+                        style={[s.dayChip, active && s.dayChipActive]}
                         onPress={() => toggleFormDay(day)}
-                        style={[styles.dayGridBtn, active && styles.dayGridBtnActive]}
+                        activeOpacity={0.7}
                       >
-                        <Text style={[styles.dayGridText, active && styles.dayGridTextActive]}>
-                          {name}
-                        </Text>
+                        <Text style={[s.dayChipText, active && s.dayChipTextActive]}>{label}</Text>
                       </TouchableOpacity>
                     );
                   })}
                 </View>
               </View>
-
-              {/* Time */}
-              <View style={styles.timeRow}>
-                <Input
-                  label="Start"
-                  value={start}
-                  onChangeText={setStart}
-                  placeholder="09:00"
-                  containerStyle={styles.timeInput}
-                  keyboardType="numbers-and-punctuation"
-                />
-                <Input
-                  label="End"
-                  value={end}
-                  onChangeText={setEnd}
-                  placeholder="10:00"
-                  containerStyle={styles.timeInput}
-                  keyboardType="numbers-and-punctuation"
-                />
-              </View>
-
-              <View style={styles.recurringNote}>
-                <Ionicons name="repeat" size={13} color={Colors.gold} />
-                <Text style={styles.recurringText}>Repeats every week on selected days</Text>
-              </View>
             </ScrollView>
 
-            <View style={styles.modalFooter}>
-              <Button label="Cancel" onPress={() => setModalVisible(false)} variant="secondary" style={styles.modalBtn} />
-              <Button label="Add Event" onPress={handleAdd} style={styles.modalBtn} />
+            <View style={s.modalFooter}>
+              <Button label="Cancel" onPress={() => { resetForm(); setModalVisible(false); }} variant="secondary" style={{ flex: 1 }} />
+              <Button label="Add Event" onPress={handleAdd} style={{ flex: 1 }} />
             </View>
           </View>
         </KeyboardAvoidingView>
@@ -319,115 +308,58 @@ export default function ScheduleScreen() {
   );
 }
 
-function EventRow({ event, onDelete }: { event: ScheduleEvent; onDelete: () => void }) {
-  const color = CATEGORY_COLOR[event.category];
-  return (
-    <View style={[styles.eventRow, { borderLeftColor: color }]}>
-      <View style={styles.eventInfo}>
-        <Text style={styles.eventTitle}>{event.title}</Text>
-        <Text style={styles.eventMeta}>
-          {event.start} – {event.end}
-          {event.location ? ` · ${event.location}` : ''}
-          {' · '}<Text style={{ color }}>{event.category}</Text>
-        </Text>
-      </View>
-      <TouchableOpacity onPress={onDelete} style={styles.deleteBtn}>
-        <Ionicons name="trash-outline" size={15} color={Colors.textMuted} />
-      </TouchableOpacity>
-    </View>
-  );
-}
+const s = StyleSheet.create({
+  safe:    { flex: 1, backgroundColor: Colors.background },
+  content: { padding: Spacing.lg, paddingBottom: 96, gap: Spacing.lg },
 
-const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: Colors.background },
-  flex: { flex: 1 },
-  content: { padding: Spacing.lg, paddingBottom: Spacing.xxl, gap: Spacing.lg },
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  screenLabel: { fontSize: FontSize.sm, color: Colors.textSecondary, textTransform: 'uppercase', letterSpacing: 1 },
-  screenTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.textPrimary, marginTop: 2 },
-  headerBtns: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
-  importBtn: {
-    flexDirection: 'row', alignItems: 'center', gap: 4,
-    paddingHorizontal: Spacing.sm, paddingVertical: Spacing.xs + 2,
-    borderRadius: Radius.sm, backgroundColor: Colors.goldMuted,
-    borderWidth: 1, borderColor: Colors.goldDim,
-  },
-  importBtnText: { fontSize: FontSize.xs, color: Colors.gold, fontWeight: FontWeight.medium },
-  addBtn: {
-    width: 40, height: 40, borderRadius: Radius.full,
-    backgroundColor: Colors.goldMuted, borderWidth: 1, borderColor: Colors.goldDim,
-    alignItems: 'center', justifyContent: 'center',
-  },
-  dayScroll: { marginHorizontal: -Spacing.lg, paddingHorizontal: Spacing.lg },
-  dayChip: {
-    flexDirection: 'row', alignItems: 'center', gap: 4,
-    paddingHorizontal: Spacing.md, paddingVertical: Spacing.xs + 2,
-    borderRadius: Radius.full, borderWidth: 1, borderColor: Colors.border,
-    backgroundColor: Colors.surfaceElevated, marginRight: Spacing.sm,
-  },
-  dayChipActive: { borderColor: Colors.gold, backgroundColor: Colors.goldMuted },
-  dayChipText: { fontSize: FontSize.sm, color: Colors.textSecondary, fontWeight: FontWeight.medium },
-  dayChipTextActive: { color: Colors.gold, fontWeight: FontWeight.bold },
-  dayBadge: {
-    minWidth: 16, height: 16, borderRadius: 8,
-    backgroundColor: Colors.border, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 3,
-  },
-  dayBadgeActive: { backgroundColor: Colors.gold },
-  dayBadgeText: { fontSize: 9, color: Colors.textMuted, fontWeight: FontWeight.bold },
-  dayBadgeTextActive: { color: Colors.textInverse },
-  section: { gap: Spacing.xs },
-  emptyText: { fontSize: FontSize.sm, color: Colors.textMuted, textAlign: 'center', paddingVertical: Spacing.sm },
-  eventRow: {
-    flexDirection: 'row', alignItems: 'center', gap: Spacing.sm,
-    backgroundColor: Colors.surfaceElevated, borderRadius: Radius.md,
-    borderWidth: 1, borderColor: Colors.border, borderLeftWidth: 3,
-    padding: Spacing.md, marginBottom: Spacing.xs,
-  },
-  eventInfo: { flex: 1 },
-  eventTitle: { fontSize: FontSize.md, color: Colors.textPrimary, fontWeight: FontWeight.medium },
-  eventMeta: { fontSize: FontSize.xs, color: Colors.textSecondary, marginTop: 2 },
-  deleteBtn: { padding: 4 },
-  overviewDay: { flexDirection: 'row', alignItems: 'flex-start', gap: Spacing.sm, marginBottom: Spacing.xs },
-  overviewDayName: { fontSize: FontSize.xs, color: Colors.textMuted, width: 28, paddingTop: 3, textTransform: 'uppercase' },
-  overviewEvents: { flex: 1, flexDirection: 'row', flexWrap: 'wrap', gap: 4 },
-  overviewBadge: {
-    backgroundColor: Colors.surfaceElevated, borderRadius: Radius.sm,
-    paddingHorizontal: Spacing.sm, paddingVertical: 3,
-    borderWidth: 1, borderColor: Colors.border, borderLeftWidth: 3,
-  },
-  overviewBadgeText: { fontSize: FontSize.xs, color: Colors.textSecondary },
-  modal: { flex: 1, backgroundColor: Colors.background },
-  modalHeader: {
-    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-    padding: Spacing.lg, borderBottomWidth: 1, borderBottomColor: Colors.border,
-  },
-  modalTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.textPrimary },
-  modalBody: { padding: Spacing.lg, gap: Spacing.md },
-  fieldLabel: { fontSize: FontSize.sm, color: Colors.textSecondary, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: Spacing.xs },
-  catGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.xs },
-  catBtn: {
-    flexDirection: 'row', alignItems: 'center', gap: 4,
-    paddingHorizontal: Spacing.sm, paddingVertical: Spacing.xs + 2,
-    borderRadius: Radius.sm, backgroundColor: Colors.surfaceElevated,
-    borderWidth: 1, borderColor: Colors.border,
-  },
-  catBtnText: { fontSize: FontSize.xs, color: Colors.textMuted, fontWeight: FontWeight.medium },
-  dayGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm },
-  dayGridBtn: {
-    paddingHorizontal: Spacing.md, paddingVertical: Spacing.xs + 2,
-    borderRadius: Radius.sm, backgroundColor: Colors.surfaceElevated,
-    borderWidth: 1, borderColor: Colors.border,
-  },
-  dayGridBtnActive: { borderColor: Colors.gold, backgroundColor: Colors.goldMuted },
-  dayGridText: { fontSize: FontSize.sm, color: Colors.textSecondary },
-  dayGridTextActive: { color: Colors.gold, fontWeight: FontWeight.semibold },
-  timeRow: { flexDirection: 'row', gap: Spacing.md },
-  timeInput: { flex: 1 },
-  recurringNote: { flexDirection: 'row', alignItems: 'center', gap: Spacing.xs },
-  recurringText: { fontSize: FontSize.xs, color: Colors.gold },
-  modalFooter: {
-    flexDirection: 'row', gap: Spacing.sm, padding: Spacing.lg,
-    borderTopWidth: 1, borderTopColor: Colors.border,
-  },
-  modalBtn: { flex: 1 },
+  header:      { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  screenTitle: { fontSize: FontSize.xxl, fontWeight: FontWeight.bold, color: Colors.textPrimary },
+  monthNav:    { flexDirection: "row", alignItems: "center", gap: Spacing.xs },
+  navBtn:      { width: 32, height: 32, alignItems: "center", justifyContent: "center" },
+  monthLabel:  { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.textSecondary, minWidth: 120, textAlign: "center" },
+
+  calendarCard: { backgroundColor: Colors.surfaceElevated, borderRadius: Radius.md, borderWidth: 1, borderColor: Colors.border, padding: Spacing.sm },
+  calRow:       { flexDirection: "row" },
+  calCell:      { flex: 1, alignItems: "center", paddingVertical: 4 },
+  calDayLabel:  { fontSize: FontSize.xs, color: Colors.textMuted, fontWeight: FontWeight.medium },
+  dayCircle:    { width: 32, height: 32, borderRadius: 16, alignItems: "center", justifyContent: "center" },
+  dayCircleToday:    { backgroundColor: Colors.gold },
+  dayCircleSelected: { backgroundColor: Colors.surfaceHigh, borderWidth: 1, borderColor: Colors.gold },
+  dayNum:            { fontSize: FontSize.sm, color: Colors.textSecondary },
+  dayNumToday:       { color: Colors.textInverse, fontWeight: FontWeight.bold },
+  dayNumSelected:    { color: Colors.gold, fontWeight: FontWeight.semibold },
+  eventDot:          { width: 4, height: 4, borderRadius: 2, backgroundColor: Colors.gold, marginTop: 1 },
+
+  section:      { gap: Spacing.sm },
+  sectionTitle: { fontSize: FontSize.sm, color: Colors.textMuted, textTransform: "uppercase", letterSpacing: 1, fontWeight: FontWeight.semibold },
+
+  emptyDay:     { backgroundColor: Colors.surfaceElevated, borderRadius: Radius.md, borderWidth: 1, borderColor: Colors.border, alignItems: "center", gap: Spacing.sm, paddingVertical: Spacing.xl },
+  emptyDayText: { fontSize: FontSize.sm, color: Colors.textMuted },
+
+  eventCard:    { flexDirection: "row", alignItems: "center", backgroundColor: Colors.surfaceElevated, borderRadius: Radius.md, borderWidth: 1, borderColor: Colors.border, borderLeftWidth: 3, paddingHorizontal: Spacing.md, paddingVertical: Spacing.md, gap: Spacing.sm },
+  eventBody:    { flex: 1, gap: 3 },
+  eventTitle:   { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.textPrimary },
+  eventMeta:    { fontSize: FontSize.xs, color: Colors.textSecondary },
+  eventLocationRow: { flexDirection: "row", alignItems: "center", gap: 4, marginTop: 1 },
+  eventLocation:    { fontSize: FontSize.xs, color: Colors.textMuted },
+  categoryChip:     { paddingHorizontal: 8, paddingVertical: 3, borderRadius: Radius.full },
+  categoryChipText: { fontSize: FontSize.xs, fontWeight: FontWeight.semibold, textTransform: "capitalize" },
+
+  fab: { position: "absolute", bottom: 24, right: 24, width: 56, height: 56, borderRadius: 28, backgroundColor: Colors.gold, alignItems: "center", justifyContent: "center", shadowColor: Colors.gold, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.4, shadowRadius: 12, elevation: 8 },
+
+  modal:       { flex: 1, backgroundColor: Colors.background },
+  modalHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", padding: Spacing.lg, borderBottomWidth: 1, borderBottomColor: Colors.border },
+  modalTitle:  { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.textPrimary },
+  modalBody:   { padding: Spacing.lg, gap: Spacing.md, paddingBottom: Spacing.xxl },
+  modalFooter: { flexDirection: "row", gap: Spacing.sm, padding: Spacing.lg, borderTopWidth: 1, borderTopColor: Colors.border },
+
+  fieldLabel:   { fontSize: FontSize.xs, color: Colors.textSecondary, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: Spacing.xs },
+  categoryGrid: { flexDirection: "row", flexWrap: "wrap", gap: Spacing.xs },
+  catChip:      { paddingHorizontal: Spacing.md, paddingVertical: Spacing.xs + 2, borderRadius: Radius.full, borderWidth: 1, borderColor: Colors.border, backgroundColor: Colors.surfaceElevated },
+  catChipText:  { fontSize: FontSize.xs, color: Colors.textSecondary, fontWeight: FontWeight.medium },
+  daysRow:      { flexDirection: "row", gap: Spacing.xs },
+  dayChip:      { width: 36, height: 36, borderRadius: 18, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: Colors.border, backgroundColor: Colors.surfaceElevated },
+  dayChipActive:    { borderColor: Colors.gold, backgroundColor: Colors.goldMuted },
+  dayChipText:      { fontSize: FontSize.xs, color: Colors.textSecondary, fontWeight: FontWeight.medium },
+  dayChipTextActive:{ color: Colors.gold, fontWeight: FontWeight.bold },
 });

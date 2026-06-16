@@ -1,38 +1,117 @@
-import React, { useState, useEffect } from 'react';
+﻿import React, { useState, useEffect, useMemo } from 'react';
 import {
-  View,
-  Text,
-  ScrollView,
-  StyleSheet,
-  TouchableOpacity,
-  Modal,
-  KeyboardAvoidingView,
-  Platform,
+  View, Text, ScrollView, StyleSheet, TouchableOpacity,
+  Modal, KeyboardAvoidingView, Platform, Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useAppStore } from '../../src/store/useAppStore';
 import { track } from '../../src/services/analyticsService';
-import { GoalCard } from '../../src/components/GoalCard';
-import { Card } from '../../src/components/ui/Card';
 import { Button } from '../../src/components/ui/Button';
 import { Input } from '../../src/components/ui/Input';
-import { SectionHeader } from '../../src/components/SectionHeader';
 import { getGoalAllocation } from '../../src/lib/weeklyPlanner';
 import { Colors, FontSize, FontWeight, Radius, Spacing } from '../../src/constants/theme';
 import type { Goal, GoalCategory } from '../../src/types';
 
 const CATEGORIES: { value: GoalCategory; label: string; icon: keyof typeof Ionicons.glyphMap }[] = [
-  { value: 'study',  label: 'Study',  icon: 'book-outline'         },
-  { value: 'skill',  label: 'Skill',  icon: 'code-slash-outline'   },
-  { value: 'health', label: 'Health', icon: 'fitness-outline'      },
-  { value: 'life',   label: 'Life',   icon: 'heart-outline'        },
-  { value: 'career', label: 'Career', icon: 'briefcase-outline'    },
+  { value: 'study',  label: 'Study',  icon: 'book-outline'       },
+  { value: 'skill',  label: 'Skill',  icon: 'code-slash-outline' },
+  { value: 'health', label: 'Health', icon: 'fitness-outline'    },
+  { value: 'life',   label: 'Life',   icon: 'heart-outline'      },
+  { value: 'career', label: 'Career', icon: 'briefcase-outline'  },
 ];
 
 const CATEGORY_COLOR: Record<GoalCategory, string> = {
   study: '#6C8EBF', skill: Colors.gold, health: '#4ADE80', life: '#F472B6', career: '#A78BFA',
 };
+
+const CATEGORY_ICON: Record<GoalCategory, keyof typeof Ionicons.glyphMap> = {
+  study: 'book', skill: 'code-slash', health: 'fitness', life: 'heart', career: 'briefcase',
+};
+
+type GoalTab = 'active' | 'completed';
+
+function isGoalCompleted(g: Goal): boolean {
+  if (!g.deadline) return false;
+  return new Date(g.deadline) < new Date();
+}
+
+function daysLeft(deadline: string): number {
+  return Math.ceil((new Date(deadline).getTime() - Date.now()) / 86400000);
+}
+
+// ─── Goal card ────────────────────────────────────────────────────────────────
+
+function GoalCard({
+  goal, allocatedMins, onEdit, onDelete,
+}: {
+  goal: Goal;
+  allocatedMins: number;
+  onEdit: () => void;
+  onDelete: () => void;
+}) {
+  const color     = CATEGORY_COLOR[goal.category];
+  const iconName  = CATEGORY_ICON[goal.category];
+  const targetMins = goal.weeklyHoursTarget * 60;
+  const pct       = targetMins > 0 ? Math.min(100, Math.round((allocatedMins / targetMins) * 100)) : 0;
+  const completed = isGoalCompleted(goal);
+  const days      = goal.deadline && !completed ? daysLeft(goal.deadline) : null;
+
+  return (
+    <TouchableOpacity style={gcS.card} onPress={onEdit} activeOpacity={0.75}>
+      <View style={gcS.row}>
+        <View style={[gcS.iconWrap, { backgroundColor: color + '18', borderColor: color + '44' }]}>
+          <Ionicons name={iconName} size={18} color={color} />
+        </View>
+        <View style={gcS.body}>
+          <Text style={gcS.title} numberOfLines={1}>{goal.title}</Text>
+          <Text style={gcS.meta}>
+            {goal.weeklyHoursTarget}h/wk
+            {days !== null ? `  ·  ${days}d left` : ''}
+          </Text>
+        </View>
+        <View style={gcS.right}>
+          <Text style={[gcS.pct, { color }]}>{pct}%</Text>
+          <TouchableOpacity
+            onPress={() => Alert.alert('Delete Goal', `Delete "${goal.title}"?`, [
+              { text: 'Cancel', style: 'cancel' },
+              { text: 'Delete', style: 'destructive', onPress: onDelete },
+            ])}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          >
+            <Ionicons name="trash-outline" size={14} color={Colors.textMuted} />
+          </TouchableOpacity>
+        </View>
+      </View>
+      <View style={gcS.track}>
+        <View style={[gcS.fill, { width: `${pct}%` as any, backgroundColor: color }]} />
+      </View>
+      {completed && (
+        <View style={[gcS.badge, { backgroundColor: color + '18' }]}>
+          <Ionicons name="checkmark-circle" size={12} color={color} />
+          <Text style={[gcS.badgeText, { color }]}>Deadline passed</Text>
+        </View>
+      )}
+    </TouchableOpacity>
+  );
+}
+
+const gcS = StyleSheet.create({
+  card:    { backgroundColor: Colors.surfaceElevated, borderRadius: Radius.md, borderWidth: 1, borderColor: Colors.border, padding: Spacing.md, gap: Spacing.sm },
+  row:     { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
+  iconWrap:{ width: 40, height: 40, borderRadius: Radius.sm, alignItems: 'center', justifyContent: 'center', borderWidth: 1 },
+  body:    { flex: 1, gap: 3 },
+  title:   { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.textPrimary },
+  meta:    { fontSize: FontSize.xs, color: Colors.textMuted },
+  right:   { alignItems: 'flex-end', gap: 6 },
+  pct:     { fontSize: FontSize.lg, fontWeight: FontWeight.bold },
+  track:   { height: 5, backgroundColor: Colors.surfaceHigh, borderRadius: 3, overflow: 'hidden' },
+  fill:    { height: '100%', borderRadius: 3 },
+  badge:   { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 8, paddingVertical: 3, borderRadius: Radius.full, alignSelf: 'flex-start' },
+  badgeText:{ fontSize: FontSize.xs, fontWeight: FontWeight.medium },
+});
+
+// ─── Main screen ──────────────────────────────────────────────────────────────
 
 export default function GoalsScreen() {
   const goals                  = useAppStore((s) => s.goals);
@@ -40,27 +119,26 @@ export default function GoalsScreen() {
   const addGoal                = useAppStore((s) => s.addGoal);
   const updateGoal             = useAppStore((s) => s.updateGoal);
   const deleteGoal             = useAppStore((s) => s.deleteGoal);
-  const goalIntelligence       = useAppStore((s) => s.goalIntelligence);
   const computeGoalIntelligence = useAppStore((s) => s.computeGoalIntelligence);
 
-  // Run intelligence analysis on mount and whenever goals change
-  useEffect(() => {
-    computeGoalIntelligence();
-  }, [goals]);
+  useEffect(() => { computeGoalIntelligence(); }, [goals]);
 
+  const [tab,         setTab]         = useState<GoalTab>('active');
   const [modalVisible, setModalVisible] = useState(false);
-  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editingId,   setEditingId]   = useState<string | null>(null);
 
-  // Form
-  const [title, setTitle] = useState('');
+  const [title,    setTitle]    = useState('');
   const [category, setCategory] = useState<GoalCategory>('skill');
   const [hoursStr, setHoursStr] = useState('5');
   const [priority, setPriority] = useState(2);
   const [deadline, setDeadline] = useState('');
-  const [error, setError] = useState('');
+  const [error,    setError]    = useState('');
 
   const allocation = getGoalAllocation(goals, weeklyPlan);
-  const totalWeeklyHours = goals.reduce((s, g) => s + g.weeklyHoursTarget, 0);
+
+  const activeGoals    = useMemo(() => goals.filter((g) => !isGoalCompleted(g)).sort((a, b) => a.priority - b.priority), [goals]);
+  const completedGoals = useMemo(() => goals.filter(isGoalCompleted).sort((a, b) => a.priority - b.priority), [goals]);
+  const displayGoals   = tab === 'active' ? activeGoals : completedGoals;
 
   const openAdd = () => {
     setEditingId(null);
@@ -81,7 +159,6 @@ export default function GoalsScreen() {
     if (!title.trim()) { setError('Goal title is required.'); return; }
     const hours = parseFloat(hoursStr);
     if (isNaN(hours) || hours <= 0) { setError('Enter a valid number of hours (e.g. 5).'); return; }
-
     if (editingId) {
       updateGoal(editingId, { title: title.trim(), category, weeklyHoursTarget: hours, priority, deadline: deadline || undefined });
     } else {
@@ -91,181 +168,145 @@ export default function GoalsScreen() {
     setModalVisible(false);
   };
 
-  const sortedGoals = [...goals].sort((a, b) => a.priority - b.priority);
-
   return (
-    <SafeAreaView style={styles.safe} edges={['top']}>
-      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+    <SafeAreaView style={s.safe} edges={['top']}>
+      <ScrollView contentContainerStyle={s.content} showsVerticalScrollIndicator={false}>
 
-        {/* Header */}
-        <View style={styles.header}>
-          <View>
-            <Text style={styles.screenLabel}>Goals</Text>
-            <Text style={styles.screenTitle}>Weekly Targets</Text>
-          </View>
-          <TouchableOpacity onPress={openAdd} style={styles.addBtn} activeOpacity={0.7}>
+        {/* ── Header ──────────────────────────────────────────────────────── */}
+        <View style={s.header}>
+          <Text style={s.screenTitle}>Goals</Text>
+          <TouchableOpacity onPress={openAdd} style={s.addBtn} activeOpacity={0.7}>
             <Ionicons name="add" size={22} color={Colors.gold} />
           </TouchableOpacity>
         </View>
 
-        {/* Summary card */}
-        {goals.length > 0 && (
-          <Card gold>
-            <View style={styles.summaryRow}>
-              <View style={styles.summaryStat}>
-                <Text style={styles.summaryNum}>{goals.length}</Text>
-                <Text style={styles.summaryLabel}>Goals</Text>
-              </View>
-              <View style={styles.summaryDivider} />
-              <View style={styles.summaryStat}>
-                <Text style={styles.summaryNum}>{totalWeeklyHours.toFixed(1)}h</Text>
-                <Text style={styles.summaryLabel}>Per week</Text>
-              </View>
-              <View style={styles.summaryDivider} />
-              <View style={styles.summaryStat}>
-                <Text style={styles.summaryNum}>
-                  {allocation.filter((a) => a.pct >= 100).length}/{goals.length}
-                </Text>
-                <Text style={styles.summaryLabel}>Covered</Text>
-              </View>
-            </View>
-          </Card>
-        )}
+        {/* ── Tabs ────────────────────────────────────────────────────────── */}
+        <View style={s.tabRow}>
+          {(['active', 'completed'] as GoalTab[]).map((t) => (
+            <TouchableOpacity
+              key={t}
+              style={[s.tab, tab === t && s.tabActive]}
+              onPress={() => setTab(t)}
+              activeOpacity={0.7}
+            >
+              <Text style={[s.tabText, tab === t && s.tabTextActive]}>
+                {t === 'active' ? `Active  ${activeGoals.length}` : `Completed  ${completedGoals.length}`}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
 
-        {/* Goals list */}
-        <View style={styles.section}>
-          <SectionHeader title="Your Goals" />
-          {sortedGoals.length === 0 ? (
-            <Card>
-              <View style={styles.emptyCard}>
-                <Ionicons name="flag-outline" size={32} color={Colors.textMuted} />
-                <Text style={styles.emptyTitle}>No goals yet</Text>
-                <Text style={styles.emptyText}>
-                  Goals activate your intelligence layer.{'\n'}
-                  LifeOS will detect risks, track velocity, and build your weekly plan automatically.
-                </Text>
-                <Button label="Add First Goal" onPress={openAdd} variant="ghost" size="sm" />
-              </View>
-            </Card>
-          ) : (
-            sortedGoals.map((goal) => {
+        {/* ── Goals list ──────────────────────────────────────────────────── */}
+        {displayGoals.length === 0 ? (
+          <View style={s.empty}>
+            <Ionicons name="flag-outline" size={36} color={Colors.textMuted} />
+            <Text style={s.emptyTitle}>
+              {tab === 'active' ? 'No active goals' : 'No completed goals'}
+            </Text>
+            {tab === 'active' && (
+              <Button label="Add First Goal" onPress={openAdd} variant="ghost" size="sm" />
+            )}
+          </View>
+        ) : (
+          <View style={s.list}>
+            {displayGoals.map((goal) => {
               const a = allocation.find((x) => x.goal.id === goal.id);
               return (
                 <GoalCard
                   key={goal.id}
                   goal={goal}
                   allocatedMins={a?.allocatedMins ?? 0}
-                  intelligence={goalIntelligence[goal.id]}
                   onEdit={() => openEdit(goal)}
                   onDelete={() => deleteGoal(goal.id)}
                 />
               );
-            })
-          )}
-        </View>
-
-        {/* Category breakdown */}
-        {goals.length > 0 && (
-          <View style={styles.section}>
-            <SectionHeader title="By Category" />
-            <Card elevated>
-              {CATEGORIES.map(({ value, label, icon }) => {
-                const cat = goals.filter((g) => g.category === value);
-                if (!cat.length) return null;
-                const hrs = cat.reduce((s, g) => s + g.weeklyHoursTarget, 0);
-                return (
-                  <View key={value} style={styles.catRow}>
-                    <Ionicons name={icon} size={14} color={CATEGORY_COLOR[value]} />
-                    <Text style={styles.catLabel}>{label}</Text>
-                    <Text style={styles.catCount}>{cat.length} goal{cat.length > 1 ? 's' : ''}</Text>
-                    <Text style={[styles.catHours, { color: CATEGORY_COLOR[value] }]}>{hrs.toFixed(1)}h/wk</Text>
-                  </View>
-                );
-              })}
-            </Card>
+            })}
           </View>
         )}
       </ScrollView>
 
-      {/* Add / Edit Modal */}
+      {/* ── Add / Edit Modal ────────────────────────────────────────────────── */}
       <Modal
         visible={modalVisible}
         animationType="slide"
         presentationStyle="pageSheet"
         onRequestClose={() => setModalVisible(false)}
       >
-        <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
-          <View style={styles.modal}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>{editingId ? 'Edit Goal' : 'New Goal'}</Text>
+        <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+          <View style={s.modal}>
+            <View style={s.modalHeader}>
+              <Text style={s.modalTitle}>{editingId ? 'Edit Goal' : 'New Goal'}</Text>
               <TouchableOpacity onPress={() => setModalVisible(false)}>
                 <Ionicons name="close" size={24} color={Colors.textSecondary} />
               </TouchableOpacity>
             </View>
 
-            <ScrollView contentContainerStyle={styles.modalBody} keyboardShouldPersistTaps="handled">
-              <Input label="Goal Title" value={title}
+            <ScrollView contentContainerStyle={s.modalBody} keyboardShouldPersistTaps="handled">
+              <Input
+                label="Goal Title"
+                value={title}
                 onChangeText={(t) => { setTitle(t); setError(''); }}
-                placeholder="e.g. Learn TypeScript, Run 5k, Read books"
-                autoFocus error={error} />
+                placeholder="e.g. Learn TypeScript, Run 5k"
+                autoFocus
+                error={error}
+              />
 
-              {/* Category picker */}
               <View>
-                <Text style={styles.fieldLabel}>Category</Text>
-                <View style={styles.catGrid}>
+                <Text style={s.fieldLabel}>Category</Text>
+                <View style={s.catGrid}>
                   {CATEGORIES.map(({ value, label, icon }) => {
                     const active = category === value;
-                    const color = CATEGORY_COLOR[value];
+                    const color  = CATEGORY_COLOR[value];
                     return (
                       <TouchableOpacity
                         key={value}
                         onPress={() => setCategory(value)}
-                        style={[
-                          styles.catBtn,
-                          active && { borderColor: color, backgroundColor: color + '18' },
-                        ]}
+                        style={[s.catBtn, active && { borderColor: color, backgroundColor: color + '18' }]}
                         activeOpacity={0.7}
                       >
-                        <Ionicons name={icon} size={16} color={active ? color : Colors.textMuted} />
-                        <Text style={[styles.catBtnText, active && { color }]}>{label}</Text>
+                        <Ionicons name={icon} size={15} color={active ? color : Colors.textMuted} />
+                        <Text style={[s.catBtnText, active && { color }]}>{label}</Text>
                       </TouchableOpacity>
                     );
                   })}
                 </View>
               </View>
 
-              {/* Hours target */}
-              <Input label="Weekly Hours Target" value={hoursStr}
-                onChangeText={setHoursStr} placeholder="e.g. 5"
+              <Input
+                label="Weekly Hours Target"
+                value={hoursStr}
+                onChangeText={setHoursStr}
+                placeholder="5"
                 keyboardType="decimal-pad"
-                hint="How many hours per week do you want to dedicate to this goal?" />
+                hint="Hours per week you want to dedicate to this goal"
+              />
 
-              {/* Priority */}
               <View>
-                <Text style={styles.fieldLabel}>Priority  (1 = Highest)</Text>
-                <View style={styles.priorityRow}>
+                <Text style={s.fieldLabel}>Priority  (1 = Highest)</Text>
+                <View style={s.priorityRow}>
                   {[1, 2, 3, 4, 5].map((p) => (
                     <TouchableOpacity
                       key={p}
                       onPress={() => setPriority(p)}
-                      style={[styles.priorityBtn, priority === p && styles.priorityBtnActive]}
+                      style={[s.priorityBtn, priority === p && s.priorityBtnActive]}
                     >
-                      <Text style={[styles.priorityBtnText, priority === p && styles.priorityBtnTextActive]}>
-                        {p}
-                      </Text>
+                      <Text style={[s.priorityBtnText, priority === p && s.priorityBtnTextActive]}>{p}</Text>
                     </TouchableOpacity>
                   ))}
                 </View>
               </View>
 
-              <Input label="Deadline (optional)" value={deadline}
-                onChangeText={setDeadline} placeholder="YYYY-MM-DD"
-                keyboardType="numbers-and-punctuation" />
+              <Input
+                label="Deadline (optional)"
+                value={deadline}
+                onChangeText={setDeadline}
+                placeholder="YYYY-MM-DD"
+              />
             </ScrollView>
 
-            <View style={styles.modalFooter}>
-              <Button label="Cancel" onPress={() => setModalVisible(false)} variant="secondary" style={styles.modalBtn} />
-              <Button label={editingId ? 'Save Changes' : 'Add Goal'} onPress={handleSave} style={styles.modalBtn} />
+            <View style={s.modalFooter}>
+              <Button label="Cancel" onPress={() => setModalVisible(false)} variant="secondary" style={{ flex: 1 }} />
+              <Button label={editingId ? 'Save' : 'Add Goal'} onPress={handleSave} style={{ flex: 1 }} />
             </View>
           </View>
         </KeyboardAvoidingView>
@@ -274,54 +315,37 @@ export default function GoalsScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: Colors.background },
-  flex: { flex: 1 },
+const s = StyleSheet.create({
+  safe:    { flex: 1, backgroundColor: Colors.background },
   content: { padding: Spacing.lg, paddingBottom: Spacing.xxl, gap: Spacing.lg },
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  screenLabel: { fontSize: FontSize.sm, color: Colors.textSecondary, textTransform: 'uppercase', letterSpacing: 1 },
-  screenTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.textPrimary, marginTop: 2 },
-  addBtn: {
-    width: 40, height: 40, borderRadius: Radius.full,
-    backgroundColor: Colors.goldMuted, borderWidth: 1, borderColor: Colors.goldDim,
-    alignItems: 'center', justifyContent: 'center',
-  },
-  summaryRow: { flexDirection: 'row', alignItems: 'center' },
-  summaryStat: { flex: 1, alignItems: 'center', gap: 2 },
-  summaryNum: { fontSize: FontSize.xxl, fontWeight: FontWeight.bold, color: Colors.gold },
-  summaryLabel: { fontSize: FontSize.xs, color: Colors.textSecondary, textTransform: 'uppercase', letterSpacing: 0.5 },
-  summaryDivider: { width: 1, height: 32, backgroundColor: Colors.goldDim, opacity: 0.4 },
-  section: { gap: Spacing.xs },
-  emptyCard: { alignItems: 'center', gap: Spacing.md, paddingVertical: Spacing.xl },
-  emptyTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.textSecondary },
-  emptyText: { fontSize: FontSize.sm, color: Colors.textMuted, textAlign: 'center', lineHeight: 22 },
-  catRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm, paddingVertical: Spacing.xs },
-  catLabel: { flex: 1, fontSize: FontSize.sm, color: Colors.textPrimary },
-  catCount: { fontSize: FontSize.xs, color: Colors.textMuted },
-  catHours: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, minWidth: 48, textAlign: 'right' },
-  modal: { flex: 1, backgroundColor: Colors.background },
-  modalHeader: {
-    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-    padding: Spacing.lg, borderBottomWidth: 1, borderBottomColor: Colors.border,
-  },
-  modalTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.textPrimary },
-  modalBody: { padding: Spacing.lg, gap: Spacing.md },
-  fieldLabel: { fontSize: FontSize.sm, color: Colors.textSecondary, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: Spacing.xs },
-  catGrid: { flexDirection: 'row', gap: Spacing.sm },
-  catBtn: {
-    flex: 1, paddingVertical: Spacing.sm, borderRadius: Radius.md,
-    backgroundColor: Colors.surfaceElevated, borderWidth: 1, borderColor: Colors.border,
-    alignItems: 'center', gap: 4,
-  },
-  catBtnText: { fontSize: FontSize.xs, color: Colors.textMuted, fontWeight: FontWeight.medium },
-  priorityRow: { flexDirection: 'row', gap: Spacing.sm },
-  priorityBtn: {
-    flex: 1, paddingVertical: Spacing.sm, borderRadius: Radius.sm,
-    backgroundColor: Colors.surfaceElevated, borderWidth: 1, borderColor: Colors.border, alignItems: 'center',
-  },
-  priorityBtnActive: { borderColor: Colors.gold, backgroundColor: Colors.goldMuted },
-  priorityBtnText: { fontSize: FontSize.md, color: Colors.textSecondary },
-  priorityBtnTextActive: { color: Colors.gold, fontWeight: FontWeight.bold },
+
+  header:      { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  screenTitle: { fontSize: FontSize.xxl, fontWeight: FontWeight.bold, color: Colors.textPrimary },
+  addBtn:      { width: 38, height: 38, borderRadius: 19, borderWidth: 1, borderColor: Colors.border, alignItems: 'center', justifyContent: 'center' },
+
+  tabRow: { flexDirection: 'row', backgroundColor: Colors.surfaceElevated, borderRadius: Radius.md, borderWidth: 1, borderColor: Colors.border, padding: 4, gap: 4 },
+  tab:    { flex: 1, paddingVertical: 8, borderRadius: Radius.sm, alignItems: 'center' },
+  tabActive: { backgroundColor: Colors.surfaceHigh },
+  tabText:   { fontSize: FontSize.sm, color: Colors.textMuted, fontWeight: FontWeight.medium },
+  tabTextActive: { color: Colors.textPrimary, fontWeight: FontWeight.semibold },
+
+  list:  { gap: Spacing.sm },
+  empty: { backgroundColor: Colors.surfaceElevated, borderRadius: Radius.md, borderWidth: 1, borderColor: Colors.border, alignItems: 'center', paddingVertical: Spacing.xxl, gap: Spacing.sm },
+  emptyTitle: { fontSize: FontSize.md, color: Colors.textSecondary, fontWeight: FontWeight.medium },
+
+  modal:       { flex: 1, backgroundColor: Colors.background },
+  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: Spacing.lg, borderBottomWidth: 1, borderBottomColor: Colors.border },
+  modalTitle:  { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.textPrimary },
+  modalBody:   { padding: Spacing.lg, gap: Spacing.md, paddingBottom: Spacing.xxl },
   modalFooter: { flexDirection: 'row', gap: Spacing.sm, padding: Spacing.lg, borderTopWidth: 1, borderTopColor: Colors.border },
-  modalBtn: { flex: 1 },
+
+  fieldLabel:  { fontSize: FontSize.xs, color: Colors.textSecondary, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: Spacing.xs },
+  catGrid:     { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.xs },
+  catBtn:      { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: Spacing.md, paddingVertical: Spacing.xs + 2, borderRadius: Radius.full, borderWidth: 1, borderColor: Colors.border, backgroundColor: Colors.surfaceElevated },
+  catBtnText:  { fontSize: FontSize.xs, color: Colors.textSecondary, fontWeight: FontWeight.medium },
+  priorityRow: { flexDirection: 'row', gap: Spacing.xs },
+  priorityBtn: { flex: 1, height: 40, borderRadius: Radius.sm, borderWidth: 1, borderColor: Colors.border, backgroundColor: Colors.surfaceElevated, alignItems: 'center', justifyContent: 'center' },
+  priorityBtnActive:    { borderColor: Colors.gold, backgroundColor: Colors.goldMuted },
+  priorityBtnText:      { fontSize: FontSize.md, color: Colors.textSecondary, fontWeight: FontWeight.medium },
+  priorityBtnTextActive:{ color: Colors.gold, fontWeight: FontWeight.bold },
 });

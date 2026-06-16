@@ -73,6 +73,13 @@ const SYSTEMS: NavItem[] = [
     route:       '/(tabs)/rules',
     color:       '#4ADE80',
   },
+  {
+    label:       'Habits',
+    description: 'Daily streaks · 7-day grid · Consistency',
+    icon:        'flame-outline',
+    route:       '/(tabs)/habits',
+    color:       '#4ADE80',
+  },
 ];
 
 const ACCOUNT: NavItem[] = [

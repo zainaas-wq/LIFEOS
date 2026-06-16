@@ -605,6 +605,14 @@ function ExamCard({ exam, course, onDelete }: {
             )}
           </View>
         )}
+        {exam.prepProgress !== undefined && (
+          <View style={examStyles.prepRow}>
+            <View style={examStyles.prepTrack}>
+              <View style={[examStyles.prepFill, { width: `${exam.prepProgress}%` as any, backgroundColor: accent }]} />
+            </View>
+            <Text style={[examStyles.prepPct, { color: accent }]}>{exam.prepProgress}%</Text>
+          </View>
+        )}
       </View>
     </View>
   );
@@ -633,6 +641,10 @@ const examStyles = StyleSheet.create({
   },
   topicText: { fontSize: FontSize.xs - 1, color: Colors.textSecondary },
   topicMore: { fontSize: FontSize.xs - 1, color: Colors.textMuted, alignSelf: 'center' },
+  prepRow:   { flexDirection: 'row', alignItems: 'center', gap: Spacing.xs, marginTop: 2 },
+  prepTrack: { flex: 1, height: 4, backgroundColor: Colors.surfaceHigh, borderRadius: 2, overflow: 'hidden' },
+  prepFill:  { height: '100%', borderRadius: 2 },
+  prepPct:   { fontSize: FontSize.xs, fontWeight: FontWeight.bold, minWidth: 30, textAlign: 'right' },
 });
 
 // ─── Assignment Row ───────────────────────────────────────────────────────────

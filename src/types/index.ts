@@ -381,6 +381,7 @@ export interface Exam {
   durationMins?: number;
   topics:      string[];
   notes?:      string;
+  prepProgress?: number;  // 0-100
   createdAt:   string;
 }
 
@@ -512,4 +513,18 @@ export interface AlignmentResult {
   criticalScore: number;
   reflectionScore: number;
   label: 'off-track' | 'building' | 'aligned' | 'locked-in';
+}
+
+// ─── Habits ───────────────────────────────────────────────────────────────────
+
+export type HabitFrequency = 'daily' | 'weekdays' | 'weekends' | 'custom';
+
+export interface Habit {
+  id: string;
+  title: string;
+  frequency: HabitFrequency;
+  icon: string;
+  color: string;
+  completedDates: string[];
+  createdAt: string;
 }

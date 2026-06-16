@@ -12,7 +12,7 @@ interface GoalCardProps {
   onDelete: () => void;
 }
 
-const CATEGORY_ICON: Record<Goal['category'], keyof typeof Ionicons.glyphMap> = {
+const CAT_ICON: Record<Goal['category'], keyof typeof Ionicons.glyphMap> = {
   study:  'book-outline',
   skill:  'code-slash-outline',
   health: 'fitness-outline',
@@ -20,20 +20,12 @@ const CATEGORY_ICON: Record<Goal['category'], keyof typeof Ionicons.glyphMap> = 
   career: 'briefcase-outline',
 };
 
-const CATEGORY_COLOR: Record<Goal['category'], string> = {
-  study:  '#6C8EBF',
-  skill:  Colors.gold,
+const CAT_COLOR: Record<Goal['category'], string> = {
+  study:  '#38BDF8',
+  skill:  '#C9A84C',
   health: '#4ADE80',
   life:   '#F472B6',
   career: '#A78BFA',
-};
-
-const PRIORITY_LABEL: Record<number, string> = {
-  1: 'Critical',
-  2: 'High',
-  3: 'Medium',
-  4: 'Low',
-  5: 'Optional',
 };
 
 const RISK_COLOR: Record<GoalRiskLevel, string> = {
@@ -50,164 +42,154 @@ const RISK_LABEL: Record<GoalRiskLevel, string> = {
   'stalled':  'Stalled',
 };
 
-const RISK_ICON: Record<GoalRiskLevel, keyof typeof Ionicons.glyphMap> = {
-  'on-track': 'checkmark-circle-outline',
-  'at-risk':  'warning-outline',
-  'critical': 'flash',
-  'stalled':  'pause-circle-outline',
-};
-
 export function GoalCard({ goal, allocatedMins = 0, intelligence, onEdit, onDelete }: GoalCardProps) {
-  const color      = CATEGORY_COLOR[goal.category];
+  const color      = CAT_COLOR[goal.category];
+  const icon       = CAT_ICON[goal.category];
   const neededMins = Math.round(goal.weeklyHoursTarget * 60);
   const pct        = neededMins > 0 ? Math.min(1, allocatedMins / neededMins) : 0;
-  const allocatedHrs = (allocatedMins / 60).toFixed(1);
-  const neededHrs    = goal.weeklyHoursTarget.toFixed(1);
+  const pctDisplay = Math.round(pct * 100);
 
-  const hasIntel   = !!intelligence;
   const riskLevel  = intelligence?.riskLevel ?? 'on-track';
   const riskColor  = RISK_COLOR[riskLevel];
   const prob       = intelligence?.probability ?? null;
 
+  const probColor =
+    prob === null     ? Colors.textMuted
+    : prob >= 70      ? '#4ADE80'
+    : prob >= 40      ? Colors.gold
+    :                   '#F87171';
+
   return (
-    <View style={[
-      styles.container,
-      hasIntel && riskLevel !== 'on-track' && { borderColor: riskColor + '55' },
-    ]}>
-      <View style={[styles.accent, { backgroundColor: color }]} />
+    <View style={[styles.card, intelligence && riskLevel !== 'on-track' && { borderColor: riskColor + '55' }]}>
+      {/* Left: colored icon */}
+      <View style={[styles.iconWrap, { backgroundColor: color + '18', borderColor: color + '44' }]}>
+        <Ionicons name={icon} size={20} color={color} />
+      </View>
 
+      {/* Center: content */}
       <View style={styles.body}>
-        {/* Header row */}
-        <View style={styles.headerRow}>
-          <View style={[styles.iconBadge, { backgroundColor: color + '22' }]}>
-            <Ionicons name={CATEGORY_ICON[goal.category]} size={14} color={color} />
-          </View>
+        {/* Title row */}
+        <View style={styles.titleRow}>
           <Text style={styles.title} numberOfLines={1}>{goal.title}</Text>
-
-          {/* Probability badge */}
           {prob !== null && (
-            <View style={[styles.probBadge, { backgroundColor: riskColor + '22', borderColor: riskColor + '44' }]}>
-              <Text style={[styles.probText, { color: riskColor }]}>{prob}%</Text>
+            <View style={[styles.probBadge, { backgroundColor: probColor + '22', borderColor: probColor + '44' }]}>
+              <Text style={[styles.probText, { color: probColor }]}>{prob}%</Text>
             </View>
           )}
-
-          <View style={styles.actions}>
-            <TouchableOpacity onPress={onEdit} style={styles.actionBtn}>
-              <Ionicons name="pencil-outline" size={14} color={Colors.textMuted} />
-            </TouchableOpacity>
-            <TouchableOpacity onPress={onDelete} style={styles.actionBtn}>
-              <Ionicons name="trash-outline" size={14} color={Colors.textMuted} />
-            </TouchableOpacity>
-          </View>
         </View>
 
-        {/* Risk badge row — only shown when intelligence available */}
-        {hasIntel && (
-          <View style={styles.riskRow}>
-            <View style={[styles.riskBadge, { backgroundColor: riskColor + '18', borderColor: riskColor + '40' }]}>
-              <Ionicons name={RISK_ICON[riskLevel]} size={10} color={riskColor} />
-              <Text style={[styles.riskLabel, { color: riskColor }]}>{RISK_LABEL[riskLevel]}</Text>
-            </View>
-            <Text style={styles.riskReason} numberOfLines={1}>{intelligence!.riskReason}</Text>
+        {/* Category + risk badges */}
+        <View style={styles.badgeRow}>
+          <View style={[styles.catBadge, { backgroundColor: color + '18', borderColor: color + '33' }]}>
+            <Text style={[styles.catBadgeText, { color }]}>{goal.category}</Text>
           </View>
-        )}
-
-        {/* Meta */}
-        <View style={styles.metaRow}>
-          <Text style={[styles.priorityTag, { color }]}>
-            P{goal.priority} · {PRIORITY_LABEL[goal.priority] ?? 'Custom'}
-          </Text>
-          <Text style={styles.dot}>·</Text>
-          <Text style={styles.meta}>{goal.category}</Text>
-          {goal.deadline ? (
-            <>
-              <Text style={styles.dot}>·</Text>
-              <Text style={styles.meta}>Due {goal.deadline}</Text>
-            </>
-          ) : null}
+          {intelligence && riskLevel !== 'on-track' && (
+            <View style={[styles.riskBadge, { backgroundColor: riskColor + '18', borderColor: riskColor + '40' }]}>
+              <Text style={[styles.riskBadgeText, { color: riskColor }]}>{RISK_LABEL[riskLevel]}</Text>
+            </View>
+          )}
+          {goal.deadline && (
+            <Text style={styles.deadline}>Due {goal.deadline}</Text>
+          )}
         </View>
 
         {/* Progress bar */}
         <View style={styles.progressRow}>
           <View style={styles.progressTrack}>
-            <View
-              style={[
-                styles.progressFill,
-                { width: `${Math.round(pct * 100)}%` as any, backgroundColor: color },
-              ]}
-            />
+            <View style={[styles.progressFill, { width: `${pctDisplay}%` as any, backgroundColor: color }]} />
           </View>
-          <Text style={styles.progressLabel}>
-            {allocatedHrs}h / {neededHrs}h
+          <Text style={[styles.progressPct, { color: pct >= 1 ? color : Colors.textMuted }]}>
+            {pctDisplay}%
           </Text>
         </View>
 
-        {/* Weekly hours logged — shown when intelligence available */}
-        {hasIntel && intelligence!.weeklyHoursLogged > 0 && (
+        {/* Hours label */}
+        <Text style={styles.hoursLabel}>
+          {(allocatedMins / 60).toFixed(1)}h / {goal.weeklyHoursTarget.toFixed(1)}h per week
+        </Text>
+
+        {/* Activity line */}
+        {intelligence && intelligence.weeklyHoursLogged > 0 && (
           <View style={styles.activityRow}>
-            <Ionicons name="flash-outline" size={11} color={Colors.textMuted} />
+            <Ionicons name="flash-outline" size={10} color={Colors.textMuted} />
             <Text style={styles.activityText}>
-              {intelligence!.weeklyHoursLogged.toFixed(1)}h logged this week
-              {intelligence!.inTodaysPlan ? ' · In today\'s plan' : ''}
+              {intelligence.weeklyHoursLogged.toFixed(1)}h logged this week
+              {intelligence.inTodaysPlan ? " · In today's plan" : ''}
             </Text>
           </View>
         )}
+      </View>
+
+      {/* Right: action buttons */}
+      <View style={styles.actions}>
+        <TouchableOpacity onPress={onEdit} style={styles.actionBtn} hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}>
+          <Ionicons name="pencil-outline" size={15} color={Colors.textMuted} />
+        </TouchableOpacity>
+        <TouchableOpacity onPress={onDelete} style={styles.actionBtn} hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}>
+          <Ionicons name="trash-outline" size={15} color={Colors.textMuted} />
+        </TouchableOpacity>
       </View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
+  card: {
     flexDirection: 'row',
+    alignItems: 'flex-start',
     backgroundColor: Colors.surfaceElevated,
-    borderRadius: Radius.md,
+    borderRadius: Radius.lg,
     borderWidth: 1,
     borderColor: Colors.border,
-    overflow: 'hidden',
+    padding: Spacing.md,
+    gap: Spacing.md,
     marginBottom: Spacing.sm,
   },
-  accent: { width: 3 },
-  body: { flex: 1, padding: Spacing.md, gap: Spacing.xs },
-
-  headerRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
-  iconBadge: {
-    width: 26, height: 26, borderRadius: Radius.sm,
+  iconWrap: {
+    width: 44, height: 44, borderRadius: Radius.md,
+    borderWidth: 1,
     alignItems: 'center', justifyContent: 'center',
+    flexShrink: 0,
   },
-  title: { flex: 1, fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.textPrimary },
+  body: { flex: 1, gap: Spacing.xs },
 
+  titleRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.xs },
+  title: {
+    flex: 1,
+    fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.textPrimary,
+  },
   probBadge: {
-    paddingHorizontal: 6, paddingVertical: 2,
+    paddingHorizontal: 7, paddingVertical: 2,
     borderRadius: Radius.full, borderWidth: 1,
   },
   probText: { fontSize: FontSize.xs, fontWeight: FontWeight.bold },
 
-  actions:   { flexDirection: 'row', gap: Spacing.xs },
-  actionBtn: { padding: 4 },
-
-  riskRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.xs },
-  riskBadge: {
-    flexDirection: 'row', alignItems: 'center', gap: 3,
-    paddingHorizontal: Spacing.xs + 2, paddingVertical: 2,
+  badgeRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.xs, flexWrap: 'wrap' },
+  catBadge: {
+    paddingHorizontal: 7, paddingVertical: 2,
     borderRadius: Radius.full, borderWidth: 1,
   },
-  riskLabel:  { fontSize: FontSize.xs - 1, fontWeight: FontWeight.bold, letterSpacing: 0.5 },
-  riskReason: { flex: 1, fontSize: FontSize.xs, color: Colors.textMuted },
-
-  metaRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.xs },
-  priorityTag: { fontSize: FontSize.xs, fontWeight: FontWeight.semibold, textTransform: 'uppercase', letterSpacing: 0.5 },
-  dot:  { color: Colors.textMuted, fontSize: FontSize.xs },
-  meta: { fontSize: FontSize.xs, color: Colors.textSecondary, textTransform: 'capitalize' },
+  catBadgeText: { fontSize: FontSize.xs, fontWeight: FontWeight.semibold, textTransform: 'capitalize' },
+  riskBadge: {
+    paddingHorizontal: 7, paddingVertical: 2,
+    borderRadius: Radius.full, borderWidth: 1,
+  },
+  riskBadgeText: { fontSize: FontSize.xs, fontWeight: FontWeight.bold, letterSpacing: 0.3 },
+  deadline: { fontSize: FontSize.xs, color: Colors.textMuted },
 
   progressRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm, marginTop: 2 },
   progressTrack: {
-    flex: 1, height: 3, backgroundColor: Colors.surfaceHigh,
-    borderRadius: Radius.full, overflow: 'hidden',
+    flex: 1, height: 5, borderRadius: Radius.full,
+    backgroundColor: Colors.surfaceHigh, overflow: 'hidden',
   },
   progressFill: { height: '100%', borderRadius: Radius.full },
-  progressLabel: { fontSize: FontSize.xs, color: Colors.textMuted, minWidth: 60, textAlign: 'right' },
+  progressPct: { fontSize: FontSize.xs, fontWeight: FontWeight.bold, minWidth: 32, textAlign: 'right' },
+
+  hoursLabel: { fontSize: FontSize.xs, color: Colors.textMuted },
 
   activityRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  activityText: { fontSize: FontSize.xs, color: Colors.textMuted },
+  activityText: { fontSize: FontSize.xs - 1, color: Colors.textMuted },
+
+  actions: { gap: Spacing.sm, paddingTop: 2 },
+  actionBtn: { padding: 2 },
 });

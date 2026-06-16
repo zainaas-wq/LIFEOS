@@ -33,6 +33,7 @@ import type {
   Project,
   Milestone,
   ProjectHealth,
+  Habit,
 } from '../types';
 import { analyzeAllGoals } from '../ai/goalIntelligence';
 import { computeAllReadiness } from '../ai/readinessEngine';
@@ -155,6 +156,9 @@ interface AppStore {
 
   // ── Coach handoff ─────────────────────────────────────────────────────────
   pendingCoachMessage: string | null;
+
+  // ── Habits ────────────────────────────────────────────────────────────────
+  habits: Habit[];
 
   // ── Seed loaded flag ──────────────────────────────────────────────────────
   seedLoaded: boolean;
@@ -325,6 +329,12 @@ interface AppStore {
   trackRecommendationAccepted: () => void;
   markDayActive: (day: number) => void;
   setInstallDate: (date: string) => void;
+
+  // Habits
+  addHabit: (h: Omit<Habit, 'id' | 'createdAt' | 'completedDates'>) => void;
+  updateHabit: (id: string, patch: Partial<Habit>) => void;
+  deleteHabit: (id: string) => void;
+  toggleHabitDate: (id: string, date: string) => void;
 }
 
 // ─── Store ────────────────────────────────────────────────────────────────────
@@ -369,6 +379,7 @@ export const useAppStore = create<AppStore>()(
       projectIntelligence: {},
       projectRisks:        [],
       pendingCoachMessage: null,
+      habits:              [],
       seedLoaded: false,
       hasSeenWelcome:      false,
       walkthroughComplete: false,
@@ -1439,6 +1450,38 @@ export const useAppStore = create<AppStore>()(
           },
         })),
 
+      // ── Habits ──────────────────────────────────────────────────────────────
+
+      addHabit: (h) => {
+        const now = new Date().toISOString();
+        set((s) => ({
+          habits: [...s.habits, { ...h, id: generateId(), createdAt: now, completedDates: [] }],
+        }));
+      },
+
+      updateHabit: (id, patch) => {
+        set((s) => ({ habits: s.habits.map((h) => h.id === id ? { ...h, ...patch } : h) }));
+      },
+
+      deleteHabit: (id) => {
+        set((s) => ({ habits: s.habits.filter((h) => h.id !== id) }));
+      },
+
+      toggleHabitDate: (id, date) => {
+        set((s) => ({
+          habits: s.habits.map((h) => {
+            if (h.id !== id) return h;
+            const has = h.completedDates.includes(date);
+            return {
+              ...h,
+              completedDates: has
+                ? h.completedDates.filter((d) => d !== date)
+                : [...h.completedDates, date],
+            };
+          }),
+        }));
+      },
+
       resetAllData: () =>
         set({
           session: null,
@@ -1471,6 +1514,7 @@ export const useAppStore = create<AppStore>()(
           projects: [],
           milestones: [],
           pendingCoachMessage: null,
+          habits: [],
           seedLoaded: false,
           topics: [],
           courseReadiness: {},
